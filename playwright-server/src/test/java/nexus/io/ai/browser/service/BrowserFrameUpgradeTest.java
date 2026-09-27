@@ -222,8 +222,11 @@ public class BrowserFrameUpgradeTest {
 
   /** 打开主站页面并等 iframe 都加载完 */
   private void openMain() {
-    service.getInstance(id).page.navigate(mainBase + "/");
-    service.getInstance(id).page.waitForTimeout(600);
+    // 走防抖助手:测试里的裸 Playwright 调用也要躲开「事件泵伪故障」,否则会表现成随机挂一条用例
+    TestFlakeGuard.retry("openMain", () -> {
+      service.getInstance(id).page.navigate(mainBase + "/");
+      service.getInstance(id).page.waitForTimeout(600);
+    });
   }
 
   private static String innerText(String selector) {

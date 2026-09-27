@@ -303,9 +303,12 @@ public class BrowserResponseIntegrationTest {
   }
 
   @Test public void repeatedUrlResponsesAreCorrelatedAndTruncationIsExplicit() {
-    page().navigate(base);
-    page().evaluate("async () => {for(const month of ['2026-07','2026-08'])"
-        + "await fetch('/query',{method:'POST',body:JSON.stringify({month})}).then(r=>r.text());}");
+    // 走防抖助手:测试里的裸 Playwright 调用也要躲开「事件泵伪故障」(否则表现成随机挂)
+    TestFlakeGuard.retry("navigate+fetch", () -> {
+      page().navigate(base);
+      page().evaluate("async () => {for(const month of ['2026-07','2026-08'])"
+          + "await fetch('/query',{method:'POST',body:JSON.stringify({month})}).then(r=>r.text());}");
+    });
     // 等响应事件投递到 Java 侧再读（见 awaitQueryResponses 的说明）
     List<?> requests = awaitQueryResponses();
     Kv first = (Kv) requests.get(requests.size() - 2);

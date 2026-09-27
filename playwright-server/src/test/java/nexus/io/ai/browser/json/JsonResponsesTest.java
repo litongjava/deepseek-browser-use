@@ -2,56 +2,32 @@ package nexus.io.ai.browser.json;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
 import org.junit.Test;
 
-import nexus.io.tio.utils.json.IJsonFactory;
 import nexus.io.tio.utils.json.Json;
 import nexus.io.tio.utils.json.JsonUtils;
 
 /**
- * 「响应不输出 null 值字段」这个工具类的行为
+ * 本项目对「序列化不输出 null 值字段」这个全局开关的接线
  *
  * <p>
- * 要钉住的是三件事:
- *
- * <ol>
- * <li>装上之后,本项目里走 {@code Json.getJson()} 的序列化点(HTTP 响应体就走它)不再输出 null 值字段;</li>
- * <li>**解析路径不受影响** —— 跳过 null 只该管"写出去的东西",读进来的报文照旧;</li>
- * <li>默认工厂是静态、进程级的,所以这个用例必须**自己收拾干净**:跑完把原来的工厂装回去,
- * 否则会污染同一个 JVM 里的其它用例(它们可能正断言默认行为)。</li>
- * </ol>
+ * 能力本身由框架提供（配置项 {@code tio.json.skipNull} / {@code Json.installSkipNull(..)}），
+ * 这里钉住的是**接线正确**：项目自己的键能读到、默认是开、以及装上之后输出确实不带 null。
+ * 框架自己的语义由框架侧的 {@code JsonSkipNullConfigTest} 钉。
  */
 public class JsonResponsesTest {
 
-  /** 进这个类之前的原始工厂:跑完要还原,不能把全局状态漏出去 */
-  private static IJsonFactory originalFactory;
-
-  @BeforeClass
-  public static void captureOriginalFactory() {
-    originalFactory = Json.getJsonFactory();
-    JsonResponses.install(true);
-  }
-
-  @AfterClass
-  public static void restoreOriginalFactory() {
-    if (originalFactory != null) {
-      Json.setDefaultJsonFactory(originalFactory);
-    }
-  }
-
   @After
-  public void keepSkipNullForNextCase() {
-    // 每个用例都可能改过工厂,下一个用例默认还是"跳过 null"这一档
-    JsonResponses.install(true);
+  public void restoreGlobalState() {
+    Json.uninstallSkipNull();
+    System.clearProperty(JsonResponses.KEY_SKIP_NULL);
+    System.clearProperty(JsonResponses.KEY_SKIP_NULL_FRAMEWORK);
   }
 
   private static Map<String, Object> responseLikeBody() {
@@ -66,45 +42,59 @@ public class JsonResponsesTest {
   }
 
   @Test
-  public void installedFactoryDropsNullFields() {
+  public void configKeysAreTheDocumentedOnes() {
+    assertEquals("browser.json.skipNull", JsonResponses.KEY_SKIP_NULL);
+    assertEquals("tio.json.skipNull", JsonResponses.KEY_SKIP_NULL_FRAMEWORK);
+    assertTrue("本项目的默认值应当是「跳过 null」", JsonResponses.DEFAULT_SKIP_NULL);
+  }
+
+  /** 装上之后,响应那种形状的对象不再输出 null 值字段 */
+  @Test
+  public void installedSwitchDropsNullFields() {
+    assertTrue("按默认配置应当生效", JsonResponses.init());
     String json = Json.getJson().toJson(responseLikeBody());
-    assertFalse("装好之后 null 值字段不该出现,实际:" + json, json.contains("null"));
+    assertFalse("null 值字段不该出现,实际:" + json, json.contains("null"));
     assertTrue("有值的字段要保留,实际:" + json, json.contains("playwright-server"));
     assertTrue("布尔与数字不受影响,实际:" + json, json.contains("\"ok\":true"));
   }
 
-  /** 解析不该受"跳过 null"影响:换的是输出侧,读进来的报文照旧解析 */
+  /** 关掉时不会去拆别人装的东西,并且输出回到「带 null」 */
   @Test
-  public void parsingIsNotAffected() {
-    Object parsed = Json.getJson().parse("{\"ok\":true,\"msg\":null}");
-    assertTrue("解析结果应当是 Map,实际:" + parsed, parsed instanceof Map);
-    Map<?, ?> map = (Map<?, ?>) parsed;
-    assertEquals(Boolean.TRUE, map.get("ok"));
-    assertTrue("被解析的报文里 null 字段要照旧读出来", map.containsKey("msg"));
+  public void disabledSwitchLeavesOutputWithNulls() {
+    System.setProperty(JsonResponses.KEY_SKIP_NULL, "false");
+    assertFalse("配置说关就得关", JsonResponses.skipNullEnabled());
+    assertFalse("关掉时 init 不该报生效", JsonResponses.init());
+    String json = JsonUtils.toJson(responseLikeBody());
+    assertTrue("输出要带 null,实际:" + json, json.contains("null"));
   }
 
-  /** 关掉开关时是**空操作**:已经装上的工厂不动(要还原得自己重新 setDefaultJsonFactory) */
+  /**
+   * 配置项真的能被读到:项目键优先,其次是框架键,都没有用默认值
+   *
+   * <p>
+   * 配置来源有四条（命令行 / 配置文件 / JVM 参数 / 环境变量），这里走 JVM 参数那条 —— 它是
+   * {@code EnvUtils} 明确会看的一环，也让"配置项名字写对没有"这件事可测。
+   */
   @Test
-  public void disabledSwitchIsANoOp() {
-    JsonResponses.installSkipNullFactory();
-    IJsonFactory before = Json.getJsonFactory();
-    assertFalse("显式传 false 表示这次不装,返回 false", JsonResponses.install(false));
-    assertSame("关掉开关不该悄悄把工厂换掉", before, Json.getJsonFactory());
-    String json = Json.getJson().toJson(responseLikeBody());
-    assertFalse("既然工厂没被换掉,输出照旧跳过 null,实际:" + json, json.contains("null"));
+  public void configIsReadFromBothKeysWithProjectKeyWinning() {
+    assertTrue("没配置时用默认值(跳过)", JsonResponses.skipNullEnabled());
+
+    System.setProperty(JsonResponses.KEY_SKIP_NULL_FRAMEWORK, "false");
+    assertFalse("框架键也要认", JsonResponses.skipNullEnabled());
+
+    System.setProperty(JsonResponses.KEY_SKIP_NULL, "true");
+    assertTrue("两个键都在时,项目自己的键优先", JsonResponses.skipNullEnabled());
+
+    System.setProperty(JsonResponses.KEY_SKIP_NULL, "not-a-boolean");
+    assertFalse("写错值按「关」处理,不猜意图", JsonResponses.skipNullEnabled());
   }
 
-  /** 重复装不会层层包装(每次包的都只是"当前工厂",不是包上一层皮) */
+  /** {@code active()} 回报的是事实(默认工厂的实际表现),不是配置的意图 */
   @Test
-  public void installingTwiceIsIdempotent() {
-    JsonResponses.installSkipNullFactory();
-    JsonResponses.installSkipNullFactory();
-    String json = Json.getJson().toJson(responseLikeBody());
-    assertFalse("装两次也只是一层包装,实际:" + json, json.contains("null"));
-  }
-
-  @Test
-  public void configKeyIsTheDocumentedOne() {
-    assertEquals("browser.json.skipNull", JsonResponses.KEY_SKIP_NULL);
+  public void activeReportsActualBehaviour() {
+    Json.uninstallSkipNull();
+    assertFalse("没装的时候不该说自己在跳过", JsonResponses.active());
+    JsonResponses.init();
+    assertTrue("装了之后要如实回报", JsonResponses.active());
   }
 }

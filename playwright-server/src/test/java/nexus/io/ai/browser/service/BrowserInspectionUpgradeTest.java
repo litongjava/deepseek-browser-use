@@ -170,8 +170,11 @@ public class BrowserInspectionUpgradeTest {
 
   /** 每次测试前把页面恢复原状(确认框可能被上一个用例关掉了) */
   private void open() {
-    service.getInstance(id).page.navigate(base);
-    service.getInstance(id).page.waitForTimeout(250);
+    // 走防抖助手:测试里的裸 Playwright 调用也要躲开「事件泵伪故障」,否则会表现成随机挂一条用例
+    TestFlakeGuard.retry("open", () -> {
+      service.getInstance(id).page.navigate(base);
+      service.getInstance(id).page.waitForTimeout(250);
+    });
   }
 
   // ==================== 点击的鼠标档 ====================

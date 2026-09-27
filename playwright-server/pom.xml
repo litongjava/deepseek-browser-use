@@ -9,7 +9,7 @@
   <properties>
     <lombok-version>1.18.30</lombok-version>
     <fastjson2.version>2.0.52</fastjson2.version>
-    <tio-boot-admin.version>2.1.5</tio-boot-admin.version>
+    <tio-boot-admin.version>2.1.6</tio-boot-admin.version>
     <main.class>nexus.io.ai.browser.PlaywrightApp</main.class>
     <!--
       内嵌 Chromium 的存放目录。scripts/package/build-release.mjs 会先把它准备好,

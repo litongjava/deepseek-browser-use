@@ -180,8 +180,11 @@ public class BrowserFrictionUpgradeTest {
 
   /** 每次用例前重新把页面加载回来(上一个用例可能把确认框点掉了) */
   private void open() {
-    service.getInstance(id).page.navigate(base);
-    service.getInstance(id).page.waitForTimeout(400);
+    // 走防抖助手:测试里的裸 Playwright 调用也要躲开「事件泵伪故障」,否则会表现成随机挂一条用例
+    TestFlakeGuard.retry("open", () -> {
+      service.getInstance(id).page.navigate(base);
+      service.getInstance(id).page.waitForTimeout(400);
+    });
   }
 
   // ==================== 弹窗按钮:只认框架类名是不够的 ====================

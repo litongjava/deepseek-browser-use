@@ -166,8 +166,11 @@ public class BrowserActionUpgradeTest {
   }
 
   private void open() {
-    service.getInstance(id).page.navigate(base);
-    service.getInstance(id).page.evaluate("() => { document.getElementById('flag').textContent = 'idle'; }");
+    // 走防抖助手:测试里的裸 Playwright 调用也要躲开「事件泵伪故障」,否则会表现成随机挂一条用例
+    TestFlakeGuard.retry("open", () -> {
+      service.getInstance(id).page.navigate(base);
+      service.getInstance(id).page.evaluate("() => { document.getElementById('flag').textContent = 'idle'; }");
+    });
   }
 
   // ==================== 点击的降级链 ====================
