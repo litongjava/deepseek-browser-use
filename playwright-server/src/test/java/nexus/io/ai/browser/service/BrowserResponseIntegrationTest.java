@@ -93,7 +93,7 @@ public class BrowserResponseIntegrationTest {
       Kv info = service.browserInfo(id);
       assertEquals("本机装了 Chrome 就该用它", true, info.get("chrome"));
       assertEquals("默认不碰用户自己的 profile", false, info.get("userProfile"));
-      assertEquals("默认走托管 profile(Playwright 持久化上下文)", "managed", info.getStr("mode"));
+      assertEquals("本机 Chrome 一律走 CDP(自己拉进程 + --remote-debugging-port)", "cdp", info.getStr("mode"));
       assertEquals("托管 profile 目录要听配置的", testProfileDir.toAbsolutePath().toString(), info.getStr("profileDir"));
 
       int firstTabsBefore = ((List<?>) data(service.getBrowserState(id, false, 0)).get("tabs")).size();
@@ -124,7 +124,7 @@ public class BrowserResponseIntegrationTest {
       assertNotNull("start 的返回里应当有 data.browser", browser);
       assertEquals("本机装了 Chrome 就该用它", true, browser.get("chrome"));
       assertEquals("默认不碰用户自己的 profile", false, browser.get("userProfile"));
-      assertEquals("默认走托管 profile", "managed", browser.getStr("mode"));
+      assertEquals("本机 Chrome 一律走 CDP", "cdp", browser.getStr("mode"));
       assertEquals(testProfileDir.toAbsolutePath().toString(), browser.getStr("profileDir"));
       assertEquals("应当能看出用的是哪个可执行文件", true, browser.getStr("executable") != null);
     } finally {

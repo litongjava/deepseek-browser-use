@@ -202,13 +202,25 @@ public enum BrowserChoice {
    * 这个类型共用的托管 profile 目录
    *
    * <p>
-   * Chromium 系(内置 Chromium 与本机 Chrome)以及 Firefox 沿用 {@code browser.profileDir}
-   * (默认 {@code ~/.config/browseruse/profiles/shared})—— 不动已有目录,免得把 agent 已经养起来的
-   * 登录态挪走;Edge 单独一份,原因是 Edge 打开 Chrome 的 User Data 会把它当外来 profile 处理,而且
-   * 两家 Cookie 的 App-Bound 加密密钥不同,混用只会得到一份读不出登录态的目录。
+   * <b>本机 Chrome 单独一份,而且是固定的 {@code shared-default}</b>:它走的是 CDP(自己拉进程 +
+   * {@code --remote-debugging-port}),用的是托管 profile 而不是用户日常那份 {@code User Data},
+   * 所以不按端口派生 —— 换端口不该等于换一套登录态(见 {@link ChromeBrowser#cdpManagedProfileDir()})。
+   *
+   * <p>
+   * 内置 Chromium 与 Firefox 沿用 {@code browser.profileDir}(默认
+   * {@code ~/.config/browseruse/profiles/shared},按端口派生为 {@code shared-<端口>})—— 不动已有目录,
+   * 免得把 agent 已经养起来的登录态挪走;Edge 单独一份,原因是 Edge 打开 Chrome 的 User Data 会把它当
+   * 外来 profile 处理,而且两家 Cookie 的 App-Bound 加密密钥不同,混用只会得到一份读不出登录态的目录。
    */
   public Path profileDir() {
-    return resolve(this) == EDGE ? EdgeBrowser.managedProfileDir() : ChromeBrowser.managedProfileDir();
+    BrowserChoice type = resolve(this);
+    if (type == EDGE) {
+      return EdgeBrowser.managedProfileDir();
+    }
+    if (type == CHROME) {
+      return ChromeBrowser.cdpManagedProfileDir();
+    }
+    return ChromeBrowser.managedProfileDir();
   }
 
   /**

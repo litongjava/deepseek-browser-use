@@ -97,6 +97,37 @@ public final class ChromeBrowser {
    */
   public static final String KEY_PROFILE_DIR_PER_PORT = "browser.profileDir.perPort";
 
+  /**
+   * CDP 那条路(本机 Chrome + 自己拉进程 + {@code --remote-debugging-port})默认用的托管 profile 目录
+   *
+   * <p>
+   * 留空时是 {@code ~/.config/browseruse/profiles/shared-default}。刻意**不按端口派生**:这条路用的是
+   * 托管 profile,本来就不会和用户正在开的 Chrome 抢目录,再按端口分只会让登录态在换端口时丢一次。
+   * 详见 {@link #cdpManagedProfileDir()}。
+   */
+  public static final String KEY_CDP_PROFILE_DIR = "browser.chrome.cdpProfileDir";
+
+  /**
+   * CDP 调试端口
+   *
+   * <p>
+   * <b>默认 0 = 让 Chrome 自己挑一个空闲端口</b>,端口号从它的 stderr({@code DevTools listening on
+   * ws://127.0.0.1:<port>/...})里读出来。比钉一个固定端口更好:不会有「端口被占 / 上一个实例没退干净」
+   * 这类启动失败,同一台机器上跑多个服务实例也不会互相踩。
+   *
+   * <p>
+   * <b>为什么不写 9222。</b>9222 不是 Chrome 的内置默认值(Chrome 要求显式传 {@code --remote-debugging-port}),
+   * 而是 Puppeteer / Selenium / chrome-remote-interface / VS Code 这些工具**约定俗成**用的端口。跟着用
+   * 它的代价是:任何同样按默认值连 9222 的工具都会连到我们的浏览器上,而且反过来,别人手工起的调试实例
+   * 会占着端口让我们的启动失败(实测踩过:一个带 {@code --remote-debugging-port=9222} 的外部 Chrome
+   * 占着 profile,我们的新实例交出命令行后立刻退出,只留下一句「(Chrome 没有输出)」)。
+   *
+   * <p>
+   * 需要稳定端点时(想用别的工具接上来看、或要固定防火墙规则)再钉一个 **10000 以上**的端口,例如
+   * {@code 19222}(0 = 让 Chrome 自己挑,取值超出 1..65535 时按 0 处理)。
+   */
+  public static final String KEY_CDP_PORT = "browser.chrome.debugPort";
+
   /** 本类自带的配置资源 */
   private static final String CONFIG_RESOURCE = "browser.properties";
 
@@ -219,6 +250,41 @@ public final class ChromeBrowser {
   }
 
   /**
+   * CDP 那条路(自己拉 Chrome + {@code --remote-debugging-port})默认用的托管 profile 目录
+   *
+   * <p>
+   * <b>为什么单独一份、而且不再按端口派生。</b>「本机 Chrome + CDP」这条路走的是**托管 profile**
+   * (不是用户日常那份 {@code User Data}),所以它天然不会和用户正在开的 Chrome 抢同一个目录 ——
+   * 这正好把「用用户 profile 时必须先关掉 Chrome」那个限制去掉了。既然不抢,也就没有「同一台机器上
+   * 多个实例互相踩」的问题,按端口派生(shared-10049)只会让登录态在换端口时莫名其妙地丢一次,
+   * 所以固定成 {@code shared-default}:它是「本机 Chrome + CDP」这条路的默认身份,换端口不换登录态。
+   *
+   * <p>
+   * 优先级:{@code browser.chrome.cdpProfileDir} &gt; {@code browser.profileDir}(显式配置永远优先,
+   * 想跟旧的托管目录共用一份登录态就指过去)&gt; {@code ~/.config/browseruse/profiles/shared-default}。
+   *
+   * <p>
+   * 想用**用户自己那份** Chrome profile(现成的 Google 登录态等)请打开
+   * {@code browser.chrome.useUserProfile} —— 那是另一条路,用的是系统默认的 User Data,不是这里。
+   */
+  public static Path cdpManagedProfileDir() {
+    String configured = config(KEY_CDP_PROFILE_DIR);
+    if (configured != null && !configured.isBlank()) {
+      return Paths.get(stripQuotes(configured)).toAbsolutePath().normalize();
+    }
+    String explicit = config(KEY_PROFILE_DIR);
+    if (explicit != null && !explicit.isBlank()) {
+      return Paths.get(stripQuotes(explicit)).toAbsolutePath().normalize();
+    }
+    return profilesBase().resolve("shared-default").toAbsolutePath().normalize();
+  }
+
+  /** {@code ~/.config/browseruse/profiles} */
+  private static Path profilesBase() {
+    return Paths.get(EnvUtils.get("user.home", "."), ".config", "browseruse", "profiles");
+  }
+
+  /**
    * 用户 profile 用不了时是否退回托管 profile
    *
    * <p>
@@ -227,9 +293,7 @@ public final class ChromeBrowser {
    */
   public static boolean profileFallback() {
     return booleanConfig(KEY_PROFILE_FALLBACK, true);
-  }
-
-  /**
+  }  /**
    * 启动参数里的 {@code --profile-directory}
    *
    * @return 形如 {@code ["--profile-directory=Default"]};没有子 profile 概念时返回空列表

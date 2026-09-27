@@ -507,6 +507,19 @@ public class PlaywrightService {
     /** CDP 模式下我们自己拉起来的 Chrome 进程 */
     volatile Process process;
     /**
+     * CDP 报回来的浏览器身份({@code Browser.getVersion} 的 {@code product},形如
+     * {@code Chrome/154.0.8037.57})
+     *
+     * <p>
+     * 存在的意义是**可自证**:回执里说 {@code mode:cdp} 只是我们自己的说法,而这个是浏览器亲口报的。
+     * 「这次到底连上了哪个浏览器」在排查版本相关的问题时是最先要看的一行。null = 没连上或没取到。
+     */
+    volatile String cdpProduct;
+    /** CDP 协议版本(例如 {@code 1.3}) */
+    volatile String cdpProtocolVersion;
+    /** CDP 库补设置的实际结果(下载目录 / 权限),成功与失败都写,进回执便于排查静默退化 */
+    volatile List<String> cdpNotes;
+    /**
      * 接上时就已经存在的页签
      *
      * <p>
@@ -681,8 +694,27 @@ public class PlaywrightService {
    * Chromium 系:内置 Chromium、本机 Chrome,以及 {@code auto} 的「本机 Chrome 优先」这条路
    *
    * <p>
-   * {@code useUserProfile}(用你日常那份 Chrome profile)只对本机 Chrome 有意义:内置 Chromium 没有用户
-   * 数据目录这个概念,而 Edge 走的是它自己的方法。
+   * <b>本机 Chrome 一律走 CDP</b>(见 {@link #launchOverCdp}):自己拉进程 + {@code --remote-debugging-port}
+   * + {@code connectOverCDP}。理由有三条,按重要性排:
+   * <ol>
+   * <li><b>再没有「必须先关掉 Chrome」这个限制</b>:CDP 用的是一份**托管 profile**
+   * ({@code ~/.config/browseruse/profiles/shared-default}),不是用户日常那份 {@code User Data},
+   * 所以和你正开着的 Chrome 不抢目录;而走 Playwright 的 {@code launchPersistentContext} 时,pipe 调试
+   * 在默认用户数据目录上会被 Chrome 136+ 拒绝(见 {@link ChromeLauncher});</li>
+   * <li>CDP 那条路不套视口模拟,页面尺寸天然跟着窗口走 —— 正好是默认想要的 {@code browser.viewport=window}
+   * 语义,不必再靠 {@code noDefaultViewport} 绕;</li>
+   * <li>下载目录、权限、UA 这些本来由 {@code LaunchPersistentContextOptions} 在创建时一次性给好的东西,
+   * 改由我们自己用 CDP 命令补(见 {@link CdpLaunchSupport}),补不上的地方会明确写日志,不会静默退化。</li>
+   * </ol>
+   *
+   * <p>
+   * <b>内置 Chromium 仍走 Playwright 持久化上下文</b>:它不需要「本机安装」这个概念,开发态还没有内嵌
+   * 可执行文件(交给 Playwright 自己解析),换成自己拉进程反而多一份要维护的启动逻辑。
+   *
+   * <p>
+   * {@code useUserProfile} 只对本机 Chrome 有意义,而且打开它之后用的是**用户自己的 User Data**,
+   * 与上面那份 {@code shared-default} 是两回事:内置 Chromium 没有用户数据目录这个概念,Edge 走它自己
+   * 的方法。
    */
   private static SharedBrowser launchChromiumFamily(boolean headless, BrowserChoice requested) {
     BrowserChoice type = BrowserChoice.resolve(requested);
@@ -730,7 +762,26 @@ public class PlaywrightService {
       throw new IllegalStateException("无法使用 Google Chrome 用户 profile：" + note
           + "（browser.chrome.profileFallback=false 时不会退回托管 profile）");
     }
-    return launch(chrome, BrowserChoice.CHROME.profileDir(), false, headless, note, null, BrowserChoice.CHROME);
+    // 默认(以及用户 profile 不可用时的退路):托管 profile + CDP。这份 profile 固定是
+    // ~/.config/browseruse/profiles/shared-default,和你日常那份 Chrome 互不干扰
+    Path cdpProfile = ChromeBrowser.cdpManagedProfileDir();
+    String cdpNote = note == null
+        ? "browser=chrome：走 CDP（自己拉进程 + --remote-debugging-port + connectOverCDP），"
+            + "profile=" + cdpProfile + "（托管 profile，与用户日常那份 Chrome 互不干扰）"
+        : note + "；改走 CDP + 托管 profile " + cdpProfile;
+    try {
+      return launchOverCdp(chrome, cdpProfile, false, headless, cdpNote, BrowserChoice.CHROME);
+    } catch (ChromeLauncher.ExitedEarlyException e) {
+      // 「启动后立即退出」在这条路上只有一个现实原因:这份托管 profile 已经被另一个 Chrome 占着,
+      // 新进程把命令行交给它然后自己退出(实测退出码 21、且**没有任何输出** —— 输出被那个已有实例吃掉了,
+      // 所以只看 ChromeLauncher 的报错会得到一句「(Chrome 没有输出)」,完全指不到方向)。
+      // 这台机器上常见来源:上一次服务被强杀留下的孤儿浏览器,或者人手工开的调试实例(带 --remote-debugging-port)。
+      throw new IllegalStateException("用 CDP 启动 Chrome 失败（profile=" + cdpProfile + "）：" + e.getMessage()
+          + profileBusyHint(e)
+          + "；这个 profile 是本服务的托管 profile，正常只可能被「上一次没退干净的 Chrome」或「手工开的调试实例」占着。"
+          + "先关掉占着它的那个 Chrome（Get-Process chrome 看哪个进程的命令行里带这个 profile 目录），再重新 start",
+          e);
+    }
   }
 
   /**
@@ -760,8 +811,11 @@ public class PlaywrightService {
   private static SharedBrowser launchOverCdp(Path executable, Path profileDir, boolean userProfile, boolean headless,
       String profileNote, BrowserChoice type) {
     List<String> args = cdpArgs(headless, type);
-    // --profile-directory 是本机 Chrome 用户数据目录里的概念,Edge 自己那份托管 profile 没有
-    args.addAll(type.profileArgs());
+    // --profile-directory 是**用户数据目录**里的概念:只有用用户自己那份 Chrome profile 时才传。
+    // 托管 profile(Edge 那份、以及本机 Chrome 的 shared-default)下传它只会多一层同名子目录
+    if (userProfile) {
+      args.addAll(type.profileArgs());
+    }
     args.addAll(type.extraArgs());
     ChromeLauncher.Launched launched = ChromeLauncher.launch(executable, profileDir, args, CDP_LAUNCH_TIMEOUT_MS);
     try {
@@ -780,6 +834,8 @@ public class PlaywrightService {
       shared.browser = browser;
       shared.process = launched.process();
       shared.context = context;
+      // 用自己写的 CDP 库把 launch 期设置补齐(下载目录 / 权限),并记下浏览器亲口报的身份
+      CdpLaunchSupport.record(shared, CdpLaunchSupport.apply(launched.endpoint(), type, profileDir, userProfile));
       // CDP 模式下**一律不认领接上时已经存在的页签**,任务宁可自己新开一个,原因有两个:
       // 1. 用用户 profile 时,那些页签是用户自己的(可能恢复了上次的会话),任何任务都不该动;
       // 2. 自己拉进程时,浏览器启动时那个页签(新标签页/会话恢复)会被它自己的启动流程换掉 ——
@@ -966,8 +1022,17 @@ public class PlaywrightService {
         .set("type", browser.resolvedType.id())
         .set("profileDir", browser.profileDir.toAbsolutePath().toString())
         .set("headless", browser.headless)
-        // cdp = 自己拉的用户 Chrome(connectOverCDP),managed = Playwright 持久化上下文
+        // cdp = 自己拉进程 + --remote-debugging-port + connectOverCDP(本机 Chrome / Edge 都走这条),
+        // managed = Playwright 的持久化上下文(内置 Chromium / Firefox)
         .set("mode", browser.browser != null ? "cdp" : "managed");
+    // CDP 亲口报的浏览器身份,以及我们用 CDP 库补了哪些 launch 期设置(补失败的也在这)
+    if (browser.cdpProduct != null || browser.cdpProtocolVersion != null) {
+      Kv cdp = Kv.by("product", browser.cdpProduct).set("protocolVersion", browser.cdpProtocolVersion);
+      if (browser.cdpNotes != null && !browser.cdpNotes.isEmpty()) {
+        cdp.set("notes", browser.cdpNotes);
+      }
+      info.set("cdp", cdp);
+    }
     // 页面视口:跟随真实窗口(window)还是钉死一个尺寸(fixed 1484x1019)。它决定 screenshot 能不能代表
     // 用户所见,也决定 get_browser_state 里的 viewport_height 该怎么理解 —— 所以必须如实回报
     info.set("viewport", Kv.by("mode", browser.viewport.mode).set("size", browser.viewport.describe())
@@ -1544,8 +1609,10 @@ public class PlaywrightService {
    */
   static List<String> cdpArgs(boolean headless, BrowserChoice type) {
     List<String> args = new ArrayList<>(chromiumArgs());
-    // 0 = 让浏览器自己挑端口,端口号从它的 stderr("DevTools listening on ws://...")里读
-    args.add("--remote-debugging-port=0");
+    // 默认 0 = 让浏览器自己挑端口(空闲端口一定在 10000 以上),端口号从它的 stderr
+    // ("DevTools listening on ws://...")里读。刻意不用 9222:那是别的工具的约定俗成端口,不是
+    // Chrome 的默认值,跟着用只会互相抢(见 ChromeBrowser.KEY_CDP_PORT 的说明)。
+    args.add("--remote-debugging-port=" + cdpDebugPort());
     args.add("--no-first-run");
     args.add("--no-default-browser-check");
     args.add("--disable-search-engine-choice-screen");
@@ -1571,6 +1638,27 @@ public class PlaywrightService {
       args.add("--mute-audio");
     }
     return args;
+  }
+
+  /**
+   * 这次给 Chrome 的调试端口:{@code browser.chrome.debugPort} 配了就用它,否则 0(自动挑)
+   *
+   * <p>
+   * 非数字、小于等于 0、或大于 65535 都按 0 处理 —— 配错了就当没配,而不是让 Chrome 因为一个非法端口
+   * 起不来。0 的语义是「让 Chrome 自己挑一个空闲端口」,挑出来的端口一定在 10000 以上。
+   */
+  static int cdpDebugPort() {
+    String configured = ChromeBrowser.config(ChromeBrowser.KEY_CDP_PORT);
+    if (configured == null || configured.isBlank()) {
+      return 0;
+    }
+    try {
+      int port = Integer.parseInt(configured.trim());
+      return port <= 0 || port > 65535 ? 0 : port;
+    } catch (NumberFormatException e) {
+      log.warn("{} 不是合法端口,按 0(自动挑)处理:{}", ChromeBrowser.KEY_CDP_PORT, configured);
+      return 0;
+    }
   }
 
   /** 当前系统是不是 Linux:命令行标志与路径差异都靠它判断 */
