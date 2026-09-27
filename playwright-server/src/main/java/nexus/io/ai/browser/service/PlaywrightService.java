@@ -1138,11 +1138,20 @@ public class PlaywrightService {
     data.set("engine", BrowserEngine.current().id());
     data.set("configuredType", BrowserChoice.configured().id());
     data.set("typeChoices", BrowserChoice.CHOICES);
-    data.set("profileDir", Kv.by("resolved", ChromeBrowser.managedProfileDir().toString())
+    // 托管 profile 目录**随浏览器类型而定**(本机 Chrome 走 CDP、固定一份 shared-default;内置 Chromium
+    // 与 Firefox 走按端口派生那份),所以这里必须按「这次实际会落到的类型」解析 —— 直接报
+    // managedProfileDir() 会在 browser=chrome 时给出一个浏览器根本不会用的目录,而 start 回执报的是另一个,
+    // 排查「配置看着对、登录态却没了」时正好被它带偏。
+    BrowserChoice effective = BrowserChoice.resolve(null);
+    data.set("profileDir", Kv.by("resolved", effective.profileDir().toString())
+        .set("forType", effective.id())
         .set("perPort", ChromeBrowser.perPortProfileDir())
         .set("configured", ChromeBrowser.config(ChromeBrowser.KEY_PROFILE_DIR))
-        .set("note", "没显式配 browser.profileDir 且 perPort 开着时,目录按服务端口派生(shared-<端口>),"
-            + "多个服务实例同时跑不会抢同一份 profile 锁"));
+        .set("cdpConfigured", ChromeBrowser.config(ChromeBrowser.KEY_CDP_PROFILE_DIR))
+        .set("note", "resolved 就是这次真正会用的目录(与 start 回执的 data.browser.profileDir 同一个值)。"
+            + "本机 Chrome 走 CDP,默认固定用 profiles/shared-default(browser.chrome.cdpProfileDir 可改);"
+            + "内置 Chromium / Firefox 用 browser.profileDir,没显式配且 perPort 开着时按服务端口派生"
+            + "(shared-<端口>)"));
     data.set("action", Kv.by("timeoutMs", actionTimeoutMs()).set("jsFallback", jsFallbackEnabled())
         .set("mouseFallback", mouseFallbackEnabled()));
     data.set("launchTimeoutMs", launchTimeoutMs());
@@ -7242,14 +7251,14 @@ public class PlaywrightService {
       return notFound(browserId);
     }
     if (inst.opts == null) {
-      // opts 为空 = 这次浏览器是「自己拉进程 + CDP 接上」起来的(用户自己的 Chrome profile,或 Edge):
-      // 这种上下文的创建参数不在我们手里,HTTP 认证凭据没地方设
+      // opts 为空 = 这次浏览器是「自己拉进程 + CDP 接上」起来的。本机 Chrome 与 Edge **都**走这条
+      // (Chrome 走 CDP 是默认行为,不再只在「用户自己的 profile」时才走),所以原因不能再说成
+      // 「用用户自己的 Chrome profile」——那样会把 browser=chrome 的调用方引到一个不存在的开关上。
       SharedBrowser shared = sharedBrowser;
-      boolean edge = shared != null && shared.resolvedType.isEdge();
+      String which = shared == null ? "本机 Chrome / Edge" : "browser=" + shared.resolvedType.id();
       return RespBodyVo.fail("set_credentials 失败：当前浏览器走的是「自己拉进程 + CDP 接入」这条启动路径（"
-          + (edge ? "browser=edge" : "用用户自己的 Chrome profile") + "），HTTP 认证凭据只能在 Playwright "
-          + "创建上下文时设置，这条路径上没法重建上下文"
-          + (edge ? "；需要 HTTP 基本认证时改用 browser=chrome 或 browser=chromium（托管 profile 那条路）" : ""));
+          + which + "），HTTP 认证凭据只能在 Playwright 创建上下文时设置，这条路径上没法重建上下文；"
+          + "需要 HTTP 基本认证时改用 browser=chromium（内置 Chromium，走持久化上下文那条路）或 browser=firefox");
     }
     if (INSTANCES.size() > 1) {
       return RespBodyVo.fail("set_credentials 会重建整个浏览器，而所有任务共用同一个浏览器与 profile；请先 close 掉其它任务再试");
