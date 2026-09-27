@@ -717,9 +717,15 @@ public final class ChromeBrowser {
     }
   }
 
-  /** 读环境变量,空白按「没有」处理(package-private:同包的 {@link EdgeBrowser} 也要用) */
+  /**
+   * 读环境变量,空白按「没有」处理(package-private:同包的 {@link EdgeBrowser} 也要用)
+   *
+   * <p>走 {@code EnvUtils.get} 而不是 {@code System.getenv}:它把「命令行参数 → JVM 属性 → 系统环境变量 →
+   * app.properties」几个来源串成一条固定优先级,同一个键既能在系统环境里配、也能在 app.properties 里配,
+   * 排查时只需要知道一条规则。直接读 {@code System.getenv} 会绕过这条链,配置文件里写了也不生效。
+   */
   static String env(String name) {
-    String value = System.getenv(name);
+    String value = EnvUtils.get(name);
     return value == null || value.isBlank() ? null : value;
   }
 

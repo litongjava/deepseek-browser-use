@@ -13,6 +13,8 @@ import com.jfinal.kit.Kv;
 
 import lombok.extern.slf4j.Slf4j;
 
+import nexus.io.tio.utils.environment.EnvUtils;
+
 /**
  * 用 Windows 自带的 OCR({@code Windows.Media.Ocr})把图上的文字读出来
  *
@@ -161,9 +163,10 @@ public final class WindowsOcr {
     if (!os.toLowerCase(java.util.Locale.ROOT).contains("win")) {
       return null;
     }
-    String systemRoot = System.getenv("SystemRoot");
+    // 走 EnvUtils.get 统一取值链(命令行 → JVM 属性 → 系统环境变量 → app.properties),不直接读 System.getenv
+    String systemRoot = EnvUtils.get("SystemRoot");
     if (systemRoot == null || systemRoot.isBlank()) {
-      systemRoot = System.getenv("WINDIR");
+      systemRoot = EnvUtils.get("WINDIR");
     }
     if (systemRoot == null || systemRoot.isBlank()) {
       return null;

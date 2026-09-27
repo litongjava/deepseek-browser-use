@@ -3,6 +3,8 @@
 为什么单独写一个文件:PowerShell 5.1 把 `python -c "…"` 里的双引号吃掉,测试用例没法直接内联,
 所以固定成文件跑:`python client/test_dsb.py`。
 """
+import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -10,8 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from dsb import (Client, Printer, Response, UsageError, parse_kv, parse_value, read_batch_source,  # noqa: E402
-                 read_local_file, redact, redact_obj, _summarize)
+from dsb import (Client, Printer, Response, UsageError, cmd_js, load_payload, parse_kv, parse_value,  # noqa: E402
+                 read_batch_source, read_local_file, redact, redact_obj, unwrap_commands, _summarize)
 
 CASES = [
     # (原文, 期望结果)
@@ -213,6 +215,68 @@ def main() -> int:
               and "responseMode" not in body.get("params", {}))
         failed += 0 if ok else 1
         print(f"[{'通过' if ok else '失败'}] --response-mode 进信封而不是 params -> {body}")
+
+        # --select 在**失败响应**上也要照常投影:批量回执里只要有一步失败,整批 ok 就是 false,
+        # 但 data.results[N] 依然完整返回。以前这里一看到 ok:false 就把整封打出来,于是
+        # 「用 --select 只看失败的那一步」正好在最需要它的时候失效(实测一批 6 步只想看第 4 步,
+        # 每次都被上千行整封回执淹掉)。
+        failed_batch = Response("http://x", 200, {
+            "data": {"count": 2, "results": [
+                {"index": 0, "command": "go_to_url", "ok": False, "msg": "net::ERR_ABORTED"},
+                {"index": 1, "command": "get_title", "ok": True}]},
+            "ok": False, "code": 0, "msg": "第 0 条命令 go_to_url 失败"}, "{}", 30)
+        buffer = io.StringIO()
+        Printer(mode="json", out=buffer, select="data.results.1.command").json(failed_batch.envelope)
+        ok = buffer.getvalue().strip() == '"get_title"'
+        failed += 0 if ok else 1
+        print(f"[{'通过' if ok else '失败'}] --select 在失败响应上照常投影 -> {buffer.getvalue().strip()}")
+
+        # 只有路径真不存在时才退回整封,而且要在 stderr 说明是退回去了
+        buffer = io.StringIO()
+        error_buffer = io.StringIO()
+        with contextlib.redirect_stderr(error_buffer):
+            Printer(mode="json", out=buffer, select="data.nope").json(failed_batch.envelope)
+        ok = buffer.getvalue().lstrip().startswith("{") and "不存在" in error_buffer.getvalue()
+        failed += 0 if ok else 1
+        print(f"[{'通过' if ok else '失败'}] --select 路径不存在时退回整封并提示")
+
+        # --params 也认整个请求体:只取 params,别把 id/method 当命令参数一起发下去。
+        # 踩过一次:把 {"id":1001,"method":"request_human_input","params":{…}} 原样存成文件喂进来,
+        # 结果真正的参数一个都没传,报回来的却是「缺少参数 prompt」。
+        envelope_file = path / "envelope-params.json"
+        envelope_file.write_text(json.dumps({
+            "id": 1001, "method": "request_human_input",
+            "params": {"prompt": "请完成登录", "selector": "input[name=\"account\"]"}}, ensure_ascii=False),
+            encoding="utf-8")
+        loaded = load_payload("@" + str(envelope_file), None)
+        ok = loaded == {"prompt": "请完成登录", "selector": "input[name=\"account\"]"}
+        failed += 0 if ok else 1
+        print(f"[{'通过' if ok else '失败'}] --params 认整个请求体,只取 params -> {loaded}")
+
+        # batch 的三种写法都要认,尤其是「整个请求体」那种
+        cmds = [{"get_title": {}}]
+        ok = (unwrap_commands(cmds) == cmds
+              and unwrap_commands({"commands": cmds}) == cmds
+              and unwrap_commands({"id": 1001, "method": "commands", "params": {"commands": cmds}}) == cmds)
+        failed += 0 if ok else 1
+        print(f"[{'通过' if ok else '失败'}] batch 认纯数组 / {{\"commands\":[]}} / 整个请求体")
+
+        # js --retry-on-spurious:只读脚本的伪故障重发开关要真的进 params
+        recorded = []
+
+        class _FakeClient:
+            def command(self, method, params=None, **kwargs):
+                recorded.append((method, params))
+                return Response("http://x", 200, {"data": {"result": 1}, "ok": True, "code": 1}, "{}", 5)
+
+        for flag, expected in ((True, True), (False, None)):
+            recorded.clear()
+            js_args = argparse.Namespace(script="() => 1", var=None, retry_on_spurious=flag, index=None)
+            cmd_js(_FakeClient(), js_args, Printer(mode="json", out=io.StringIO()))
+            got = recorded[0][1].get("retryOnSpurious")
+            ok = got is expected
+            failed += 0 if ok else 1
+            print(f"[{'通过' if ok else '失败'}] js --retry-on-spurious={flag} -> params.retryOnSpurious={got}")
 
     print(f"\n结果:{'全部通过' if failed == 0 else f'{failed} 项失败'}")
     return 1 if failed else 0

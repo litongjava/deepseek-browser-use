@@ -82,7 +82,7 @@ DSB_PYTHON=/opt/venv/bin/python3 ./client/dsb --version
 | `job <jobId> [--wait]` | 查/等异步批次 |
 | `recipes [--run 名字] [--var k=v]` | 列配方 / 跑配方(显式点名才跑) |
 | `state [--max-elements N] [--full]` | 页面状态摘要,`--full` 连元素清单与结构化文本 |
-| `js <脚本\|@脚本.js\|-> [--var k=v]` | 执行 JS,支持 `{{变量}}` 注入 |
+| `js <脚本\|@脚本.js\|-> [--var k=v] [--retry-on-spurious]` | 执行 JS,支持 `{{变量}}` 注入;`--retry-on-spurious` 让只读脚本撞上事件泵伪故障时由服务端自动重发 |
 | `upload <文件> [--filename 名字]` / `uploads [--delete 名字]` | 文件送到服务端暂存区 / 列、删暂存文件 |
 | `last` | 重放本会话最近一次的响应(等价 PowerShell 客户端的 `-Last`) |
 | `selftest [--browser firefox]` | 对当前服务跑一遍端到端自检(30 项检查) |
@@ -98,6 +98,11 @@ DSB_PYTHON=/opt/venv/bin/python3 ./client/dsb --version
 | `--summary`(`--compact` 是同一个开关) | **只影响本地输出**:一行摘要 + 不打 JSON。摘要为空的方法(`get_tabs`/`get_console_logs`/`get_dialog`…)会自动退回打印一行 JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了 | 它**不会**给服务端发任何精简请求 |
 | `--response-mode compact` | 请求**信封**里的 `responseMode`(服务端的响应精简模式:去掉重复页签描述、本机截图路径等) | 它是信封级字段,不是 `params` 里的;与上面的 `--summary` 无关 |
 | `--diagnostics` | 信封里带 `diagnostics:true`,精简模式下也保留点击诊断字段 | — |
+| `--select <路径>` | 本地按点分路径投影(如 `data.fields.0`),**失败响应同样投影** —— 批量里某一步失败时整批 `ok` 是 `false` 但 `data.results` 仍在,`--select data.results.N.…` 正是「只看失败那一步」的用法 | 只有路径确实不存在(单条命令没有 `data.results`)才退回整封,并在 stderr 说明 |
+
+`--params @文件.json` 与 `batch` 都认**整个请求体**:文件里写 `{"id":1001,"method":…,"params":{…}}` 时
+按 `method` 字段识别、只取 `params` 那一层;`batch` 另认纯数组与 `{"commands":[…]}`。
+留档文件、文档示例、别人贴过来的载荷都能原样存下来直接用。
 
 环境变量:`DSB_BASE_URL`、`DSB_HOST`、`DSB_PORT`、`DSB_TASK_ID`、`DSB_SESSION`、`DSB_RECORD_DIR`、`DSB_REDACT`。
 

@@ -324,6 +324,81 @@ public class BrowserBlindnessUpgradeTest {
     assertTrue(note.contains("click"));
   }
 
+  /**
+   * 整段文本也能送:不该得到 {@code Unknown key}
+   *
+   * <p>实测踩点:在搜索框里要输一个股票代码,{@code send_keys} 传 {@code "CRCL"} 直接被 Playwright 挡回来
+   * ——「Unknown key: "CRCL"」。而调用方的意图没有歧义,紧接着的两条退路又都不好走:按选择器输入要求
+   * 选择器(隐藏输入框还够不着),按索引输入要求先取快照拿索引。所以这里按输入形态分流:文本走打字,
+   * 单键名与修饰键组合走按键。
+   */
+  @Test
+  public void sendKeysTypesPlainTextInsteadOfFailing() {
+    open();
+    data(service.clickElementBySelector(id, "#typeHere"));
+    Kv result = data(service.sendKeys(id, "CRCL"));
+
+    assertEquals("文本要走打字这条路", "type", result.getStr("mode"));
+    assertEquals("回执要回报打进去的是什么", "CRCL", result.getStr("text"));
+    assertEquals("字要真的落进输入框", "CRCL", service.getInstance(id).page.inputValue("#typeHere"));
+    assertEquals("焦点元素照旧要回报", "typeHere", ((Kv) result.get("focused")).getStr("id"));
+  }
+
+  /** 分流判据本身:哪些输入是「按键」、哪些是「文本」 */
+  @Test
+  public void keyNameAndTextAreToldApart() {
+    for (String key : new String[] {"Enter", "Escape", "Tab", "Backspace", "ArrowDown", "PageUp", "F5",
+        "Control+A", "Shift+Enter", "Meta+K", "Control", "Control+Shift+T"}) {
+      assertFalse(key + " 是按键,不该走打字", PlaywrightService.typesAsText(key));
+    }
+    for (String text : new String[] {"CRCL", "a", "1", "hello world", "轻量应用服务器", "a+b",
+        // 比「修饰键 + 一个键」更长的不算组合键:press 吃不下,当文本打反而更接近意图
+        "Control+A+B"}) {
+      assertTrue(text + " 是文本,该走打字", PlaywrightService.typesAsText(text));
+    }
+  }
+
+  // ==================== 读文字读不到:说清是不是画在 canvas 上 ====================
+
+  /**
+   * 文字读不到时必须说清「为什么」
+   *
+   * <p>实测踩点:行情图表的时间轴日期怎么都读不出来。根因不是选择器写错了,而是刻度与日期浮标全画在
+   * {@code <canvas>} 上 —— 元素里一个文字节点都没有,{@code innerText} 只能是空。调用方看到空值的第一反应
+   * 是换选择器、再试一次,几轮全白费。所以 {@code canvasOnly:true} 时回执要直接给结论与出路。
+   *
+   * <p>这里必须走 {@code selector}:canvas **不进快照**(不可交互 → 没有索引),按索引那条入口恰好够不着
+   * 最需要诊断的元素 —— 这正是把 {@code selector} 补进这个命令的原因。
+   */
+  @Test
+  public void blankTextSaysWhetherItIsCanvasOnly() {
+    open();
+    service.getInstance(id).page.evaluate("() => {"
+        + " const host = document.createElement('div'); host.id = 'chartHost';"
+        + " const c = document.createElement('canvas'); c.id = 'chartCanvas'; c.width = 600; c.height = 400;"
+        + " host.appendChild(c); document.body.appendChild(host);"
+        + " const cc = c.getContext('2d'); cc.fillStyle = '#fff'; cc.fillRect(0, 0, 600, 400);"
+        + " cc.fillStyle = '#000'; cc.fillText('Sep 25', 20, 20); }");
+
+    Kv blank = data(service.getElementText(id, null, "#chartCanvas", Boolean.TRUE, null));
+    assertTrue("画在 canvas 上的内容没有文字节点", blank.getStr("text") == null || blank.getStr("text").isBlank());
+    assertEquals("要判出「这里基本只有 canvas」", Boolean.TRUE, blank.get("canvasOnly"));
+    String hint = blank.getStr("hint");
+    assertNotNull("要给出路,而不是只回一个空串", hint);
+    assertTrue("出路要提到像素手段(截图 / OCR)", hint.contains("OCR") || hint.contains("截图"));
+
+    // 有真文字的元素不该被误判:诊断是「读不到时」的补充,不是每次都给
+    Kv withText = data(service.getElementText(id, null, "#stageText", Boolean.TRUE, null));
+    assertEquals("stage-before", withText.getStr("text"));
+    assertNull("有文字就不必给 canvas 诊断", withText.get("canvasOnly"));
+
+    // 普通元素(没有 canvas)读不到文字时,要明确说「不是 canvas 的锅」
+    service.getInstance(id).page.evaluate("() => {"
+        + " const d = document.createElement('div'); d.id = 'emptyDiv'; document.body.appendChild(d); }");
+    Kv emptyDiv = data(service.getElementText(id, null, "#emptyDiv", Boolean.TRUE, null));
+    assertEquals("没 canvas 就要如实说 false", Boolean.FALSE, emptyDiv.get("canvasOnly"));
+  }
+
   // ==================== 截不出图:熔断,并且自己说出来 ====================
 
   /**

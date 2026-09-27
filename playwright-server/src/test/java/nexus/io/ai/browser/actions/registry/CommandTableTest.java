@@ -53,7 +53,7 @@ public class CommandTableTest {
     cases.put("select_dropdown_option", "index");
     cases.put("scroll", "numPages");
     cases.put("scroll_to_text", "text");
-    cases.put("get_element_text", "index");
+    // get_element_text 现在 index 与 selector 二选一,两个都没传时由服务层报错
     cases.put("get_element_html", "index");
     cases.put("get_element_value", "index");
     cases.put("get_element_attribute", "index");
@@ -171,6 +171,9 @@ public class CommandTableTest {
         // frame 相关:list_frames 参数全可选;get_element_listeners 是 index/selector 二选一,
         // 两个都没传时由服务层给出「需要 index 或 selector 之一」
         "list_frames", "get_element_listeners",
+        // get_element_text 同理:index/selector 二选一,两个都没传时由服务层报错
+        // (canvas 这类不进快照的元素只能按 selector 定位,所以它不能是「必填 index」)
+        "get_element_text",
         // ocr_image 同理:path 或 index/selector 三选一,服务层报「需要 path,或 index / selector 之一」
         "ocr_image"));
     assertTrue("这些命令没有缺参数用例:" + uncovered, uncovered.isEmpty());

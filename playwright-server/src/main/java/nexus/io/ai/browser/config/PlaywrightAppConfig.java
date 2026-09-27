@@ -3,8 +3,12 @@ package nexus.io.ai.browser.config;
 import lombok.extern.slf4j.Slf4j;
 import nexus.io.ai.browser.actions.registry.CommandTable;
 import nexus.io.ai.browser.actions.registry.RecipeStore;
+import nexus.io.ai.browser.handler.CommandTraceLog;
 import nexus.io.ai.browser.handler.PlaywrightHandler;
 import nexus.io.ai.browser.handler.PlaywrightHealthHandler;
+import nexus.io.ai.browser.json.JsonResponses;
+import nexus.io.ai.browser.service.BrowserChoice;
+import nexus.io.ai.browser.service.BrowserEngine;
 import nexus.io.ai.browser.service.ChromeBrowser;
 import nexus.io.ai.browser.upload.UploadHandler;
 import nexus.io.ai.browser.upload.UploadStore;
@@ -18,6 +22,9 @@ public class PlaywrightAppConfig implements BootConfiguration {
 
   @Override
   public void config() {
+    // 响应体不输出 null 值字段(msg / error 这类每一条回执都带的噪声)。
+    // 装在**本项目的**默认工厂上:不改框架默认实现,也就不影响同一框架下的其他项目。
+    boolean skipNull = JsonResponses.init();
     TioBootServer me = TioBootServer.me();
     HttpRequestRouter r = me.getRequestRouter();
     if (r != null) {
@@ -34,7 +41,7 @@ public class PlaywrightAppConfig implements BootConfiguration {
       // 文件暂存:客户端-服务器模式下,客户端把文件传到服务端的 upload 目录,
       // 再把返回的 path/relativePath 交给 upload_file(见 UploadStore)
       r.add("/playwright/upload", new UploadHandler());
-      logStartupSummary();
+      logStartupSummary(skipNull);
     }
   }
 
@@ -44,19 +51,17 @@ public class PlaywrightAppConfig implements BootConfiguration {
    * <p>
    * 这几行是排障时最先要看的:引擎、解析后的 profile 目录(多实例时最容易在这里踩坑)、上传与日志目录、
    * 命令数与配方数。以前这些只能靠翻配置文件加猜,尤其「profile 到底落在哪」全靠日志反推。
+   * 末尾的「响应跳过null」是给 {@code browser.json.skipNull} 用的:配置有没有生效,启动日志里一眼就能看到。
    */
-  private static void logStartupSummary() {
+  private static void logStartupSummary(boolean skipNull) {
     try {
-      log.info("playwright-server 启动配置: 引擎={} 类型={} profileDir={} (按端口派生={}) 上传目录={} 追踪目录={} 命令数={} 配方数={}",
-          nexus.io.ai.browser.service.BrowserEngine.current().id(),
-          nexus.io.ai.browser.service.BrowserChoice.configured().id(), ChromeBrowser.managedProfileDir(),
-          ChromeBrowser.perPortProfileDir(), UploadStore.dir(),
-          nexus.io.ai.browser.handler.CommandTraceLog.currentDir(), CommandTable.names().size(),
-          RecipeStore.list().size());
+      log.info("playwright-server 启动配置: 引擎={} 类型={} profileDir={} (按端口派生={}) 上传目录={} 追踪目录={} 命令数={} 配方数={} 响应跳过null={}",
+          BrowserEngine.current().id(), BrowserChoice.configured().id(), ChromeBrowser.managedProfileDir(),
+          ChromeBrowser.perPortProfileDir(), UploadStore.dir(), CommandTraceLog.currentDir(),
+          CommandTable.names().size(), RecipeStore.list().size(), skipNull);
     } catch (RuntimeException e) {
       // 启动日志打不出来不该拦住服务
       log.warn("打印启动配置失败:{}", e.getMessage());
     }
   }
 }
-

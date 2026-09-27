@@ -66,6 +66,10 @@ public class ActionService {
    * <b>动作类一律不在名单里</b> —— 点击 / 输入 / 提交 / `execute_js` 都可能已经生效,重发会造成重复提交。
    * 它们照样会被识别成 {@code SPURIOUS_DISPATCH}(见 {@link ActionError}),只是不自动重发,由调用方
    * 读完页面状态再决定。{@code start} / {@code close} / {@code upload_file} / {@code set_cookie} 同理不收。
+   *
+   * <p>
+   * 「不在名单里」不等于「永远不会重发」:调用方可以用 {@code retryOnSpurious:true} **按调用点**声明
+   * 这一次重发无害(见 {@link #retrySafeFor}),这是给「伪故障其实发生在命令发出去之前」那一支留的口子。
    */
   public static final Set<String> SPURIOUS_RETRY_SAFE = Set.of(
       // 只读:页面状态
@@ -143,6 +147,13 @@ public class ActionService {
    * ②其余命令照旧如实报告,并把「可能已经生效」说清楚。重发过一次的回执里会多一个
    * {@code data.spuriousRetry},便于事后统计这类噪声到底有多少。
    *
+   * <p>
+   * <b>2026-09-27 补充:伪故障分两支,别一律当成「可能已生效」</b>。实测在 TradingView 这类重度 SPA 上,
+   * 一个动作命令回 {@code [SPURIOUS_DISPATCH]} 时有很大比例属于「命令压根没发出去就撞上了噪声」
+   * ——此时重发完全无害,却因为「动作类一律不自动重发」而被挡在门外,调用方只能自己去改坐标点击绕。
+   * 现在的折中是**按调用点声明**({@code params.retryOnSpurious:true}),而不是把动作类整体放进名单:
+   * 判据交给最清楚语义的调用方,服务端不替它猜。
+   *
    * @param method 命令名,决定要不要重发
    * @param call   真正执行命令的动作;每次重发都会重新调用一次
    */
@@ -151,7 +162,7 @@ public class ActionService {
   }
 
   /**
-   * 同上,{@code params} 用来读调用方**显式声明**的重发许可(目前只有 {@code execute_js} 用得上)
+   * 同上,{@code params} 用来读调用方**显式声明**的重发许可({@code retryOnSpurious})
    *
    * @param params 命令参数;为 {@code null} 时按「没有声明任何许可」处理
    */
@@ -189,16 +200,31 @@ public class ActionService {
    * 这条命令这次可以重发吗
    *
    * <p>
-   * 名单里的命令直接放行;`execute_js` **默认不放行** —— 脚本可能有副作用,重发等于再执行一次
-   * (可能重复提交)。调用方确认「这个脚本重发无害」(绝大多数是读页面)时,在参数里写
-   * {@code retryOnSpurious: true},服务端才会替它吃掉伪故障。
+   * 判据有两条,满足任一条即放行:
+   *
+   * <ol>
+   * <li>命令本身在 {@link #SPURIOUS_RETRY_SAFE} 名单里(只读 / 幂等导航 / 覆盖式落盘 / 等待);</li>
+   * <li>调用方在参数里写了 {@code retryOnSpurious: true} —— <b>这是给动作类命令留的口子</b>。
+   * 默认不认它({@code execute_js} 一开始就是这么设计的:脚本可能有副作用,重发等于再执行一次),
+   * 但伪故障里有一大支是「命令还没发出去就撞上了噪声」,那种情况下重发是安全的,而调用方比服务端
+   * 更清楚这一次是不是写操作。实测场景:同一个 {@code click_element_by_selector} 一会儿成功一会儿报
+   * 伪故障,而页面完全正常 —— 只读诊断过、确认没生效之后,带上这个开关重发是最省事的解法。</li>
+   * </ol>
+   *
+   * <p>
+   * 服务端不替调用方猜:动作类命令**默认仍然一次都不重发**,这一点由
+   * {@code SpuriousDispatchRetryTest} 钉着。
    */
   static boolean retrySafeFor(String method, JSONObject params) {
     if (SPURIOUS_RETRY_SAFE.contains(method)) {
       return true;
     }
-    return "execute_js".equals(method) && params != null
-        && Boolean.TRUE.equals(params.getBoolean("retryOnSpurious"));
+    return callerAllowsSpuriousRetry(params);
+  }
+
+  /** 调用方有没有显式声明「这次重发无害」 */
+  static boolean callerAllowsSpuriousRetry(JSONObject params) {
+    return params != null && Boolean.TRUE.equals(params.getBoolean("retryOnSpurious"));
   }
 
   private static void sleepBeforeSpuriousRetry() {
@@ -276,7 +302,9 @@ public class ActionService {
             .set("note", "这个异常来自 Playwright 的事件分发（底层对象已释放），不是 " + method
                 + " 自己报的错：命令**可能已经生效**。请先用只读命令"
                 + "（get_browser_state / get_form_state / get_page_snapshot）确认页面状态，"
-                + "不要直接重试——重试可能造成重复下载 / 重复提交。");
+                + "不要直接重试——重试可能造成重复下载 / 重复提交。"
+                + "确认过「没生效」之后，写 retryOnSpurious:true 再发一次是安全的："
+                + "伪故障里有很大一支是命令还没发出去就撞上了噪声，服务端会替你把这一类吃掉。");
         RespBodyVo resp = RespBodyVo.fail(method + " 失败：" + detail
             + "（[" + ActionError.SPURIOUS_DISPATCH + "] 疑似 Playwright 事件分发的伪故障，"
             + "但无法判断本次是否已生效，请先读页面状态再决定是否重试）");
@@ -286,12 +314,16 @@ public class ActionService {
       if (spurious) {
         // 伪故障 + 只读命令:服务端已经替调用方重发过 SPURIOUS_MAX_ATTEMPTS 次,仍失败就如实报,
         // 并明确「可以再发」——只读命令重发没有副作用,不必让调用方去猜
+        boolean declared = callerAllowsSpuriousRetry(args);
         Kv detailKv = Kv.by("errorCode", ActionError.SPURIOUS_DISPATCH).set("retryable", true)
             .set("retryAfterMs", 200).set("spuriousDispatch", true)
             .set("note", "这是 Playwright 事件分发投递过来的伪故障（底层对象已释放，与本次命令无关）："
-                + "服务端已自动重发 " + SPURIOUS_MAX_ATTEMPTS + " 次仍未成功。只读命令可以放心再发一次。");
+                + "服务端已自动重发 " + SPURIOUS_MAX_ATTEMPTS + " 次仍未成功。重发没有副作用，可以再发一次。");
+        if (declared) {
+          detailKv.set("retriedByCallerRequest", SPURIOUS_MAX_ATTEMPTS);
+        }
         RespBodyVo resp = RespBodyVo.fail(method + " 失败：" + detail
-            + "（[" + ActionError.SPURIOUS_DISPATCH + "] 疑似 Playwright 事件分发的伪故障，只读命令可以再发一次）");
+            + "（[" + ActionError.SPURIOUS_DISPATCH + "] 疑似 Playwright 事件分发的伪故障，可以再发一次）");
         resp.setData(detailKv);
         return resp;
       }

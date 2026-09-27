@@ -30,8 +30,8 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 {"data":{
   "count":3,"succeeded":2,"failed":1,"stopped":true,
   "results":[
-    {"index":0,"command":"go_to_url","ok":true,"data":{"status":200,"seq":1,"screenshot":"/data/1001/1.png"},"msg":null},
-    {"index":1,"command":"get_browser_state","ok":true,"data":{"text":"[0]<a >新闻/> ...","title":"...","seq":2,"state_file":"/data/1001/2.txt"},"msg":null},
+    {"index":0,"command":"go_to_url","ok":true,"data":{"status":200,"seq":1,"screenshot":"/data/1001/1.png"}},
+    {"index":1,"command":"get_browser_state","ok":true,"data":{"text":"[0]<a >新闻/> ...","title":"...","seq":2,"state_file":"/data/1001/2.txt"}},
     {"index":2,"command":"click_element_by_index","ok":false,"data":null,"msg":"click_element_by_index 索引越界: 999"}
   ]}, "code":0,"ok":false,"msg":"第 2 条命令 click_element_by_index 失败：click_element_by_index 索引越界: 999"}
 ```

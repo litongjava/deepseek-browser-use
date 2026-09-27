@@ -12,6 +12,7 @@
 | `includeElements` | 否 | 是否在 `data.elements` 里内联元素清单，默认 `true` |
 | `maxElements` | 否 | 内联条数上限，默认 200 |
 | `includeFrames` | 否 | 是否把**跨域 iframe** 里的元素也纳入快照，默认 `false`。见下面「跨域 iframe」 |
+| `strictSnapshot` | 否 | 是否用旧的「读取期间任何 DOM 变更即作废索引」判据，默认 `false`。见下面「索引什么时候作废」 |
 
 返回字段：
 
@@ -26,6 +27,26 @@
 | `data.frames` / `data.frameCount` | 只有 `includeFrames: true` 时有：每个 frame 的 `index`/`url`/`name`/`isMain`/`depth`/`elementCount`/`indexRange` |
 | `data.frameHint` | 顶层一个可交互元素都没读到、而页面上确实有 iframe 时出现：提示下一步该用 `includeFrames` / `list_frames` |
 | `data.seq` / `data.screenshot` / `data.screenshot_path` / `data.state_file` | 本次落盘的截图与结构化文本，见 `protocol.md`。**前三个只是截图地址：非必要不要读图**，见 `SKILL.md` 开头的省 token 铁律；真正要读的是 `data.text` |
+| `data.indicesUsable` / `data.snapshotConsistent` / `data.snapshotIssues` | 这份索引还能不能用来按索引操作。`indicesUsable:false` 时索引已作废，必须重取快照 |
+| `data.snapshotStructuralMutations` / `data.snapshotContentMutations` / `data.snapshotMutations` | **本次读取期间**的变更次数（增量，不是页面累计值） |
+| `data.snapshotNote` | 页面动过但判据认为索引仍可用时的一句话解释 |
+| `data.snapshotStrict` | 本次用的哪种判据（`strictSnapshot` 的生效值） |
+
+## 索引什么时候作废
+
+索引最终解析成的是**位置型 xpath**（形如 `html/body/div[2]/form/input[1]`，只有同级序号、没有 class 谓词），
+所以「页面变了多少次」跟「索引还指不指得到当初那个元素」不是一回事：
+
+- **结构类**变更（`childList` 里增删了元素节点）会挪动同级序号 → `indicesUsable:false`，索引作废；
+- **内容类**变更（`characterData` 文字改写、`class`/`style` 属性变化）不会挪位 → **索引照常可用**。
+
+除此之外还会做一次**逐元素重校验**：每个索引按它的 xpath 再查一次（结果落在元素的 `resolved` 字段上），
+再比对标签与 `id`/`name`，对不上（`element_identity_changed`）才作废。
+
+所以实时行情、时钟、状态灯这类「文字一直变、元素没动」的页面**可以放心按索引操作**，不必因为
+`data.snapshotContentMutations` 不为 0 就反复重取快照。要退回旧的严格判据（任何变更即作废，实时页面会
+因此没法按索引操作）传 `strictSnapshot: true`，用于排查。完整成因见 `pitfalls.md` 第 61 条。
+
 
 ## 跨域 iframe（主站把第三方控制台套在 iframe 里）
 

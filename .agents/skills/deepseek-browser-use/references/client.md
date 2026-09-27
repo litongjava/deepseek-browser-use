@@ -9,12 +9,28 @@
 需要字段筛选时用 `dsb run get_form_state --select data.fields` 或
 `dsb run get_browser_state --select data.text`。`--select` 输出 JSON，支持点分隔对象键和数字数组下标
 （如 `data.fields.0`），不执行表达式；缺少路径报用法错误，显式 null 保留为 null。
-它只筛终端输出，日志仍记录完整脱敏响应；失败保留完整错误信封和业务退出码。
+它只筛终端输出，日志仍记录完整脱敏响应。
+**失败响应同样按路径投影**（业务退出码不变）：批量回执里只要有一步失败、整批 `ok` 就是 `false`，
+但 `data.results[N]` 仍在，所以 `--select data.results.N.…` 恰好是「只看失败那一步」的正确用法。
+只有路径确实不存在（例如单条命令没有 `data.results`）才退回打印整封，并在 stderr 说明是退回去了。
 `--text-only` 是纯文本便利选项，与 `--json`/`--select` 同用时后两者优先。
 快照不可靠或动作结果未知时，筛选模式仍在 stderr 提示，不能靠选出的一个字段判断业务完成。
 
 复杂请求继续使用 `--params @文件.json` / `batch 文件.json`，不为过滤输出改用裸 HTTP 请求，
 否则会丢失客户端脱敏、统一退出码和调用留档。
+
+**这两个参数文件都认「整个请求体」**：`--params @文件.json` 里的
+`{"id":1001,"method":"request_human_input","params":{…}}` 会自动只取 `params` 那一层（按 `method`
+字段识别），`batch` 认纯数组 / `{"commands":[…]}` / 整个请求体三种写法。留档文件、文档示例、
+别人贴过来的 curl 载荷都能原样存下来直接喂进去 —— 以前这么写会把 `id`/`method` 当命令参数发下去，
+真正的参数一个都没传，报回来的是 `缺少参数 prompt` 这种指不到原因的话。
+
+```shell
+client\dsb.cmd --port 10049 --id 1001 js "@脚本.js" --retry-on-spurious   # 只读脚本:伪故障自动重发
+```
+
+`--retry-on-spurious` 对应服务端的 `retryOnSpurious`（见 `references/pitfalls.md` 第 47 条）。
+**只给只读脚本加**：会点按钮、提交表单的脚本重发等于再执行一次。
 
 手工拼 `-d '...'` 在参数带中文、引号、换行时很容易出错（PowerShell 尤其爱吃掉引号），返回体还得自己解析。
 仓库里的 `dsb` 客户端把这几件事都替你办了：**子命令式传参**、**批量与异步**、**每一步的请求与响应都留档**。

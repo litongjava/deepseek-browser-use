@@ -54,16 +54,17 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
 ## 响应格式
 
 ```json
-{ "data": {}, "code": 1, "ok": true, "error": null, "msg": null }
+{ "data": {}, "code": 1, "ok": true }
 ```
 
 - `code=1` / `ok=true` 成功；`code=0` / `ok=false` 失败，原因在 `msg`（中文）。
+- **空字段不输出**：成功回执里没有 `msg` / `error`，失败回执里没有 `error`。判断成败只认 `ok` / `code`，不要用「字段在不在」来判断（服务默认跳过 null 值字段，配置项 `browser.json.skipNull=false` 可恢复原样）。
 - **任何参数问题都返回 JSON 错误，不再有 HTTP 500**：缺必填参数得到 `click_element_by_index 失败：缺少参数 index`，方法名不存在得到 `不支持的方法：xxx`，请求体不是合法 JSON 得到 `请求体不是合法 JSON：...`。
 - 实例不存在时统一返回 `没有找到对应的浏览器实例：<id>`。
 
 ## 响应精简模式（兼容原协议）
 
-请求信封可选 `responseMode: "compact"`，默认保持完整响应。`ok`、`code`、`error`、`msg` 一律保留，包括成功时的 null；精简仅发生在 `data` 内。
+请求信封可选 `responseMode: "compact"`，默认保持完整响应。`ok`、`code`、`error`、`msg` 的位置与语义不变（只是空值不再输出）；精简仅发生在 `data` 内。
 
 ```json
 {"id":"1001","method":"get_browser_state","responseMode":"compact","params":{"highlight":false}}

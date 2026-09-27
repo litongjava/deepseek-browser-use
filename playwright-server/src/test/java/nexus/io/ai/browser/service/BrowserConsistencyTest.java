@@ -81,6 +81,58 @@ public class BrowserConsistencyTest {
     assertFalse(service.clickElementByIndex(id, 0).isOk());
   }
 
+  /**
+   * 纯内容变动(实时行情每秒刷新价格文字)不该判死索引
+   *
+   * <p>
+   * 这是实测拿到的那条退化:实时行情页的价格文字持续改写,旧判据只要整个文档动过一次就作废整份索引,
+   * 于是「每次按索引点击都只拿到『当前没有页面快照』」,只能全程改用选择器与文本定位。位置型 xpath 不受
+   * 文字改写影响,所以这种变动必须被容忍。
+   */
+  @Test
+  public void contentOnlyChurnKeepsIndicesUsable() {
+    PlaywrightService changing = new PlaywrightService() {
+      @Override public Kv capture(BrowserInstance inst) {
+        inst.page.evaluate("document.querySelector('button').textContent = 'Submit ' + Math.random()");
+        return Kv.by("seq", inst.captureSeq.incrementAndGet());
+      }
+    };
+    service.getInstance(id).page.setContent("<button>Submit</button>");
+    Kv data = (Kv) changing.getBrowserState(id, false, 0).getData();
+    assertEquals(data.toString(), true, data.get("snapshotConsistent"));
+    assertEquals(true, data.get("indicesUsable"));
+    assertNotNull(data.get("snapshotNote"));
+    assertEquals(0, data.get("snapshotStructuralMutations"));
+    assertTrue((Integer) data.get("snapshotContentMutations") > 0);
+    assertNotNull(service.getInstance(id).domState);
+    assertTrue(service.clickElementByIndex(id, 0).isOk());
+  }
+
+  /** strictSnapshot 要能退回旧的「任何 DOM 变更即作废」判据 */
+  @Test
+  public void strictSnapshotRestoresMutationBasedInvalidation() {
+    PlaywrightService changing = new PlaywrightService() {
+      @Override public Kv capture(BrowserInstance inst) {
+        inst.page.evaluate("document.querySelector('button').textContent = 'Submit ' + Math.random()");
+        return Kv.by("seq", inst.captureSeq.incrementAndGet());
+      }
+    };
+    service.getInstance(id).page.setContent("<button>Submit</button>");
+    Kv data = (Kv) changing.getBrowserState(id, false, 0, true, 200, null, Boolean.TRUE).getData();
+    assertEquals(false, data.get("snapshotConsistent"));
+    assertEquals(false, data.get("indicesUsable"));
+    assertTrue(String.valueOf(data.get("snapshotIssues")), ((List<?>) data.get("snapshotIssues")).contains("mutations_changed"));
+  }
+
+  /** 位置已经被别的元素占了(同一位置换了标签)时必须作废,哪怕变更计数没动 */
+  @Test
+  public void elementIdentityMismatchInvalidatesIndices() {
+    List<String> issues = PlaywrightService.snapshotIssues(Kv.by("url", "same"),
+        Kv.by("url", "same"), new DOMState(null, Map.of(), 0, 0, 0, 0),
+        List.of(Kv.by("index", 3).set("resolved", true).set("tag", "input").set("snapshotTag", "button")));
+    assertTrue(issues.toString(), issues.stream().anyMatch(i -> i.startsWith("element_identity_changed:")));
+  }
+
   @Test
   public void missingElementsAndUrlChangesAreExplicit() {
     DOMState state = new DOMState(null, Map.of(), 0, 0, 0, 0);

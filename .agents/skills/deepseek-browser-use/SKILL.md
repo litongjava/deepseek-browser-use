@@ -66,7 +66,11 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | 模型读不了图，但要读验证码 / 维护图 | `ocr_image`（Windows 自带 OCR，支持中文） |
 | 长批次怕 HTTP 超时 | `commands` 加 `async: true` + `get_job`；或客户端 `batch cmds.json --async --wait` |
 | 手拼 JSON 被引号 / 中文 / 编码坑了（Windows 尤其） | 别硬拼，用仓库里的 `dsb` 客户端：Windows 敲 `.\client\dsb.cmd`，macOS/Linux 敲 `./client/dsb`，参数进文件用 `batch cmds.json` / `js @脚本.js`，见 `references/client.md` |
+| **`--select` 只挑一个字段，结果整封回执都打出来了** | 只有「路径在这条响应里不存在」才会退回整封（stderr 会说明）。批量回执里只要有一步失败、整批 `ok` 就是 `false`，但 `data.results[N]` 仍在 —— `--select data.results.N.…` 对失败批次**照常生效**，失败那一步也能直接挑出来看 |
+| **`execute_js` 老是撞 `Object doesn't exist: response@…`，只能自己手拼 `retryOnSpurious`** | 客户端已给开关：`js @脚本.js --retry-on-spurious`（只给**只读**脚本加；会点按钮/提交表单的脚本不要加，重发等于再执行一次） |
+| **`--params @文件.json` 报「缺少参数 xxx」，可文件里明明写着** | 文件里写**整个请求体**（`{"id":…,"method":…,"params":{…}}`）也认，会自动只取 `params`；`batch` 同样认整个请求体。留档文件与文档示例可以直接原样存下来喂进去 |
 | 索引老是失效 | 「一次快照只做一个动作」，或全程用选择器；报错里已经带上快照的年龄与元素范围 |
+| **实时页面（行情 / 时钟 / 状态灯）上索引像是永久失效，每次按索引都回「当前没有页面快照」** | 先看 `data.snapshotStructuralMutations`：**为 0** 说明读取期间只是文字/属性在变，`indicesUsable` 应为 `true`，`data.snapshotNote` 会说明「内容变动但重校验通过」，**照常按索引操作**；**不为 0**（读取期间增删了元素）才会作废，等页面稳定后重取。想恢复旧的「任何变动即作废」判据传 ``strictSnapshot:true`` |
 | 换了浏览器之后所有站点都退登录了 | 看 `start` 回执里的 `data.profileSeenBefore` / `data.profileNote`（换引擎等于换一套登录态） |
 | 操作一个 id 得到「没有找到对应的浏览器实例」 | 看报错里的服务启动时间：实例只在内存里，**服务重启即失效**，`list_tasks` 确认后重新 `start` 即可（登录态在 profile 里，不会丢） |
 | **`start` 迟迟不返回 / 客户端超时** | 先 `list_tasks` 看 ``launching`` 字段：它不是「什么都没发生」，而是正在起共享浏览器 —— **首次使用或 Playwright 升级后驱动要先下载/升级浏览器（实测约 700MB、十几分钟），这一步不受启动超时约束**。别重复 `start`，服务端日志里能看到 `Downloading …`（第 58 条） |
@@ -81,9 +85,13 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **回执里 `probeTrustworthy:false` / `observationComplete:false`，还附一个 `coveredBy`** | 页面正在导航或整页重建，**这次取证不可信**：`changed` 与 `coveredBy` 都是假象（实测两次点击其实都成功了）。不要重复点击，等几秒重新 `get_browser_state` |
 | **报 `because "frame" is null`，可这条命令只是只读查询** | `PAGE_NAVIGATING`：页面正在刷新/重建，**可重试**（约 1 秒后重发），只读命令服务端已自己等过 |
 | **`send_keys` 回了 `ok:true` 但页面毫无反应** | 看回执里的 `focused`：焦点可能根本不在输入框上（`isBody:true` 时会给 `focusNote`）。先 `click` 目标输入框，再送键 |
+| **要往输入框里打一段文本，却不知道该用哪条命令**（隐藏输入框没选择器、又不想先取快照拿索引） | 直接 `send_keys` 传整段文本（`keys: "CRCL"`）：回执 `data.mode` 为 `type` 时说明走的是逐字符打字（进框架模型）；`Enter` / `Control+A` / `Shift+Enter` 这类**按键**走 `mode:press`。判据是输入形态，不用你选 |
 | **`go_to_url` 报失败，可地址栏其实已经跳过去了** | 幂等导航现在会读地址栏核对（忽略 `?vd_source=…` 这类会话参数），到达了就按成功返回并带 `data.warning` |
 | **把二维码/验证码图给人，人说"扫不出来 / 颜色太多了"** | 是 `get_browser_state` 画的**彩色高亮层被截进了图里**（第 54 条）。现在所有截图口都会自动隐藏它；旧构建用 `execute_js` 删掉 `#playwright-highlight-container` 再截。确认真干净了用**像素直方图**：正常二维码只有黑白灰 |
 | **按文本点了一下，回 `ok:true` 但页面毫无反应** | 看 `data.textMatch`：`contains` 说明点中的是"包含"这个词的**更长容器**（第 55 条）。现在按「完全相等 → 可点击 → 可见 → 文本短」打分，`data.hit.text` / `data.textClickable` 会告诉你到底点中了什么 |
+| **图表上的「文字」怎么都读不出来**（K 线的时间轴日期、刻度、地图上的标注） | 那些是画在 `canvas` 上的**像素**，不是 DOM 文字，`innerText` 必然为空——而且 canvas **不进快照**（不可交互 → 没索引），所以它读不到也不在 `data.text` 里。正确做法：① 读页面上**同时是文字**的地方（图例 / 数据面板 / 工具栏，那里是真 DOM 文字）；② 需要图上某一点的数值就用鼠标按住（见下一条）；③ 实在只能读像素才截图 + `ocr_image`。诊断时可用 `get_element_text` 传 `selector` + `canvasOnly:true`：它会回 `canvasOnly:true` 与 `hint`，直接告诉你「不是选择器错了」 |
+| **想读图表上某一根 K 线 / 某个数据点的数值** | 「按住」= `mouse_move` 到该点 → `mouse_down` → 读文本（`execute_js` 取图例 / 状态行的 `innerText`）→ `mouse_up`。**按住会把十字线钉在那一根上**，图例就变成那根自己的 `O/H/L/C/量`；松开即恢复。别忘了 `mouse_up`（漏了会一直按着，后续真实点击会变成拖拽） |
+| **同一个选择器、同一条命令，一会儿成功一会儿报 `[SPURIOUS_DISPATCH]`** | 这是 Playwright 事件泵的伪故障，不是选择器的问题。按三步走：① 先用只读命令（`get_browser_state` / `get_page_snapshot`）确认上一次到底生效没有；② **确认没生效**就带 `--retry-on-spurious` 重发（`dsb run` 与 `js` 都有这个开关；服务端参数名 `retryOnSpurious`），服务端会替你把这类噪声吃掉；③ 连 SPD 都过不去才退回**按坐标点**——`execute_js` 取 `getBoundingClientRect()` 拿到中心坐标，再 `mouse_click x y`（不依赖 DOM 节点句柄，实测在重度 SPA 上最稳） |
 | **`get_form_state` 说某个必填项是空的，可页面上明明填好了**；或反过来：**报出来的值看着挺对，提交却说"必填"** | 都是**自定义下拉**（`ds-select` / `ant-select` 那类）：落库前 `input.value` 里是"你打的字"（看着像值、其实没落库），落库后它被清空、真值只在显示节点里。看 `valueFrom`：`display` 就是后者（第 56 条）。**判据要三样一起看**：值 / 显示节点文本 / 容器类名后缀（`--error` = 没落库） |
 | **`wait_for_idle` 等满超时（页面有轮询），而且批量里后面的步骤全没跑** | 改用 `wait_for_stable`；批量加 `--keep-going`（= `stopOnError:false`），否则一条等待超时会把后面全吃掉（第 57 条） |
 
@@ -102,7 +110,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | `params` | 否 | 该方法自己的参数，省略等于空对象 |
 
 - **只支持 POST + JSON 请求体**。参数不再放查询串或表单，也不需要 URL 编码，中文直接写在 JSON 里即可。
-- 响应信封：`{"data":{},"code":1,"ok":true,"error":null,"msg":null}`。`code=1`/`ok=true` 成功；`code=0`/`ok=false` 失败，原因在 `msg`（中文）。
+- 响应信封：`{"data":{},"code":1,"ok":true}`。`code=1`/`ok=true` 成功；`code=0`/`ok=false` 失败，原因在 `msg`（中文）。**空字段不输出**：成功回执里既没有 `msg` 也没有 `error`，失败回执里没有 `error` —— 所以判断成败只认 `ok`/`code`，别用「字段在不在」来判断（想恢复带 null 的输出，配置项 `browser.json.skipNull=false`）。
 - **任何参数问题都返回 JSON 错误，不再有 HTTP 500**：缺必填参数得到 `click_element_by_index 失败：缺少参数 index`，方法名不存在得到 `不支持的方法：xxx`（还会按编辑距离给近似建议），请求体不是合法 JSON 得到 `请求体不是合法 JSON：...`。实例不存在时统一返回 `没有找到对应的浏览器实例：<id>`。
 
 ```shell
@@ -155,6 +163,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 | `viewportExpansion` | 视口外扩像素，默认 `0`；想一次拿到首屏之外的更多元素就调大（例如 `1000`） |
 | `includeElements` / `maxElements` | 是否在 `data.elements` 里内联元素清单（默认 `true`）与内联条数上限（默认 200） |
 | `includeFrames` | 是否把**跨域 iframe** 里的元素也纳入快照，默认 `false` |
+| `strictSnapshot` | 是否用旧的「读取期间任何 DOM 变更即作废索引」判据，默认 `false`。默认判据只看**结构变更**（读取期间增删了元素）并逐元素重校验，所以实时行情/时钟这类「文字一直在变、元素没动」的页面索引仍然可用 |
 
 最常读的返回字段（完整清单见 `references/reading-pages.md`）：
 
@@ -167,6 +176,9 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 | `data.frames` / `data.frameCount` / `data.frameHint` | 只在 `includeFrames: true`（或页面里确实有没纳入的跨域 frame）时出现 |
 | `data.viewport_height` / `data.page_height` | 视口高度与整页高度 |
 | `data.seq` / `data.screenshot` / `data.screenshot_path` / `data.state_file` | 本次落盘的截图与结构化文本。**前三个只是截图地址：非必要不要读图**（见开头铁律）；真正要读的是 `data.text` |
+| `data.indicesUsable` / `data.snapshotConsistent` / `data.snapshotIssues` | 这份索引还能不能用来按索引操作。`indicesUsable:false` 时元素索引已经作废，必须重取快照 |
+| `data.snapshotStructuralMutations` / `data.snapshotContentMutations` / `data.snapshotMutations` | **本次读取期间**的变更次数（增量，不是页面累计值）。结构变更（增删元素）会让位置型 xpath 挪位 → 作废索引；内容变更（文字/属性）不会 → 索引照常可用 |
+| `data.snapshotNote` | 一句话解释「为什么这次没作废」：页面动过但只是内容变动、且每个索引都重校验通过 |
 
 **`data.text` 的五条读法**（误判高发区，逐行解释与真实样例见 `references/reading-pages.md`）：
 
@@ -535,4 +547,4 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 11. **`send_keys` 回了 `ok:true` 但页面毫无反应**：看回执里的 `focused` —— 焦点可能根本不在输入框上（落在 `<body>` 上时会给 `focusNote`）。先 `click` 目标输入框再送键。
 12. **`go_to_url` 报失败、可地址栏其实已经跳过去了**：幂等导航会读一次地址栏核对（比较主机+路径，忽略 `?vd_source=…` 这类会话参数），到达了就按成功返回并带 `data.warning`。
 
-其余 48 条里最值得先翻的几类：跨域 iframe（第 37 条）、弹窗与遮挡（第 20 / 39 条）、网络响应体缓存（第 23 条）、`data/<id>/` 与日志不会自动清理（第 27 / 34 条）、强杀服务留下孤儿浏览器（第 32 条）、`get_dialog` 是「最近一次弹窗」（第 20 条）、`Object doesn't exist` 伪故障的机制（第 47 条）、整页截不出图的 ``capture_degraded``（第 48 条）、回读看不到 input 不等于上传失败（第 45 条）、**截图里的彩色高亮层会让二维码扫不出来**（第 54 条）、**按文本点击点中了"包含"它的长容器**（第 55 条）、**`get_form_state` 对自定义下拉撒的两个谎**（第 56 条）、**`wait_for_idle` 在轮询页面上永远等不到**（第 57 条）、**首次 `start` 卡在下载浏览器**（第 58 条）、**JDK 架构/版本不匹配让服务起不来**（第 59 条）、**`get_response_body` 传 `requestId` 读不到时的三种归因**（第 60 条）。
+其余 52 条里最值得先翻的几类：跨域 iframe（第 37 条）、弹窗与遮挡（第 20 / 39 条）、网络响应体缓存（第 23 条）、`data/<id>/` 与日志不会自动清理（第 27 / 34 条）、强杀服务留下孤儿浏览器（第 32 条）、`get_dialog` 是「最近一次弹窗」（第 20 条）、`Object doesn't exist` 伪故障的机制（第 47 条）、整页截不出图的 ``capture_degraded``（第 48 条）、回读看不到 input 不等于上传失败（第 45 条）、**截图里的彩色高亮层会让二维码扫不出来**（第 54 条）、**按文本点击点中了"包含"它的长容器**（第 55 条）、**`get_form_state` 对自定义下拉撒的两个谎**（第 56 条）、**`wait_for_idle` 在轮询页面上永远等不到**（第 57 条）、**首次 `start` 卡在下载浏览器**（第 58 条）、**JDK 架构/版本不匹配让服务起不来**（第 59 条）、**`get_response_body` 传 `requestId` 读不到时的三种归因**（第 60 条）、**实时页面上索引「永久失效」的成因与新的结构/内容变更分界**（第 61 条）、**`--select` 在失败批次上、`--params` 认整个请求体、`js --retry-on-spurious`**（第 62–64 条）。

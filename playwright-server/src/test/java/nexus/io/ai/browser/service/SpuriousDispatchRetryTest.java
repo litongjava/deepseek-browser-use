@@ -114,6 +114,49 @@ public class SpuriousDispatchRetryTest {
     }
   }
 
+  /**
+   * 动作类命令也**可以**由调用方按调用点放行重发
+   *
+   * <p>
+   * 起因是一个真实站点(重度 SPA 的行情图表页)上的现象:同一个 {@code click_element_by_selector} 一会儿
+   * 成功、一会儿报伪故障,而页面完全正常;调用方只读诊断确认过「上一次点击没生效」,却没有任何办法让服务端
+   * 替它吃掉噪声 —— 只能绕道去按坐标点。伪故障里有很大一支本来就是「命令还没发出去就撞上了噪声」,
+   * 那种情况下重发是无害的,而这次调用到底是不是写操作,只有调用方知道。
+   */
+  @Test
+  public void actionCommandIsRetriedWhenCallerDeclaresItSafe() {
+    JSONObject declared = new JSONObject();
+    declared.put("retryOnSpurious", true);
+    assertTrue("动作类也能按调用点放行", ActionService.retrySafeFor("click_element_by_selector", declared));
+    assertFalse("没声明照旧不放行", ActionService.retrySafeFor("click_element_by_selector", new JSONObject()));
+
+    AtomicInteger calls = new AtomicInteger();
+    RespBodyVo result = ActionService.dispatchWithSpuriousRetry("click_element_by_selector", declared, () -> {
+      if (calls.incrementAndGet() < 3) {
+        return RespBodyVo.fail("click_element_by_selector 失败：" + SPURIOUS_JS);
+      }
+      return RespBodyVo.ok(Kv.by("changed", true));
+    });
+    assertEquals("声明之后重发到成功", 3, calls.get());
+    assertTrue(result.getMsg(), result.isOk());
+    Kv retry = (Kv) ((Kv) result.getData()).get("spuriousRetry");
+    assertEquals(3, retry.getInt("attempts").intValue());
+  }
+
+  /** 放行重发到上限仍失败:如实报,并说明服务端已经重发过几次 */
+  @Test
+  public void declaredRetryStillGivesUpAtMaxAttempts() {
+    JSONObject declared = new JSONObject();
+    declared.put("retryOnSpurious", true);
+    AtomicInteger calls = new AtomicInteger();
+    RespBodyVo result = ActionService.dispatchWithSpuriousRetry("mouse_move", declared, () -> {
+      calls.incrementAndGet();
+      return RespBodyVo.fail("mouse_move 失败：" + SPURIOUS_REQUEST);
+    });
+    assertEquals(3, calls.get());
+    assertFalse(result.isOk());
+  }
+
   /** 与伪故障无关的失败不重发:重发解决不了「元素就是不可见」 */
   @Test
   public void ordinaryFailureIsNotRetried() {

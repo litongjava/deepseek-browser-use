@@ -521,7 +521,13 @@ def parse_value(text: str):
 
 
 def load_payload(source: str | None, kv: list[str] | None) -> dict:
-    """参数来源:`--params <JSON|@文件>` 与 `-p k=v` 合并,后者优先"""
+    """参数来源:`--params <JSON|@文件>` 与 `-p k=v` 合并,后者优先
+
+    文件里写**整个请求体**(``{"id":1001,"method":"request_human_input","params":{…}}``)也认,
+    会自动只取里面的 ``params``。手边常常已经有一份完整请求体(留档文件、文档示例、别人贴过来的
+    curl 载荷),原样存成文件喂进来的做法很自然;以前会把 ``id``/``method`` 当命令参数一起发下去,
+    而真正的参数一个都没传,报回来的却是「缺少参数 prompt」这种完全指不到原因的话。
+    """
     params: dict = {}
     if source:
         if source.startswith("@"):
@@ -536,6 +542,9 @@ def load_payload(source: str | None, kv: list[str] | None) -> dict:
             raise UsageError(f"参数不是合法 JSON:{error}") from None
         if not isinstance(loaded, dict):
             raise UsageError("参数必须是 JSON 对象,例如 {\"selector\":\"#ok\"}")
+        # 整个请求体的识别标志是 method 字段(裸参数对象不会有它);只取 params 那一层
+        if "method" in loaded and isinstance(loaded.get("params"), dict):
+            loaded = loaded["params"]
         params.update(loaded)
     params.update(parse_kv(kv))
     return params
@@ -629,25 +638,35 @@ class Printer:
     def json(self, value) -> None:
         """`--compact` 时压成一行(这类子命令没有「摘要」可言,一行 JSON 就是它的一行)"""
         if self.select is not None:
-            # Failed responses retain the full error envelope and business exit code.
-            if isinstance(value, dict) and value.get("ok") is False:
+            self._warn_unreliable(value)
+            # 失败响应**也要**照 --select 投影。批量回执里只要有一步失败,整批的 ok 就是 false,
+            # 但 data.results[N] 依然完整返回 —— 以前这里一看到 ok:false 就把整封打出来,于是
+            # 「用 --select 只看失败的那一步」正好在最需要它的时候失效(实测一批 6 步、只想看第 4 步,
+            # 结果每次都被上千行整封回执淹掉)。只有路径确实不存在(例如单条命令没有 data.results)
+            # 才退回整封,并在 stderr 说明是退回去了,免得调用方以为投影生效了。
+            redacted = redact_obj(value, self.patterns) if self.mask else value
+            try:
+                picked = select_field(redacted, self.select)
+            except UsageError:
+                self.warn(f"--select {self.select} 在这条响应里不存在,改印完整信封")
                 print(self._clean(json.dumps(value, ensure_ascii=False, indent=2)), file=self.out)
                 return
-            data = value.get("data", {}) if isinstance(value, dict) else {}
-            if isinstance(data, dict):
-                if data.get("snapshotConsistent") is False:
-                    self.warn("快照不可靠:" + str(data.get("snapshotIssues")))
-                if data.get("actionStatus") == "unknown" or data.get("observationComplete") is False:
-                    self.warn("动作结果或观测不完整，请先读取业务结果，勿自动重试")
-            # Redact before dropping object keys, so requestId/jobId keep their
-            # existing exemption even when the projection returns only a string.
-            value = select_field(redact_obj(value, self.patterns) if self.mask else value, self.select)
-            print(json.dumps(value, ensure_ascii=False, indent=2), file=self.out)
+            print(json.dumps(picked, ensure_ascii=False, indent=2), file=self.out)
             return
         if self.mode == "compact":
             print(self._clean(json.dumps(value, ensure_ascii=False, separators=(",", ":"))), file=self.out)
         else:
             print(self._clean(json.dumps(value, ensure_ascii=False, indent=2)), file=self.out)
+
+    def _warn_unreliable(self, value) -> None:
+        """快照不可靠 / 动作结果未知时在 stderr 提一句(成功与失败两条路都要提)"""
+        data = value.get("data", {}) if isinstance(value, dict) else {}
+        if not isinstance(data, dict):
+            return
+        if data.get("snapshotConsistent") is False:
+            self.warn("快照不可靠:" + str(data.get("snapshotIssues")))
+        if data.get("actionStatus") == "unknown" or data.get("observationComplete") is False:
+            self.warn("动作结果或观测不完整，请先读取业务结果，勿自动重试")
 
     def line(self, text: str) -> None:
         if self.mode != "json":
@@ -669,6 +688,7 @@ def build_client(args) -> Client:
     base_url = opt("base_url") or os.environ.get("DSB_BASE_URL")
     host = opt("host") or os.environ.get("DSB_HOST") or DEFAULT_HOST
     port = opt("port") or int(os.environ.get("DSB_PORT") or DEFAULT_PORT)
+    # 任务 ID 非数字由 _as_task_id 在发请求前拦下(本地用法错,退出码 3)
     task_id = opt("id") or os.environ.get("DSB_TASK_ID") or DEFAULT_TASK_ID
     session = None if getattr(args, "no_record", False) else (
         opt("session") or os.environ.get("DSB_SESSION") or DEFAULT_SESSION)
@@ -803,10 +823,32 @@ def cmd_shutdown(client: Client, args, out: Printer) -> int:
 
 def cmd_run(client: Client, args, out: Printer) -> int:
     params = load_payload(args.params, args.param)
+    # 动作类命令服务端默认一次都不重发(可能已经生效),但伪故障里有很大一支是「命令还没发出去就撞上了
+    # 噪声」——那种情况重发是无害的,而这一次到底是不是写操作只有调用方知道。所以给 run 也开一个
+    # --retry-on-spurious:以前要声明这件事只能手拼 {"…":{…,"retryOnSpurious":true}} 走 --params。
+    if getattr(args, "retry_on_spurious", False):
+        params = dict(params or {})
+        params["retryOnSpurious"] = True
     response = client.command(args.method, params)
     picked = pick_index(response.envelope, args.index) if args.index is not None else None
     out.response(response, label=args.method, payload=picked)
     return EXIT_OK if response.ok else EXIT_BUSINESS
+
+
+def unwrap_commands(payload):
+    """把批量命令的几种写法归一成数组
+
+    认三种:纯数组(推荐)、``{"commands":[…]}``、以及整个请求体
+    ``{"id":…,"method":"commands","params":{"commands":[…]}}``。第三种来自留档文件与文档示例 ——
+    喂进来时文件里明明就是数组,只是多包了一层,以前会得到一句「批量命令必须是数组」,指不到真正的原因。
+    """
+    if isinstance(payload, dict):
+        if "commands" in payload:
+            return payload["commands"]
+        params = payload.get("params")
+        if isinstance(params, dict) and "commands" in params:
+            return params["commands"]
+    return payload
 
 
 def cmd_batch(client: Client, args, out: Printer) -> int:
@@ -815,10 +857,10 @@ def cmd_batch(client: Client, args, out: Printer) -> int:
         commands = json.loads(text)
     except ValueError as error:
         raise UsageError(f"批量命令不是合法 JSON:{error}") from None
-    if isinstance(commands, dict) and "commands" in commands:
-        commands = commands["commands"]  # 允许直接喂 {"commands":[...]} 或整个请求体
+    commands = unwrap_commands(commands)
     if not isinstance(commands, list):
-        raise UsageError("批量命令必须是数组,例如 [{\"get_title\":{}},{\"get_url\":{}}]")
+        raise UsageError("批量命令必须是数组,例如 [{\"get_title\":{}},{\"get_url\":{}}]"
+                         "(也接受 {\"commands\":[…]},或整个请求体 {\"method\":\"commands\",\"params\":{…}})")
 
     response = client.batch(commands, stop_on_error=not args.keep_going,
                             stop_on_expect_failure=args.stop_on_expect_failure,
@@ -937,6 +979,11 @@ def cmd_js(client: Client, args, out: Printer) -> int:
     variables = parse_kv(args.var)
     if variables:
         params["vars"] = variables
+    # 只读脚本在「Object doesn't exist」这类 Playwright 事件分发伪故障下重发是无害的,而 execute_js
+    # 恰恰是最常用的只读命令。不给这个开关时,调用方只能自己手拼 {"body":…,"retryOnSpurious":true}
+    # 的 JSON 走 --params,把「用 dsb 少踩坑」这件事又还回去了。
+    if getattr(args, "retry_on_spurious", False):
+        params["retryOnSpurious"] = True
     response = client.command("execute_js", params, label="execute_js")
     # JS 的「值」才是重点:默认只打摘要 + 返回值,信封里的截图/序号是噪音
     if out.mode == "json" or out.select is not None:
@@ -1142,7 +1189,9 @@ def add_common_options(parser: argparse.ArgumentParser, *, suppress_defaults: bo
     add("--no-redact", action="store_true", help="关闭脱敏(默认对手机号/证件号/邮箱等打码)")
     add("--redact-pattern", action="append", help="额外要打码的词,可重复")
     add("--json", action="store_true", help="只输出 JSON(便于管道)")
-    add("--select", metavar="PATH", help="仅输出指定字段的 JSON，如 data.text / data.fields.0；仍脱敏和记录，失败保留完整错误")
+    add("--select", metavar="PATH",
+        help="仅输出指定字段的 JSON，如 data.text / data.results.1.data.changed；仍脱敏和记录，"
+             "失败响应同样按路径投影(只在路径不存在时才退回整封)")
     add("--compact", "--summary", dest="compact", action="store_true",
         help="只输出一行摘要(--summary 是同一个开关的正名;注意它只管本地输出,"
              "服务端的响应精简模式要用 --response-mode compact)")
@@ -1205,6 +1254,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("method", help="命令名,例如 go_to_url")
     p.add_argument("--params", help="参数 JSON,或 @文件.json,或 - 读标准输入")
     p.add_argument("-p", "--param", action="append", help="参数 key=value(值按 JSON 解析),可重复")
+    p.add_argument("--retry-on-spurious", "--retry-spurious", dest="retry_on_spurious", action="store_true",
+                   help="这次重发无害时打开:页面上报 Object doesn't exist 这类伪故障时由服务端自动重发"
+                        "(动作类命令默认不重发,先用只读命令确认上次没生效再开这个开关)")
 
     p = subs.add_parser("batch", parents=[common], help="批量执行命令(数组 JSON,默认读标准输入)")
     p.add_argument("file", nargs="?", help="命令数组文件;省略或 - 表示读标准输入")
@@ -1239,6 +1291,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = subs.add_parser("js", parents=[common], help="执行 JavaScript")
     p.add_argument("script", help="脚本内容,或 @脚本.js,或 - 读标准输入")
     p.add_argument("--var", action="append", help="注入 {{变量}},写成 k=v,可重复")
+    p.add_argument("--retry-on-spurious", "--retry-spurious", dest="retry_on_spurious", action="store_true",
+                   help="脚本只读、重发无害时打开:页面上报 Object doesn't exist 这类伪故障时由服务端自动重发")
 
     p = subs.add_parser("selftest", parents=[common], help="对当前服务跑一遍端到端自检")
     p.add_argument("--browser", help="自检时用哪个浏览器(默认服务配置)")

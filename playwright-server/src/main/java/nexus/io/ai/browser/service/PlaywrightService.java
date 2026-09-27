@@ -1919,11 +1919,33 @@ public class PlaywrightService {
    */
   public RespBodyVo getBrowserState(Long browserId, Boolean highlight, Integer viewportExpansion,
       Boolean includeElements, Integer maxElements, Boolean includeFrames) {
-    return getBrowserStateAttempt(browserId, highlight, viewportExpansion, includeElements, maxElements, includeFrames, 1);
+    return getBrowserState(browserId, highlight, viewportExpansion, includeElements, maxElements,
+        includeFrames, null);
+  }
+
+  /**
+   * 同上,额外控制「用哪一种判据认定这份索引已经不能再用」
+   *
+   * <p>
+   * <b>为什么要有 {@code strictSnapshot}</b>:默认判据是**逐元素重校验**(读到的每个索引按它的 xpath 再查一次,
+   * 比对标签与 id/name,对不上才作废),页面里跟索引无关的变动 —— 实时价格每 5 秒刷新一次文字、状态灯换一个
+   * class —— 都不再让整份索引失效。实测在实时行情页上,旧的「只要 DOM 变过就作废」判据会把索引**永久**判死:
+   * 页面永远在变,于是每一次按索引点击都只能拿到「当前没有页面快照」,只能全程退回选择器与文本定位。
+   *
+   * <p>
+   * 传 {@code true} 恢复旧的严格判据(读取期间只要发生任何 DOM 变更就作废),用于「宁可重取快照也不接受
+   * 任何可能过期」的排查场景。两种判据下文档/URL/readyState/frame 读取失败这类问题都会照常作废索引。
+   *
+   * @param strictSnapshot 是否用旧的「任何 DOM 变更即作废」判据,默认 {@code false}
+   */
+  public RespBodyVo getBrowserState(Long browserId, Boolean highlight, Integer viewportExpansion,
+      Boolean includeElements, Integer maxElements, Boolean includeFrames, Boolean strictSnapshot) {
+    return getBrowserStateAttempt(browserId, highlight, viewportExpansion, includeElements, maxElements,
+        includeFrames, Boolean.TRUE.equals(strictSnapshot), 1);
   }
 
   private RespBodyVo getBrowserStateAttempt(Long browserId, Boolean highlight, Integer viewportExpansion,
-      Boolean includeElements, Integer maxElements, Boolean includeFrames, int attempt) {
+      Boolean includeElements, Integer maxElements, Boolean includeFrames, boolean strictSnapshot, int attempt) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
@@ -1974,12 +1996,13 @@ public class PlaywrightService {
       }
     }
 
-    // 索引清单:text 是给人读的树,index 才是按索引命令要用的东西,直接内联免得再跑一趟
-    List<Kv> allElements = null;
+    // 索引清单:text 是给人读的树,index 才是按索引命令要用的东西,直接内联免得再跑一趟。
+    // 这一步同时也是「索引还指不指得到当初那个元素」的校验依据,所以**不管调用方要不要内联清单都要跑** ——
+    // 否则 includeElements:false 就等于跳过了校验,索引再也没人检查。
+    List<Kv> allElements = interactiveElements(inst);
     if (includeElements == null || includeElements) {
       int cap = maxElements == null || maxElements <= 0 ? DEFAULT_MAX_INLINE_ELEMENTS : maxElements;
-      List<Kv> all = interactiveElements(inst);
-      allElements = all;
+      List<Kv> all = allElements;
       List<Kv> inline = all.size() > cap ? new ArrayList<>(all.subList(0, cap)) : all;
       // elementsTruncated 无论是否截断都要给:调用方靠它判断「清单是不是全的」,缺字段会让人以为没截断
       kv.set("elements", inline).set("elementCount", all.size()).set("elementsTruncated", all.size() > cap);
@@ -1996,34 +2019,68 @@ public class PlaywrightService {
       kv.set("state_file", stateFile);
     }
     Kv endStamp = snapshotStamp(inst);
-    List<String> issues = snapshotIssues(startStamp, endStamp, state, allElements);
+    List<String> issues = snapshotIssues(startStamp, endStamp, state, allElements, strictSnapshot);
     kv.set("snapshotConsistent", issues.isEmpty()).set("snapshotAttempts", attempt);
     kv.set("pageAppearsBlank", text.isBlank());
+    // 读取期间页面动过没有,以及动的是「结构」还是「内容」,都要报出来:判据靠它作废索引,
+    // 默认判据下它也是「为什么这次没作废」的依据,排查时不用再猜。
+    // 报**这一次读取期间的增量**,不是页面累计值 —— 累计值一路只增不减,放在回执里没法回答
+    // 「刚才读的时候页面在动吗」这个唯一要紧的问题。
+    kv.set("snapshotMutations", mutationDelta(startStamp, endStamp, "mutations"))
+        .set("snapshotStructuralMutations", mutationDelta(startStamp, endStamp, "structuralMutations"))
+        .set("snapshotContentMutations", mutationDelta(startStamp, endStamp, "contentMutations"))
+        .set("snapshotStrict", strictSnapshot);
     if (!issues.isEmpty()) {
       // Never leave indices from a known mixed snapshot available to later actions.
       inst.domState = null;
       inst.snapshotInvalidated = true;
       if (attempt < 2) {
         return getBrowserStateAttempt(browserId, highlight, viewportExpansion, includeElements,
-            maxElements, includeFrames, attempt + 1);
+            maxElements, includeFrames, strictSnapshot, attempt + 1);
       }
       kv.set("snapshotIssues", issues).set("indicesUsable", false)
           .set("snapshotLastMutation", endStamp.get("lastMutation"))
           .set("snapshotHint", "页面在读取期间变化或部分读取失败；本次索引已作废，请等待目标内容后重新读取快照。");
     } else {
       kv.set("indicesUsable", true);
+      // 默认判据下页面完全可能「动过但索引仍然有效」(实时行情、时钟、状态灯)。不说明一句的话,
+      // 调用方看到 snapshotMutations 不为 0 会以为索引不可信,又白跑一遍重取快照。
+      boolean contentChanged = !java.util.Objects.equals(
+          startStamp.get("contentMutations"), endStamp.get("contentMutations"));
+      if (contentChanged) {
+        kv.set("snapshotNote", "读取期间页面有 " + mutationDelta(startStamp, endStamp, "contentMutations")
+            + " 次内容变动(文字/属性),未增删元素、且索引指向的元素逐个重校验通过,索引仍可用。");
+      }
     }
     return RespBodyVo.ok(kv);
   }
 
-  /** Observe document identity and DOM mutations, excluding our own highlight overlay. */
+  /** 某类变更计数在这一次读取期间的增量(两个时间点都没读到就按 0) */
+  static int mutationDelta(Kv before, Kv after, String field) {
+    Object from = before.get(field);
+    Object to = after.get(field);
+    if (!(from instanceof Number) || !(to instanceof Number)) {
+      return 0;
+    }
+    return ((Number) to).intValue() - ((Number) from).intValue();
+  }
+
+  /**
+   * Observe document identity and DOM mutations, excluding our own highlight overlay.
+   *
+   * <p>
+   * 变更分两类计数 —— <b>结构类</b>(childList 里增删了元素节点,会挪动同级位置、从而挪动位置型 xpath)与
+   * <b>内容类</b>(文字节点改写、属性变化)。索引能不能继续用,靠的是「按 xpath 逐个重校验」,不是这个计数;
+   * 分开计数只是为了在回执里说清「页面到底动的是结构还是内容」,以及给 {@code strictSnapshot} 提供判据。
+   */
   private static Kv snapshotStamp(BrowserInstance inst) {
     try {
       Object raw = inst.page.evaluate("""
           () => {
             const key = '__dsbSnapshotWatch';
             if (!window[key] || window[key].document !== document) {
-              const watch = {document, id: performance.timeOrigin + ':' + Math.random(), count: 0};
+              const watch = {document, id: performance.timeOrigin + ':' + Math.random(), count: 0,
+                structural: 0, content: 0};
               watch.observer = new MutationObserver(records => {
                 for (const r of records) {
                   const e = r.target.nodeType === 1 ? r.target : r.target.parentElement;
@@ -2043,6 +2100,13 @@ public class PlaywrightService {
                       [...r.addedNodes, ...r.removedNodes].every(n =>
                         n.nodeType === 1 && n.id === 'playwright-highlight-container')) continue;
                   watch.count++;
+                  // 只有「增删了元素节点」才会挪动同级序号,进而挪动位置型 xpath;纯文字改写不会。
+                  if (r.type === 'childList' &&
+                      [...r.addedNodes, ...r.removedNodes].some(n => n.nodeType === 1)) {
+                    watch.structural++;
+                  } else {
+                    watch.content++;
+                  }
                   watch.lastMutation = {type:r.type, tag:e?.tagName, attribute:r.attributeName};
                 }
               });
@@ -2050,8 +2114,10 @@ public class PlaywrightService {
                 attributeOldValue:true, characterData:true});
               window[key] = watch;
             }
-            return {documentId:window[key].id, mutations:window[key].count,
-              lastMutation:window[key].lastMutation,
+            const w = window[key];
+            return {documentId:w.id, mutations:w.count,
+              structuralMutations:w.structural, contentMutations:w.content,
+              lastMutation:w.lastMutation,
               url:location.href, readyState:document.readyState};
           }
           """);
@@ -2062,20 +2128,92 @@ public class PlaywrightService {
   }
 
   static List<String> snapshotIssues(Kv before, Kv after, DOMState state, List<Kv> elements) {
+    return snapshotIssues(before, after, state, elements, false);
+  }
+
+  /**
+   * 这份快照能不能继续用来按索引操作
+   *
+   * <p>
+   * <b>判据为什么从「DOM 变更计数」细化为「结构变更 + 逐元素重校验」</b>:索引解析成的是<b>位置型 xpath</b>
+   * (形如 {@code html/body/div[2]/form/input[1]},只有同级序号、没有 class 谓词),所以「页面变了多少次」
+   * 跟「索引还指不指得到原来那个元素」不是一回事:
+   *
+   * <ul>
+   * <li><b>内容类变动</b>(价格文字刷新、状态灯换 class、style 微调)不会挪动任何同级序号,位置型 xpath 照样
+   * 指回同一个元素。旧的判据却把整个文档的任何一次这类变动都算作「快照不可信」,在实时行情页上直接退化成
+   * <b>永久失效</b> —— 那儿的价格每几秒刷新一次,于是每一次按索引点击都只能拿到「当前没有页面快照」,
+   * 只能全程改用选择器与文本定位。</li>
+   * <li><b>结构类变动</b>(增删元素)会挪动同级序号,索引区间确实不再可信,照旧一律作废。</li>
+   * </ul>
+   *
+   * <p>
+   * 除此之外还做一次**逐元素重校验**:读到的每个索引按它的 xpath 再查一次(这一步 {@code get_browser_state}
+   * 本来就在做,结果落在元素的 {@code resolved} 字段上),再比对标签与 id/name,对不上就作废。这比单看
+   * 变更计数更强 —— 计数没变但某个 xpath 已经指向别的元素时,旧判据反而发现不了。
+   *
+   * @param strict true 时退回旧判据(任何 DOM 变更,含纯内容变动,一律作废),见 {@code getBrowserState}
+   *               的 strictSnapshot
+   */
+  static List<String> snapshotIssues(Kv before, Kv after, DOMState state, List<Kv> elements, boolean strict) {
     List<String> issues = new ArrayList<>();
     if (before.containsKey("error") || after.containsKey("error")) issues.add("document_probe_failed");
-    for (String field : List.of("documentId", "url", "mutations")) {
+    for (String field : List.of("documentId", "url")) {
       if (!java.util.Objects.equals(before.get(field), after.get(field))) issues.add(field + "_changed");
+    }
+    // 变更计数分两类看:
+    // - 结构类(读取期间增删了元素节点):位置型 xpath 的序号会整体挪位,索引区间不再可信 → 一律作废;
+    // - 内容类(文字改写、class/style 等属性变化):不会挪位,默认模式下不再因此作废索引,严格模式仍然作废。
+    String mutationField = strict ? "mutations" : "structuralMutations";
+    if (!java.util.Objects.equals(before.get(mutationField), after.get(mutationField))) {
+      issues.add("mutations_changed");
     }
     if ("loading".equals(after.get("readyState"))) issues.add("document_loading");
     for (FrameSnapshot frame : state.getFrames()) {
       if (!frame.skipped && frame.readFailure != null) issues.add("frame_read_failed:" + frame.index);
       if (frame.main && !java.util.Objects.equals(frame.url, after.get("url"))) issues.add("frame_url_changed");
     }
-    if (elements != null && elements.stream().anyMatch(e -> Boolean.FALSE.equals(e.get("resolved")))) {
-      issues.add("elements_unresolved");
+    if (elements != null) {
+      boolean unresolved = false;
+      List<String> moved = new ArrayList<>();
+      for (Kv element : elements) {
+        if (Boolean.FALSE.equals(element.get("resolved"))) {
+          unresolved = true;
+          continue;
+        }
+        // 重读回来的标签/id/name 与快照里记的不一致 → 这个位置已经不是当初那个元素了。
+        // 只比这三样(不比文本、不比 class):它们是身份,不是会持续变动的内容。
+        if (!identityMatches(element)) {
+          Object index = element.get("index");
+          moved.add(String.valueOf(index));
+        }
+      }
+      if (unresolved) issues.add("elements_unresolved");
+      if (!moved.isEmpty()) issues.add("element_identity_changed:" + String.join(",", moved));
     }
     return issues;
+  }
+
+  /**
+   * 快照记下的身份与重读回来的身份是否一致(tag 必比;id/name 只在两边都拿到时比)
+   *
+   * <p>{@code interactiveElements} 把重读结果平铺进了元素 Kv,所以 {@code tag} 是重读值、{@code id}/{@code name}
+   * 同样是;快照侧的身份在 {@code snapshotTag}/{@code snapshotId}/{@code snapshotName} 上。
+   */
+  private static boolean identityMatches(Kv element) {
+    Object readTag = element.get("tag");
+    Object snapTag = element.get("snapshotTag");
+    if (readTag != null && snapTag != null && !String.valueOf(readTag).equalsIgnoreCase(String.valueOf(snapTag))) {
+      return false;
+    }
+    for (String field : List.of("id", "name")) {
+      Object read = element.get(field);
+      Object snap = element.get("snapshot" + Character.toUpperCase(field.charAt(0)) + field.substring(1));
+      if (read != null && snap != null && !String.valueOf(read).equals(String.valueOf(snap))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -4760,13 +4898,39 @@ public class PlaywrightService {
     return RespBodyVo.ok();
   }
 
+  /**
+   * 送按键,或直接打一段文本
+   *
+   * <p>
+   * <b>为什么两种都要收</b>:这个命令原本只走 {@code keyboard().press(keys)},于是 {@code keys:"CRCL"}
+   * 这样的调用会得到 Playwright 的 {@code Unknown key: "CRCL"} —— 而调用方的意图再清楚不过:往当前焦点
+   * 里打这四个字母。实测里紧接着的两条路都不好走:改叫 {@code input_text_by_selector} 需要选择器(隐藏输入框
+   * 还够不着),改叫 {@code type_text} 需要**元素索引**(要先取快照)。所以这里直接按输入形态分流:
+   *
+   * <ul>
+   * <li><b>按键</b>:单个键名({@code Enter} / {@code Escape} / {@code Tab} / {@code ArrowDown} …),
+   * 或带修饰键的组合({@code Control+A} / {@code Shift+Enter} / {@code Meta+K}),走 {@code press}
+   * —— 修饰键只有这条路才能表达。</li>
+   * <li><b>文本</b>:其余情况(含中文、空格、标点)走 {@code type},逐字符按键,和真人打字一样会触发
+   * {@code keydown/keypress/input} 事件,所以 Vue / React 这类受控输入框也认。</li>
+   * </ul>
+   *
+   * <p>
+   * 回执按分流结果给 {@code mode}({@code press} / {@code type})与 {@code keys} / {@code text},并照旧回报
+   * 焦点落在谁身上 —— 文本打错地方(焦点在 {@code <body>})时 {@code focusNote} 会直接说清楚。
+   */
   public RespBodyVo sendKeys(Long browserId, String keys) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
     }
+    boolean asText = typesAsText(keys);
     try {
-      inst.page.keyboard().press(keys);
+      if (asText) {
+        inst.page.keyboard().type(keys);
+      } else {
+        inst.page.keyboard().press(keys);
+      }
     } catch (PlaywrightException e) {
       return RespBodyVo.fail("send_keys 失败：" + briefMessage(e.getMessage()));
     }
@@ -4774,16 +4938,63 @@ public class PlaywrightService {
     // (焦点已经不在那个 input 上,或者框架刚把输入框重置了),而回执只有一句 ok:true ——
     // 调用方只能靠「标签没多出来」反推,白跑一轮。把焦点元素写进回执,空操作一眼可见。
     Kv data = new Kv();
+    data.set("mode", asText ? "type" : "press");
+    if (asText) {
+      data.set("text", keys);
+    } else {
+      data.set("keys", keys);
+    }
     Kv focused = focusedElement(inst);
     if (focused != null) {
       data.set("focused", focused);
       if (Boolean.TRUE.equals(focused.getBoolean("isBody"))) {
-        data.set("focusNote", "按键发出时焦点在 <body> 上(不在任何输入控件里):"
-            + "像 Enter 这种「创建/提交」键很可能被页面直接忽略 —— 先 click 目标输入框,再送键");
+        data.set("focusNote", (asText ? "这段文字" : "按键") + "发出时焦点在 <body> 上(不在任何输入控件里):"
+            + "内容不会进入任何输入框 —— 先 click 目标输入框,再送字/送键");
       }
     }
     return RespBodyVo.ok(data);
   }
+
+  /**
+   * 这段输入该按「文本」打,还是该当「按键」按
+   *
+   * <p>
+   * 判据是**输入形态**,不是猜意图:单键名(含 {@code F1}/{@code PageDown} 这类)与修饰键组合走按键,
+   * 其余走文本。放行纯字母数字的键名是安全的 —— 那些在 Playwright 里本来就不存在,
+   * 只会得到 {@code Unknown key},不如当文本用。
+   */
+  static boolean typesAsText(String keys) {
+    if (keys == null || keys.isEmpty()) {
+      return false;
+    }
+    if (SINGLE_KEY.matcher(keys).matches() || MODIFIER_COMBO.matcher(keys).matches()) {
+      return false;
+    }
+    return true;
+  }
+
+  /** 功能键、编辑键、方向键、翻页键这类「键名」;只有它们才该走 press */
+  private static final String KEY_NAME =
+      "(?i)(Enter|Escape|Esc|Tab|Backspace|Delete|Insert|Home|End|PageUp|PageDown|ArrowUp|ArrowDown|ArrowLeft"
+          + "|ArrowRight|Space|CapsLock|NumLock|ScrollLock|PrintScreen|ContextMenu|F([1-9]|1[0-2]))";
+
+  /** 可叠加的修饰键:它们后面**必须**还有且只有一个真正的键 */
+  private static final String MODIFIER = "(?i)(Control|Ctrl|Alt|Shift|Meta|Command|Cmd)";
+
+  /** 单个键名 */
+  private static final Pattern SINGLE_KEY = Pattern.compile(KEY_NAME);
+
+  /**
+   * {@code Control+A} / {@code Shift+Enter} / {@code Control+Shift+T} 这类组合
+   *
+   * <p>
+   * 形如 {@code Control+A+B} 的**不算**组合键 —— Playwright 的 {@code press} 要的是
+   * 「若干修饰键 + 恰好一个键」,多给一段只会换来一次失败。而 {@code Control} 单独出现是合法的
+   * (按住修饰键),所以它是单独一条分支。
+   */
+  private static final Pattern MODIFIER_COMBO = Pattern.compile(
+      "(?i)(" + MODIFIER + "\\+)*" + MODIFIER + "(\\+([A-Za-z0-9]|" + KEY_NAME + "))?");
+
 
   /** 当前焦点元素是谁(取证用;取不到就返回 null,绝不影响命令本身的成败) */
   private static Kv focusedElement(BrowserInstance inst) {
@@ -5270,8 +5481,95 @@ public class PlaywrightService {
 
   // ==================== 读取元素信息 ====================
 
+  /**
+   * 读元素文字;并且顺手回答「为什么读不到」
+   *
+   * <p>
+   * 原生语义是 {@code locator.innerText()},所以**只认真正的文字节点**。实测里踩得最狠的一类误判是
+   * 图表与地图:坐标轴、刻度、十字线浮标全是画在 {@code <canvas>} 上的像素,元素本身一个文字节点都没有
+   * —— {@code innerText} 返回空串或 {@code "∅"},而页面上明明写着字。调用方看到空值的第一反应是
+   * 「选择器错了」或「页面没加载完」,于是反复重试、换选择器,全都白费。
+   *
+   * <p>
+   * <b>为什么这个命令也要收 {@code selector}</b>:canvas 通常**不进快照**(它不可交互,拿不到索引),
+   * 于是「按索引读文字」这条唯一的入口恰好够不着最需要诊断的那种元素。补上按选择器定位之后,
+   * {@code get_element_text} 才能回答「这个 canvas 里到底有没有文字」。
+   *
+   * <p>
+   * 传 {@code canvasOnly:true} 时,读不到文字就再问一句「这里是不是基本只有 canvas」,是的话在回执里给
+   * {@code canvasOnly:true} 与 {@code hint},把话说明白:这块内容要用像素手段取(截图 + 本机 OCR),
+   * 或改用页面上**同时存在文字**的地方(图表旁边往往有图例/数据面板,那里是真 DOM 文字)。
+   *
+   * @param index     元素索引(来自 {@code get_browser_state});与 {@code selector} 二选一
+   * @param selector  CSS 选择器;与 {@code index} 二选一,对 canvas 这类不进快照的元素尤其有用
+   * @param frame     {@code selector} 在跨域 iframe 里时传(序号见 {@code list_frames},或 URL/name 子串)
+   */
+  public RespBodyVo getElementText(Long browserId, Integer index, String selector, Boolean canvasOnly,
+      String frame) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return notFound(browserId);
+    }
+    if ((selector == null || selector.isBlank()) && index == null) {
+      return RespBodyVo.fail("get_element_text 需要 index 或 selector 之一");
+    }
+    Locator locator;
+    String target;
+    if (selector != null && !selector.isBlank()) {
+      try {
+        locator = locatorIn(inst, frame, selector);
+      } catch (IllegalArgumentException e) {
+        return RespBodyVo.fail("get_element_text 失败：" + e.getMessage());
+      }
+      int count = locator.count();
+      if (count == 0) {
+        return RespBodyVo.fail("get_element_text 没匹配到元素: 选择器 " + selector + frameSuffix(frame));
+      }
+      target = "选择器 " + selector + frameSuffix(frame);
+    } else {
+      locator = locatorOf(inst, index);
+      if (locator == null) {
+        return RespBodyVo.fail("get_element_text 索引越界: " + index + indexHint(inst));
+      }
+      target = "index=" + index;
+    }
+    Kv data = new Kv();
+    data.set("target", target);
+    String text;
+    try {
+      text = locator.innerText();
+      data.set("text", text);
+    } catch (PlaywrightException e) {
+      return RespBodyVo.fail(actionFailure("get_element_text", e));
+    }
+    if (Boolean.TRUE.equals(canvasOnly) && (text == null || text.isBlank())) {
+      Boolean onlyCanvas = null;
+      try {
+        Object raw = locator.evaluate("el => { if (!el.querySelector) return null;"
+            + " const canvases = el.tagName === 'CANVAS' ? [el] : Array.from(el.querySelectorAll('canvas'));"
+            + " if (!canvases.length) return false;"
+            + " const textish = Array.from(el.querySelectorAll('*')).filter(n => n.children.length === 0"
+            + " && (n.textContent || '').trim().length > 0).length;"
+            + " return textish === 0; }");
+        onlyCanvas = raw instanceof Boolean ? (Boolean) raw : null;
+      } catch (PlaywrightException e) {
+        // 诊断取不到不算失败:文字那一段已经如实返回了
+        onlyCanvas = null;
+      }
+      if (onlyCanvas != null) {
+        data.set("canvasOnly", onlyCanvas);
+        if (Boolean.TRUE.equals(onlyCanvas)) {
+          data.set("hint", "这个元素里的内容画在 <canvas> 上(图表 / 地图 / 看板),没有文字节点:"
+              + "innerText 必然是空的。改走像素手段(截图后用 OCR),"
+              + "或去读同一页面上**同时是文字**的地方(图例、数据面板、十字线浮标对应的 DOM 文本)");
+        }
+      }
+    }
+    return RespBodyVo.ok(data);
+  }
+
   public RespBodyVo getElementText(Long browserId, int index) {
-    return read(browserId, index, "get_element_text", "text", (locator) -> locator.innerText());
+    return getElementText(browserId, Integer.valueOf(index), null, Boolean.FALSE, null);
   }
 
   public RespBodyVo getElementHtml(Long browserId, int index) {
@@ -8115,6 +8413,18 @@ public class PlaywrightService {
       item.set("resolved", entry instanceof Map);
       if (node != null) {
         item.set("xpath", node.getXpath());
+        // 快照侧的身份要另存一份:上面 item.set((Map) entry) 已经把 tag/id/name 覆盖成**重读**回来的值,
+        // 原值不留档就没法回答「这个位置还是不是当初那个元素」(snapshotIssues 的逐元素重校验要用)。
+        item.set("snapshotTag", node.getTagName());
+        Map<String, String> snapshotAttrs = node.getAttributes();
+        if (snapshotAttrs != null) {
+          if (snapshotAttrs.get("id") != null) {
+            item.set("snapshotId", snapshotAttrs.get("id"));
+          }
+          if (snapshotAttrs.get("name") != null) {
+            item.set("snapshotName", snapshotAttrs.get("name"));
+          }
+        }
         if (!(entry instanceof Map)) {
           item.set("tag", node.getTagName()).set("text", "[element could not be re-read]");
         }

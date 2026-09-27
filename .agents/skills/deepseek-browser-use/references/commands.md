@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | `navigate` | `id`, `url` | 返回 `data.status` |
 | `go_to_url` | `id`, `url` | 与 `navigate` 等价 |
-| `get_browser_state` | `id`, `highlight`, `viewportExpansion`, `includeElements`, `maxElements`, `includeFrames` | 见 `reading-pages.md` |
+| `get_browser_state` | `id`, `highlight`, `viewportExpansion`, `includeElements`, `maxElements`, `includeFrames`, `strictSnapshot` | 见 `reading-pages.md`。`strictSnapshot`(bool，默认 false) 决定「这份索引什么时候作废」：默认只作废**结构变更**（读取期间增删了元素）与逐元素重校验失败的快照，实时行情这类只有文字/属性在变的页面索引仍然可用；传 `true` 恢复旧的「读取期间任何 DOM 变更即作废」判据 |
 | `list_frames` | `id`, `refresh`(bool，默认 true) | 列出页面上的**全部 frame**（含跨域 iframe）：`data.frames[]`（`index`/`url`/`name`/`isMain`/`parentIndex`/`depth`/`elementCount`/`indexRange`；读不出来的 frame 另有 `readError`）。`index 0` 固定是主 frame，其余按 frame 树深度优先编号。**顶层读不到元素时先看它**，见 `reading-pages.md`「跨域 iframe」 |
 | `get_page_snapshot` | `id`, `includeConsole`(bool), `includeRequests`(bool), `requestFilter` | 一次拿到页面状态：`data.url`、`data.title`、`data.tabs`、`data.dialog`、`data.loading`；`includeConsole=true` 再带 `data.logs`/`data.errors`，`includeRequests=true` 再带 `data.requests`（可用 `requestFilter` 按 URL 子串过滤）。替代六次单独调用，**不含 DOM 快照文本** |
 | `diff_dom_text` | `id`, `highlight`, `viewportExpansion` | 重新执行一次 buildDomTree，与上一次快照按行做差集：`data.changed`、`data.added`、`data.removed`（各最多 200 行）、`data.first`。判断「页面到底动没动」比重读整页省 token。**不产生新的截图/文本文件** |
@@ -52,7 +52,7 @@
 | `input_text` | `id`, `index`, `text`, `mode`(可选) | 覆盖式填充（等价 `fill`，会清空）；`text` 必填，**清空请用 `clear_text`** |
 | `drag_element_by_index` | `id`, `index`, `targetIndex` | 把第 index 个元素拖到第 targetIndex 个元素 |
 | `upload_file` | `id`, `path`, `index` 或 `selector`(二选一), `timeoutMs`(可选), `frame`(可选) | `path` 是**服务器本地路径**：绝对路径或按服务端暂存目录解析的相对路径（见下面的「上传文件」）。**上传完会回读校验**，见下 |
-| `send_keys` | `id`, `keys` | 键盘按键：`Enter`、`Tab`、`Control+A`、`ArrowDown` |
+| `send_keys` | `id`, `keys` | `keys` 收**两种形态**：① **按键**——单个键名（`Enter`、`Tab`、`ArrowDown`、`F5`）或「修饰键 + 一个键」的组合（`Control+A`、`Shift+Enter`、`Control+Shift+T`）；② **整段文本**（`CRCL`、`hello world`、中文）。回执里 `data.mode` 是 `press` 还是 `type` 直接告诉你走了哪条路，另有 `data.keys` / `data.text` 与 `data.focused`。整段文本走逐字符打字（会触发 `keydown/keypress/input`，受控输入框也认），所以「隐藏输入框没选择器、又不想先取快照拿索引」时可以直接用它 |
 | `key_down` | `id`, `keys` | 按住不放（配合 `key_up`） |
 | `key_up` | `id`, `keys` | 松开按键 |
 | `get_dropdown_options` | `id`, `index` | 返回 `data.options`，选项文本数组 |
@@ -142,7 +142,7 @@ curl -H "Content-Type: application/json" \
 
 | 方法 | 参数 | 返回 |
 | --- | --- | --- |
-| `get_element_text` | `id`, `index` | `data.text`（innerText） |
+| `get_element_text` | `id`, `index` 或 `selector`(二选一), `canvasOnly`(可选), `frame`(可选) | `data.text`（innerText）+ `data.target`（这次定位到的是谁）。**只认真正的文字节点**：图表 / 地图 / 看板上的刻度与浮标是画在 `canvas` 上的像素，这里必然是空。所以 `canvasOnly:true` 时，读不到文字会追加 `data.canvasOnly`（这里是不是基本只有 canvas）与 `data.hint`（给出路：像素手段或读旁边的真 DOM 文字）。canvas 通常**不进快照**（不可交互 → 没索引），要诊断它只能用 `selector` |
 | `get_element_html` | `id`, `index` | `data.html`（innerHTML） |
 | `get_element_value` | `id`, `index` | `data.value`（输入框的 value） |
 | `get_element_attribute` | `id`, `index`, `name` | `data.value`（属性值，可为 null） |
@@ -247,6 +247,23 @@ curl -H "Content-Type: application/json" \
 回执里 `data.mode` 是**实际用上的**那一种，`data.fallbackReason` 是降级原因（没降级就没有），`data.effective` 表示这次点击有没有真的改变页面。**只看 `ok:true` 会误判**：JS 派发的点击在框架里可能被忽略，所以要连 `data.effective` 一起看。
 
 `data.coveredBy` 表示目标中心点上实际命中的是别的元素（常见：用户服务协议层、弹窗遮罩、叠起来的确认框），这时先 `close_modal` 关掉遮挡物再点，而不是反复点。
+
+#### 按住（press and hold）读图表上的一点
+
+「按住不放」是 `mouse_move` + `mouse_down` + 读文本 + `mouse_up` 四步。**按下期间十字线被钉住**，图表图例（`[data-qa-id="legend"]` 之类的文本节点）会从「最新一根」切换为「光标锁住的那一根」自己的 `O/H/L/C/涨跌/量`——这正是读某一天 / 某个数据点数值的办法，比截图像素可靠得多：
+
+```bash
+# 1) 移到目标点（坐标可由 execute_js 取 getBoundingClientRect 算出来）
+dsb run mouse_move -p x=990 -p y=280
+# 2) 按住
+dsb run mouse_down -p button=left
+# 3) 读那根自己的数值（脚本只读，可带重发开关）
+dsb js @读图例.js --retry-on-spurious
+# 4) 一定要松开：忘了 mouse_up 会一直按着，后面每一次点击都会变成拖拽
+dsb run mouse_up -p button=left
+```
+
+时间轴上的**日期标签是 canvas 像素**，读不到文字（见 `get_element_text` 的 `canvasOnly`）。要确定「按住的是哪一天」，改从页面上的文字线索推：标的详情里的 `Last update at …`、页面标题、`document.title`、以及系统时钟（美股周末休市 → 最后一根就是上一个交易日）。
 
 ### 截图与 PDF
 

@@ -83,7 +83,8 @@ public class CommandTable {
     put("get_title", (svc, id, a) -> svc.getTitle(id));
     put("get_browser_state",
         (svc, id, a) -> svc.getBrowserState(id, a.getBoolean("highlight"), a.getInteger("viewportExpansion"),
-            a.getBoolean("includeElements"), a.getInteger("maxElements"), a.getBoolean("includeFrames")));
+            a.getBoolean("includeElements"), a.getInteger("maxElements"), a.getBoolean("includeFrames"),
+            a.getBoolean("strictSnapshot")));
     // 页面上的 frame 清单(跨域 iframe 也能读到 URL):主站把第三方控制台套在 iframe 里时先看它
     put("list_frames", (svc, id, a) -> svc.listFrames(id, a.getBoolean("refresh")));
     put("wait", (svc, id, a) -> svc.waitSeconds(id, reqInt(a, "seconds")));
@@ -127,7 +128,12 @@ public class CommandTable {
     put("scroll_to_text", (svc, id, a) -> svc.scrollToText(id, reqStr(a, "text")));
 
     // ---------- 读取元素信息与状态 ----------
-    put("get_element_text", (svc, id, a) -> svc.getElementText(id, reqInt(a, "index")));
+    // get_element_text:index 与 selector 二选一。canvas 通常不进快照(不可交互 → 没索引),
+    // 所以「按选择器读」是够到它、并回答「为什么读不到文字」的唯一入口
+    // canvasOnly:读不到文字时再判一句「这里是不是基本只有 canvas」(图表/地图的时间轴、刻度就是这种),
+    // 把「为什么读不到」直接写进回执,省掉调用方「换选择器 → 再试 → 还是空」的那几轮
+    put("get_element_text", (svc, id, a) -> svc.getElementText(id, a.getInteger("index"), optStr(a, "selector"),
+        Boolean.valueOf(optBool(a, "canvasOnly")), optStr(a, "frame")));
     put("get_element_html", (svc, id, a) -> svc.getElementHtml(id, reqInt(a, "index")));
     put("get_element_value", (svc, id, a) -> svc.getElementValue(id, reqInt(a, "index")));
     put("get_element_attribute", (svc, id, a) -> svc.getElementAttribute(id, reqInt(a, "index"), reqStr(a, "name")));
