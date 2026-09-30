@@ -107,7 +107,9 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
 
 `get_requests` 中每次请求有独立 requestId（雪花 ID 字符串）、requestedAt、method、url、resourceType；有请求体时附 postData、postDataLength、postDataTruncated。响应到达后回填 status 和 respondedAt，网络失败则记录 failure 和 finishedAt。
 
-`get_response_body` 和 `wait_for_response` 返回相同 requestId、对应 request 元数据、respondedAt 和 ageMs。bodyLength 是完整响应字符数，truncated 明示是否截断，bodyAvailable 指示响应体是否可用。重复 URL 应优先通过 requestId 回查，避免把上次查询结果当成本次结果。
+`get_response_body` 和 `wait_for_response` 返回相同 requestId、对应 request 元数据、respondedAt 和 ageMs。bodyLength 是本次可取得正文的字符数（缓存上限截断时为保留长度），truncated 明示是否截断，bodyAvailable 指示响应体是否可用。重复 URL 应优先通过 requestId 回查，避免把上次查询结果当成本次结果。
+
+正常关联的请求记录与响应回执带 `correlationMissed: false`、`correlatedBy: "identity"`。若只捕获到响应、没有匹配的请求记录，则补记并明确标记 `correlationMissed: true`、`correlatedBy: "none"`，不按相同 URL 猜配已有请求。补记的 requestedAt 是登记时刻。xhr/fetch 正文在下载完成回调中、由当前 Playwright 调用线程缓存，每条最多 100000 字符；缓存截断时 bodyLength 是保留长度，并有 `bodyCachedChars` 与 `truncated: true`。
 
 **响应体是「当场抄下来」的，不是「要的时候再去取」。** 浏览器只短暂保留响应体：实测在 12306 这种每秒轮询的页面上，一条 **7 秒前**的 XHR 再取 body 就是 `Protocol error (Network.getResponseBody): No resource with given identifier found`，一导航更是彻底没了——于是「保留最近 100 个响应」在真实站点上等于「一个都读不到」，而调用方最想知道的是「我这一步提交到底成功了没有」（当时只能靠后面又冒出了 `checkOrderInfo`/`getQueueCount` 反推）。现在收到响应时就把 **xhr/fetch** 的 body 抄一份存起来：单条最多 10 万字符（超出标 `bodyTruncated`、`bodyCachedChars`），同时抄的有名额上限（满了会说明「用 `wait_for_response` 重新等一次」）。非 xhr/fetch（文档、脚本、图片）不抄——它们又大又不是「接口返回」。
 

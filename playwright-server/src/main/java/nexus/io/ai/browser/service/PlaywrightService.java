@@ -1807,15 +1807,18 @@ public class PlaywrightService {
       }
     }));
     page.onResponse(response -> safely("onResponse", () -> {
-      Request request = response == null ? null : response.request();
-      Kv entry = request == null ? null : inst.requestIndex.remove(request);
-      if (entry != null) {
-        entry.set("status", response.status()).set("respondedAt", System.currentTimeMillis());
-        // 只对「自己记过的请求」减计数,保证与 onRequest 的加计数一一对应,不会减成负数
-        inst.inflight.decrementAndGet();
-      }
       if (response != null) {
-        rememberResponse(inst, response, entry == null ? requestInfo(request) : entry);
+        recordResponse(inst, response);
+      }
+    }));
+    // body 已下载完再读取,并留在当前 Playwright 调用线程上。
+    // 在独立线程里 response.text() 会并发驱动同一个 Connection,打乱事件顺序。
+    page.onRequestFinished(request -> safely("onRequestFinished", () -> {
+      for (BrowserInstance.RecordedResponse recorded : snapshotResponses(inst)) {
+        if (recorded.response.request() == request) {
+          ResponseBodyCache.capture(recorded);
+          break;
+        }
       }
     }));
     page.onRequestFailed(request -> safely("onRequestFailed", () -> {
@@ -1828,6 +1831,27 @@ public class PlaywrightService {
         inst.inflight.decrementAndGet();
       }
     }));
+  }
+
+  /** 按 Playwright Connection 中的请求对象精确关联,不能按 URL 猜测并发请求的归属。 */
+  static BrowserInstance.RecordedResponse recordResponse(BrowserInstance inst, Response response) {
+    Request request = response.request();
+    for (BrowserInstance.RecordedResponse recorded : snapshotResponses(inst)) {
+      if (recorded.response == response || (request != null && recorded.response.request() == request)) {
+        return recorded;
+      }
+    }
+    Kv entry = request == null ? null : inst.requestIndex.remove(request);
+    if (entry == null) {
+      // 例如认领页签之前发出的请求。明示关联缺失,不能假装关联成功或串到同 URL 的请求。
+      entry = requestInfo(request).set("correlationMissed", true).set("correlatedBy", "none");
+      addBoundedRequest(inst.requests, entry);
+    } else {
+      entry.set("correlationMissed", false).set("correlatedBy", "identity");
+      inst.inflight.decrementAndGet();
+    }
+    entry.set("status", response.status()).set("respondedAt", System.currentTimeMillis());
+    return rememberResponse(inst, response, entry);
   }
 
   /**
@@ -1917,10 +1941,10 @@ public class PlaywrightService {
    * 保留最近 100 个响应(带时间戳),get_response_body / wait_for_response 靠它回捞响应体
    *
    * <p>
-   * 存进去的同时就把 xhr/fetch 的 body 抄一份:浏览器只会短暂保留响应体,不抄的话「保留 100 个响应」
+   * xhr/fetch 的 body 在 requestfinished 事件里抄一份:浏览器只会短暂保留响应体,不抄的话「保留 100 个响应」
    * 在真实页面上等于「都读不到」(见 {@link ResponseBodyCache})。
    */
-  private static void rememberResponse(BrowserInstance inst, Response response, Kv request) {
+  private static BrowserInstance.RecordedResponse rememberResponse(BrowserInstance inst, Response response, Kv request) {
     BrowserInstance.RecordedResponse recorded =
         new BrowserInstance.RecordedResponse(response, System.currentTimeMillis(), request);
     synchronized (inst.recentResponses) {
@@ -1929,7 +1953,7 @@ public class PlaywrightService {
         inst.recentResponses.removeFirst();
       }
     }
-    ResponseBodyCache.capture(recorded);
+    return recorded;
   }
 
   private static String truncate(String value, int max) {
@@ -8802,8 +8826,7 @@ public class PlaywrightService {
     }
     BrowserInstance.RecordedResponse recorded = snapshotResponses(inst).stream()
         .filter(item -> item.response == response).findFirst()
-        .orElseGet(() -> new BrowserInstance.RecordedResponse(response, System.currentTimeMillis(),
-            requestInfo(response.request())));
+        .orElseGet(() -> recordResponse(inst, response));
     Kv kv = responseInfo(recorded, maxChars);
     kv.set("ageMs", 0).set("fromLookBack", false);
     return RespBodyVo.ok(kv);
@@ -8865,10 +8888,12 @@ public class PlaywrightService {
       kv.set("bodyError", recorded.bodyCaptureError).set("bodyAvailable", false);
     }
     kv.set("requestId", recorded.request.get("requestId")).set("request", recorded.request)
+        .set("correlationMissed", recorded.request.get("correlationMissed"))
+        .set("correlatedBy", recorded.request.get("correlatedBy"))
         .set("respondedAt", recorded.at).set("ageMs", Math.max(0, System.currentTimeMillis() - recorded.at));
     if (recorded.body != null) {
       kv.set("bodyFromCache", true).set("bodyCapturedAt", recorded.bodyAt);
-    } else if (!recorded.bodyCaptured) {
+    } else if (!recorded.bodyCaptured && ResponseBodyCache.cacheable(recorded.request.getStr("resourceType"))) {
       kv.set("bodyFromCache", false).set("bodyCapturePending", true);
     }
     return kv;

@@ -123,6 +123,7 @@ public class BrowserInstance {
 
   /** 网络请求记录(最多保留 200 条) */
   public final List<Kv> requests = Collections.synchronizedList(new ArrayList<Kv>());
+  /** 同一 Connection 复用请求对象;请求与响应回调必须串行处理,不能按 URL 猜配。 */
   public final Map<Request, Kv> requestIndex = Collections.synchronizedMap(new IdentityHashMap<Request, Kv>());
 
   /**
@@ -147,7 +148,7 @@ public class BrowserInstance {
    * 保留响应体。实测 12306 这种高频轮询的页面上,一条 7 秒前的 XHR 再取 body 就已经是
    * {@code Protocol error (Network.getResponseBody): No resource with given identifier found} ——
    * 「保留最近 100 个响应」于是等于「一个都读不到」,而调用方最想看的恰恰是刚刚提交成功没有。
-   * 所以收到响应时(仅在 xhr/fetch 上)立刻异步抄一份 {@link #body}。
+   * 所以请求下载完成时(仅在 xhr/fetch 上),在 Playwright 调用线程抄一份 {@link #body}。
    */
   public static class RecordedResponse {
     public final Response response;
@@ -160,7 +161,7 @@ public class BrowserInstance {
     public volatile boolean bodyTruncated;
     /** 抄完了(无论成败)。没抄完时调用方可以自己再去读一次 */
     public volatile boolean bodyCaptured;
-    /** 抄失败的原因(已释放 / 队列满 / 非 xhr-fetch 之外的真实错误) */
+    /** 抄失败的原因(已释放等真实错误) */
     public volatile String bodyCaptureError;
     /** 抄下来的时刻 */
     public volatile long bodyAt;

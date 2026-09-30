@@ -25,6 +25,7 @@ public class BrowserResponseIntegrationTest {
   private static HttpServer server;
   private static String base;
   private static Path testProfileDir;
+  private static java.util.concurrent.ExecutorService fixtureWorkers;
 
   @BeforeClass public static void start() throws Exception {
     // 测试必须用一份临时 profile:默认那份托管 profile(~/.config/browseruse/profiles/shared)是开发机
@@ -34,6 +35,21 @@ public class BrowserResponseIntegrationTest {
     ChromeBrowser.resetForTests();
 
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    fixtureWorkers = java.util.concurrent.Executors.newCachedThreadPool();
+    server.setExecutor(fixtureWorkers);
+    server.createContext("/parallel", exchange -> {
+      String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+      // 让同 URL 的并发请求交错完成,不能按 URL 或请求发起顺序配响应。
+      try {
+        Thread.sleep((12 - Integer.parseInt(body)) * 20L);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+      exchange.sendResponseHeaders(200, bytes.length);
+      exchange.getResponseBody().write(bytes);
+      exchange.close();
+    });
     server.createContext("/", exchange -> {
       boolean api = exchange.getRequestURI().getPath().equals("/query");
       String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
@@ -55,6 +71,7 @@ public class BrowserResponseIntegrationTest {
   @AfterClass public static void stop() {
     if (id != null) service.close(id);
     if (server != null) server.stop(0);
+    if (fixtureWorkers != null) fixtureWorkers.shutdownNow();
     System.clearProperty(ChromeBrowser.KEY_PROFILE_DIR);
     ChromeBrowser.resetForTests();
     if (testProfileDir != null) {
@@ -276,9 +293,7 @@ public class BrowserResponseIntegrationTest {
    * <p><b>为什么必须等</b>：页面里的 {@code await fetch(...)} 只保证「浏览器收到了响应」，
    * 而 {@code page.onResponse} 是**异步投递**到 Java 的 —— {@code get_requests} 读的是 {@code onRequest}
    * 写下的记录（先到），{@code get_response_body} 读的是 {@code onResponse} 写下的记录（后到）。
-   * 两者之间本来就有时间差，所以「fetch 一返回就去读响应体」是一个**竞态**：
-   * 实测同一次全量 {@code mvn test} 里它会偶发地报
-   * {@code get_response_body 没有匹配的响应: /query(只保留最近 100 个响应)}，而单独跑这个类必过。
+   * 通过 Playwright 的等待 API 继续驱动事件泵;若仍缺事件,明确失败并列出记录。
    *
    * <p>判据用 {@code respondedAt}：{@code onResponse} 到齐后它才会有值。
    */
@@ -299,23 +314,25 @@ public class BrowserResponseIntegrationTest {
       }
       page().waitForTimeout(50);
     }
-    return requests;
+    long pending = requests.stream().filter(entry -> ((Kv) entry).get("respondedAt") == null).count();
+    throw new AssertionError("等响应超时: " + requests.size() + " 条 /query 中 " + pending
+        + " 条未收到响应(至少需要 2 条): " + requests);
   }
 
   @Test public void repeatedUrlResponsesAreCorrelatedAndTruncationIsExplicit() {
-    // 走防抖助手:测试里的裸 Playwright 调用也要躲开「事件泵伪故障」(否则表现成随机挂)
-    TestFlakeGuard.retry("navigate+fetch", () -> {
-      page().navigate(base);
-      page().evaluate("async () => {for(const month of ['2026-07','2026-08'])"
-          + "await fetch('/query',{method:'POST',body:JSON.stringify({month})}).then(r=>r.text());}");
-    });
+    int before = ((List<?>) data(service.getRequests(id, "/query")).get("requests")).size();
+    page().navigate(base);
+    page().evaluate("async () => {for(const month of ['2026-07','2026-08'])"
+        + "await fetch('/query',{method:'POST',body:JSON.stringify({month})}).then(r=>r.text());}");
     // 等响应事件投递到 Java 侧再读（见 awaitQueryResponses 的说明）
     List<?> requests = awaitQueryResponses();
+    assertEquals("每次网络请求只能产生一条记录", before + 2, requests.size());
     Kv first = (Kv) requests.get(requests.size() - 2);
     Kv second = (Kv) requests.get(requests.size() - 1);
     assertNotEquals(first.get("requestId"), second.get("requestId"));
     Kv response = data(service.getResponseBody(id, "/query", null, 1000, first.getStr("requestId")));
     assertEquals(first.get("requestId"), response.get("requestId"));
+    assertEquals(false, response.get("correlationMissed"));
     assertTrue(response.getStr("body").contains("2026-07"));
     assertEquals(first.get("postData"), ((Kv) response.get("request")).get("postData"));
     assertEquals(false, response.get("truncated"));
@@ -326,5 +343,47 @@ public class BrowserResponseIntegrationTest {
     assertEquals(second.get("requestId"), lookback.get("requestId"));
     assertEquals(true, lookback.get("fromLookBack"));
     assertTrue(lookback.containsKey("respondedAt"));
+  }
+
+  @Test public void concurrentSameUrlResponsesKeepTheirIdsBodiesAndCallbackThread() {
+    page().navigate(base);
+    Thread caller = Thread.currentThread();
+    List<Thread> callbacks = new java.util.concurrent.CopyOnWriteArrayList<>();
+    java.util.function.Consumer<com.microsoft.playwright.Response> listener = response -> {
+      if (response.url().contains("/parallel")) callbacks.add(Thread.currentThread());
+    };
+    page().onResponse(listener);
+    try {
+      page().evaluate("async () => await Promise.all(Array.from({length:12},(_,i)=>"
+          + "fetch('/parallel',{method:'POST',body:String(i)}).then(r=>r.text())))");
+      page().waitForCondition(() -> service.getInstance(id).recentResponses.stream()
+          .filter(r -> r.response.url().contains("/parallel") && r.bodyCaptured).count() == 12,
+          new Page.WaitForConditionOptions().setTimeout(5_000));
+      List<?> requests = (List<?>) data(service.getRequests(id, "/parallel")).get("requests");
+      assertEquals(12, requests.size());
+      java.util.Set<String> ids = new java.util.HashSet<>();
+      for (Object item : requests) {
+        Kv request = (Kv) item;
+        assertTrue(ids.add(request.getStr("requestId")));
+        assertEquals(200, request.getInt("status").intValue());
+        assertNotNull(request.get("respondedAt"));
+        Kv response = data(service.getResponseBody(id, "/parallel", null, 100, request.getStr("requestId")));
+        assertEquals(request.getStr("requestId"), response.getStr("requestId"));
+        assertEquals(request.getStr("postData"), response.getStr("body"));
+        assertEquals(false, response.get("correlationMissed"));
+        assertEquals(true, response.get("bodyFromCache"));
+      }
+      assertEquals(12, callbacks.size());
+      for (Thread callback : callbacks) assertSame(caller, callback);
+      assertTrue(service.getInstance(id).requestIndex.isEmpty());
+      assertEquals(0, service.getInstance(id).inflight.get());
+      page().navigate("about:blank");
+      Kv first = (Kv) requests.get(0);
+      Kv cached = data(service.getResponseBody(id, "/parallel", null, 100, first.getStr("requestId")));
+      assertEquals(first.getStr("postData"), cached.getStr("body"));
+      assertEquals(true, cached.get("bodyFromCache"));
+    } finally {
+      page().offResponse(listener);
+    }
   }
 }
