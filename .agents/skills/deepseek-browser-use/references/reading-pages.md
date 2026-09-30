@@ -202,10 +202,71 @@ current tab is: 1
 ```
 
 - 不传 `selector` 时转整个 `<body>`；**只要某一张表就传选择器**，能省掉整页噪声（尤其政府/后台页面，导航与页脚很长）。
-- `data.length` 是转换后的全长，超过上限（默认 20000 字符，可用 `maxChars` 改）时截断并把 `data.truncated` 置为 true。
+- `data.length` 是转换后的全长，超过上限（默认值由 `browser.extract.maxChars` 决定，与 `extract_structured_data` 同源）时截断并把 `data.truncated` 置为 true。
 - `data.source` 说明这次转的是什么（`body` 或你给的选择器），`data.url` / `data.title` 是当前页面 —— 一次调用就能把「哪一页的什么内容」拼进上下文。
 - 选择器落在跨域 iframe 里时传 `frame`（与 `get_element_count` 同一套取值，见上面「跨域 iframe」）。
-- 表格是**图片**（扫描件、`<img>` 截图）时这条路读不到东西：那是像素不是 DOM，用 `get_element_screenshot` + `ocr_image`。
+- **命中多个时用 `nth` 指定第几个（0 基）**：`{"selector": "table", "nth": 1}`。不传就取第一个；越界会报出总数。
+- 表格是**图片**（扫描件、`<img>` 截图）时这条路读不到东西：那是像素不是 DOM，见下面「图就是数据」。
+
+### 先用 `list_tables` 找表，别猜选择器
+
+一个选择器命中多张表是常态（页面上既有元数据表、又有正文表），靠猜 class 会浪费好几轮。`list_tables` 一次给出全部表格的各行各列与**现成的选择器**：
+
+```json
+{ "id": 1001, "method": "list_tables", "params": {} }
+```
+
+```json
+{ "data": { "count": 2, "tables": [
+  { "index": 0, "selector": "table >> nth=0", "rows": 3, "cols": 4, "className": "govDetailTable",
+    "preview": "索引号： … 成文日期： 2026-03-26 …", "imageCount": 0 },
+  { "index": 1, "selector": "table >> nth=1", "rows": 22, "cols": 10, "textLength": 1180,
+    "preview": "农用地转用方案 计量单位： 公顷、万元 …", "imageCount": 0 } ] } }
+```
+
+把 `selector` **原样**填进 `extract_markdown` 即可。`imageCount > 0` 值得看一眼：表格内容是图片时 `extract_markdown` 转出来是空的。
+
+## 图就是数据：`download_image` + `ocr_image`
+
+「非必要不读图」这条铁律有个**明确的反面**：**当页面上的内容本身就是一张图时，读图不是浪费，是唯一路径。** 政府公告的附件、票据、明细表、批复扫描件都属于这一类 —— 它们在 DOM 里只是 `<img>`，`innerText`、`extract_structured_data`、`find_text` **一个字都读不到**，换多少选择器都没用。
+
+**怎么知道碰上了这种情况**：看 `get_browser_state` 回执里的 `mediaCount` / `mediaHint` —— 非空就说明这一页有 ≥120×120 且面积 ≥4 万像素的图，提示里也写明了下一步怎么做。
+
+三步走：
+
+```json
+{ "id": 1001, "method": "download_image", "params": { "selector": ".conTxt img" } }
+```
+
+返回 `data.path`（服务端绝对路径）、`data.url`（可直接 GET，能贴给人看）、`data.size`、`data.sha256`、`data.contentType`、`data.srcUrl`、`data.via`。**拿的是原始文件，不是屏幕截图** —— 扫描件截屏再 OCR 会明显掉字。
+
+```json
+{ "id": 1001, "method": "ocr_image", "params": { "path": "<上一步的 data.path>" } }
+```
+
+- `data.engine` 说明这次是谁读的：`windows` = 系统 OCR（擅长验证码这类短文本）；`command` = 配置指定的**外部文档 OCR 命令**（整页扫描件、表格截图该走这条，见 `commands.md` 的「OCR 后端」）。
+- 读出来的表格通常是 HTML 或 Markdown 文本，直接解析即可；**但结果可能很长**，只要其中几行就用 `find_text`。
+- 取不到图会说清原因：先走浏览器上下文（带 cookie），失败退回页面内 `fetch`，两条都不行才失败。防盗链站点上可以退回 `get_element_screenshot` 截图再 OCR。
+
+## 只想找一行：`find_text`
+
+读页面最贵的做法是「整页拉回上下文，自己找」。`data.text` 与 `extract_structured_data` 动辄几万字符，而你要的往往只是**其中一行**（某个文号在不在、某个乡镇有哪几行）。
+
+```json
+{ "id": 1001, "method": "find_text", "params": { "text": "955号", "contextChars": 60 } }
+```
+
+```json
+{ "data": { "matchCount": 1, "returned": 1, "matches": [
+  { "index": 31, "line": 2, "match": "955号", "before": "第二行：批准文号 自然资函〔2022〕",
+    "after": "第三行：未利用地" } ], "source": "body", "textLength": 92 } }
+```
+
+- `regex: true` 时 `text` 按正则解释，可以一次找几个词（`955号|1月26日`）。**正则写错会当场失败**，不会悄悄退化成字面量搜索。
+- 不重叠匹配（`aaa` 里找 `aa` 只算 1 次），空匹配模式也不会打转。
+- 取文本的规则与 `extract_structured_data` 一致，所以**图里的字它同样找不到** —— 那种情况先 `download_image`。
+- `selector` 可以只在一块区域里找；跨域 iframe 传 `frame`。
+
 
 其它要点：
 

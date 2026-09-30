@@ -478,6 +478,10 @@ public class BrowserBlindnessUpgradeTest {
         PlaywrightService.sameLocation("https://a.com/b", "https://a.com/c"));
     assertFalse("不同主机不算到达",
         PlaywrightService.sameLocation("https://a.com/b", "https://b.com/b"));
+    assertTrue("http 被站点跳成 https 算到达(国内政府站几乎都是这么跳的)",
+        PlaywrightService.sameLocation("http://www.minquan.gov.cn/", "https://www.minquan.gov.cn/"));
+    assertFalse("协议不算差别,但主机与路径仍然要一致",
+        PlaywrightService.sameLocation("http://a.com/b", "https://a.com/c"));
     assertFalse("拿不到当前地址时不算到达(null 安全)",
         PlaywrightService.sameLocation("https://a.com/b", null));
   }

@@ -74,7 +74,7 @@ public class ActionService {
   public static final Set<String> SPURIOUS_RETRY_SAFE = Set.of(
       // 只读:页面状态
       "get_browser_state", "get_page_snapshot", "diff_dom_text", "get_interactive_map", "get_form_state",
-      "list_frames", "extract_structured_data", "extract_markdown",
+      "list_frames", "extract_structured_data", "extract_markdown", "find_text", "list_tables",
       // 只读:页签与地址
       "get_tabs", "get_url", "get_title",
       // 只读:元素
@@ -239,11 +239,61 @@ public class ActionService {
   /**
    * 执行一条命令
    *
+   * <p>
+   * 这里是**所有**命令的唯一出口,所以失败回执的公共装饰(补上"现在页面在哪")也收在这里:
+   * 各类失败分支有七八处,逐个去加只会漏;包一层就没有漏网的。
+   *
+   * <p>
+   * 注意 {@code download_image} **不在** {@link #SPURIOUS_RETRY_SAFE} 里:它算落盘,但每次落的是
+   * **新编号的文件**(不是覆盖同一个),自动重发会留下重复文件 —— 与"覆盖式落盘"那几条的判据不同。
+   *
    * @param id     任务 ID,start 时可以为空
    * @param method 命令名,见 {@link CommandTable}
    * @param params 命令参数,可以为空
    */
   public RespBodyVo execute(Long id, String method, JSONObject params) {
+    RespBodyVo result = run(id, method, params);
+    if (result != null && !result.isOk()) {
+      attachPageContext(result, id);
+    }
+    return result;
+  }
+
+  /**
+   * 失败回执里补上「现在页面在哪」
+   *
+   * <p>
+   * 只补**没有的**字段:命令自己已经写了 {@code url} 的(例如 {@code get_url}、导航类)不覆盖。
+   * 读不到就静默跳过 —— 这只是附加信息,不该让一条失败回执变成异常。
+   */
+  private void attachPageContext(RespBodyVo result, Long id) {
+    if (id == null) {
+      return;
+    }
+    Kv context;
+    try {
+      context = svc.pageContext(id);
+    } catch (RuntimeException e) {
+      return;
+    }
+    if (context == null || context.isEmpty()) {
+      return;
+    }
+    Object data = result.getData();
+    Kv merged = data instanceof Kv ? (Kv) data : new Kv();
+    if (!(data instanceof Kv) && data != null) {
+      merged.set("result", data);
+    }
+    for (Object key : context.keySet()) {
+      String name = String.valueOf(key);
+      if (!merged.containsKey(name)) {
+        merged.set(name, context.get(name));
+      }
+    }
+    result.setData(merged);
+  }
+
+  private RespBodyVo run(Long id, String method, JSONObject params) {
     if (method == null || method.isBlank()) {
       return RespBodyVo.fail("缺少参数 method");
     }

@@ -33,7 +33,10 @@ import nexus.io.ai.browser.dom.service.HtmlMarkdown;
 import nexus.io.ai.browser.handler.CommandTraceLog;
 import nexus.io.ai.browser.upload.UploadStore;
 import nexus.io.ai.browser.util.ListenerProbe;
+import nexus.io.ai.browser.util.OcrEngine;
+import nexus.io.ai.browser.util.TextSearch;
 import nexus.io.ai.browser.util.WindowsOcr;
+import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
@@ -1162,6 +1165,16 @@ public class PlaywrightService {
         .set("redact", CommandTraceLog.redactEnabled()));
     data.set("upload", Kv.by("dir", UploadStore.dir().toString()).set("enabled", UploadStore.enabled())
         .set("maxBytes", UploadStore.maxBytes()));
+    // 读取与识图:这两处最容易"配了没生效" —— 一个是默认上限,一个是 OCR 走哪条路,
+    // 所以直接把**生效值**报出来(而不是只报配置项的名字)
+    data.set("extract", Kv.by("maxChars", defaultExtractMaxChars()).set("key", MAX_CHARS_KEY)
+        .set("note", "extract_structured_data 与 extract_markdown 的默认上限;单次调用可用 maxChars 覆盖"));
+    data.set("ocr", Kv.by("engine", OcrEngine.engineId()).set("describe", OcrEngine.describe())
+        .set("command", OcrEngine.commandTemplate()).set("timeoutMs", OcrEngine.timeoutMs())
+        .set("windowsAvailable", WindowsOcr.available())
+        .set("note", "ocr_image 走哪条路。engine=windows 用系统 OCR(短文本/验证码);"
+            + "engine=command 时由 " + OcrEngine.KEY_COMMAND + " 指定的外部文档 OCR 工具读数 —— "
+            + "整页扫描件、票据、表格截图这类「图就是数据」的场景用后者"));
     data.set("tasks", INSTANCES.size());
     data.set("commands", CommandTableNamesHolder.names());
     data.set("java", System.getProperty("java.version"));
@@ -2094,6 +2107,13 @@ public class PlaywrightService {
       }
     }
 
+    // 页面上的大图:公告、票据、表格经常整块就是一张图,innerText 里一个字都读不到。主动提示一句,
+    // 免得调用方反复换选择器去找一个"根本不在 DOM 文字里"的内容(实测政府公告的关键数据就是这样藏的)。
+    Kv media = mediaHint(inst.page);
+    if (media != null) {
+      kv.set(media);
+    }
+
     // 索引清单:text 是给人读的树,index 才是按索引命令要用的东西,直接内联免得再跑一趟。
     // 这一步同时也是「索引还指不指得到当初那个元素」的校验依据,所以**不管调用方要不要内联清单都要跑** ——
     // 否则 includeElements:false 就等于跳过了校验,索引再也没人检查。
@@ -2151,6 +2171,55 @@ public class PlaywrightService {
       }
     }
     return RespBodyVo.ok(kv);
+  }
+
+  /**
+   * 页面上有没有"大图"
+   *
+   * <p>
+   * 判据是**渲染面积**而不是原始尺寸:{@code 宽 ≥ 120 且 高 ≥ 120 且面积 ≥ 4 万像素}。
+   * 阈值这样定是因为两边都会踩:
+   * <ul>
+   * <li>只看"两边都 ≥ 200"会漏掉**宽而扁**的内容图 —— 实测一份表格截图是 240×180,真内容却被判成图标;</li>
+   * <li>只看面积会捞进 1200×90 的装饰横幅 —— 高度那一档把它挡掉。</li>
+   * </ul>
+   * 没有大图时返回 {@code null}(回执里干脆不出现这个字段,免得每条回执都多一段噪声)。
+   *
+   * <p>
+   * 这条提示的价值在**换方向**:调用方发现 {@code innerText} 里没有要找的数字时,第一反应是换选择器、
+   * 换 frame、重取快照 —— 而真相常常是"那些字根本不在 DOM 里,它们是一张图的像素"。实测一份政府公告的
+   * 建设用地明细表就是如此:整页文字里找不到一个面积数字,数字全在附件图里。
+   */
+  private static Kv mediaHint(Page page) {
+    try {
+      Object raw = page.evaluate("() => {"
+          + " const imgs = Array.from(document.querySelectorAll('img'));"
+          + " const big = imgs.filter(im => { const w = im.naturalWidth || 0, h = im.naturalHeight || 0;"
+          + "   return w >= 120 && h >= 120 && w * h >= 40000; });"
+          + " return { total: imgs.length, big: big.length,"
+          + "   samples: big.slice(0, 3).map(im => ({ src: (im.currentSrc || im.src || '').slice(0, 160),"
+          + "     w: im.naturalWidth || 0, h: im.naturalHeight || 0 })) }; }");
+      if (!(raw instanceof java.util.Map)) {
+        return null;
+      }
+      java.util.Map<?, ?> map = (java.util.Map<?, ?>) raw;
+      int big = map.get("big") instanceof Number ? ((Number) map.get("big")).intValue() : 0;
+      if (big <= 0) {
+        return null;
+      }
+      Kv kv = Kv.by("mediaCount", map.get("big")).set("imageCount", map.get("total"))
+          .set("mediaHint", "这一页有 " + big + " 张大图（宽高都不小于 120、面积不小于 4 万像素）。公告扫描件、票据、"
+              + "表格截图这类内容**不在 DOM 文字里**，innerText/extract_structured_data 读不到 —— 用 download_image "
+              + "取原始文件，再交给 ocr_image 识别；只要看这一块长什么样就用 get_element_screenshot");
+      if (map.get("samples") instanceof List && !((List<?>) map.get("samples")).isEmpty()) {
+        kv.set("mediaSamples", map.get("samples"));
+      }
+      return kv;
+    } catch (RuntimeException e) {
+      // 提示性字段,读不到就算了:绝不能因为它把一次成功的快照变成失败
+      log.debug("统计页面大图失败:{}", briefMessage(e.getMessage()));
+      return null;
+    }
   }
 
   /** 某类变更计数在这一次读取期间的增量(两个时间点都没读到就按 0) */
@@ -3243,21 +3312,42 @@ public class PlaywrightService {
      */
     final boolean allHidden;
 
+    /**
+     * 这次用的是调用方**显式指定的序号**({@code nth})
+     *
+     * <p>
+     * 与"服务端自己挑的"要分开说:调用方写了 {@code nth} 就是"我就要第 N 个",此时**不做可见性挑选**
+     * (挑了就不是他要的那个了),回执里也要写明这一点,免得他以为服务端又替他选了一个。
+     */
+    final boolean explicitNth;
+
     ActionTarget(Locator locator, int matched, int chosenIndex, int scanned, boolean allHidden) {
+      this(locator, matched, chosenIndex, scanned, allHidden, false);
+    }
+
+    ActionTarget(Locator locator, int matched, int chosenIndex, int scanned, boolean allHidden,
+        boolean explicitNth) {
       this.locator = locator;
       this.matched = matched;
       this.chosenIndex = chosenIndex;
       this.scanned = scanned;
       this.allHidden = allHidden;
+      this.explicitNth = explicitNth;
     }
 
     /** 写进回执的选择器解析摘要;只有一个匹配且可见时只报数量 */
     Kv describe() {
       Kv kv = Kv.by("matched", matched);
+      if (explicitNth) {
+        kv.set("chosenIndex", chosenIndex).set("explicitNth", true).set("selectorNote",
+            "按调用方指定的 nth=" + chosenIndex + " 定位（该选择器共匹配 " + matched
+                + " 个元素）；显式指定时不做可见性挑选");
+        return kv;
+      }
       if (matched > 1) {
         kv.set("chosenIndex", chosenIndex).set("scanned", scanned).set("selectorNote",
             "选择器匹配到 " + matched + " 个元素,这次用的是第 " + chosenIndex
-                + " 个（优先中心点可接收事件的可见元素，否则取首个可见元素）;要精确指定就把选择器写得更具体");
+                + " 个（优先中心点可接收事件的可见元素，否则取首个可见元素）;要精确指定就传 nth,或把选择器写得更具体");
       }
       if (allHidden) {
         kv.set("visibleMatched", 0).set("hiddenMatchNote",
@@ -3301,11 +3391,34 @@ public class PlaywrightService {
    * @throws PlaywrightException 匹配 0 个({@link ActionError#ELEMENT_NOT_FOUND})
    */
   static ActionTarget resolveActionTarget(Frame root, String selector, String action) {
+    return resolveActionTarget(root, selector, action, null);
+  }
+
+  /**
+   * 同上,调用方可以传 {@code nth} **显式指定**要第几个匹配
+   *
+   * <p>
+   * <b>为什么需要它</b>:选择器命中多个是常态(列表里同款的按钮、页面上同名的输入框),而「取第一个
+   * 可见的」是服务端替调用方做的猜测。实测在政府网站的搜索分页上,{@code a[data-ui='...'][data-locationhref*='p=2']}
+   * 同时命中「页码 2」和「下一页」两个链接(它们的 href 一样),回执只说 {@code matched=2},调用方没法
+   * 指定"我就要页码那个",只能去猜服务端挑了哪个。
+   *
+   * <p>
+   * 传了 {@code nth} 就**不再做可见性挑选**(挑了就不是他要的那个),只校验序号在范围内,越界时报出总数。
+   */
+  static ActionTarget resolveActionTarget(Frame root, String selector, String action, Integer nth) {
     int matched = root.locator(selector).count();
     if (matched == 0) {
       throw new PlaywrightException(ActionError.ELEMENT_NOT_FOUND + " " + action + " 的选择器 " + selector
           + " 在页面里匹配到 0 个元素:这不是超时也不是被遮挡 —— "
           + "先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系(input 未必在它所属的面板元素里面)");
+    }
+    if (nth != null) {
+      if (nth < 0 || nth >= matched) {
+        throw new PlaywrightException(ActionError.ELEMENT_NOT_FOUND + " " + action + " 的 nth 越界：" + nth
+            + "，该选择器共匹配 " + matched + " 个元素（nth 从 0 开始，用 get_element_count 或 list_tables 看清单）");
+      }
+      return new ActionTarget(root.locator(selector).nth(nth), matched, nth, matched, false, true);
     }
     int scanned = Math.min(matched, VISIBLE_SCAN_LIMIT);
     int chosen = -1;
@@ -4281,6 +4394,13 @@ public class PlaywrightService {
    *
    * <p>规则:去掉末尾斜杠后完全相同算到达;否则再去掉 {@code ?query} 与 {@code #fragment} 后比较。
    * 站点自动追加会话参数(实测 B 站会补 {@code ?vd_source=…})不该被当成「没跳过去」。
+   *
+   * <p><b>协议(http/https)不算差别</b>。这一条是实测踩出来的:国内政府网站几乎都是 **http 自动跳
+   * https**,而调用方照着文档写的是 {@code http://…}。此时地址栏已经是目标站点,只是协议被站点自己换掉了,
+   * 若把协议算进差异,「伪故障 + 其实已经到达」这条兜底就永远不生效 —— 实测 {@code go_to_url} 连试 3 次
+   * 都报伪故障失败,而 {@code get_url} 读到的正是 {@code https://www.minquan.gov.cn/},调用方只能自己
+   * 再查一次地址栏才知道真相。协议对「到达没到达」没有意义(能被换掉说明服务端在管这件事),
+   * 主机与路径才是。
    */
   static boolean sameLocation(String want, String have) {
     if (want == null || have == null) {
@@ -4293,7 +4413,18 @@ public class PlaywrightService {
     }
     String bareA = stripQuery(a);
     String bareB = stripQuery(b);
-    return !bareA.isEmpty() && bareA.equals(bareB);
+    if (!bareA.isEmpty() && bareA.equals(bareB)) {
+      return true;
+    }
+    String hostA = stripScheme(bareA);
+    String hostB = stripScheme(bareB);
+    return !hostA.isEmpty() && hostA.equals(hostB);
+  }
+
+  /** 去掉协议前缀(http:// 、https:// 、file:// 等),只留「主机 + 路径」 */
+  private static String stripScheme(String value) {
+    int scheme = value.indexOf("://");
+    return scheme < 0 ? value : value.substring(scheme + 3);
   }
 
   private static String stripQuery(String value) {
@@ -4951,21 +5082,43 @@ public class PlaywrightService {
    * 提取页面可见文本,extractLinks 为 true 时同时返回页面链接
    *
    * <p>
-   * 文本取 document.body.innerText,最多 20000 字符。读取前会临时隐藏 get_browser_state 画的
-   * 高亮层,避免高亮序号混进正文。
+   * 文本取 document.body.innerText,读取前会临时隐藏 get_browser_state 画的高亮层,避免高亮序号混进正文。
+   *
+   * <p>
+   * 上限默认 20000 字符(见 {@link #defaultExtractMaxChars()},可用 {@code browser.extract.maxChars} 改),
+   * 并**如实回报有没有被截断** —— 以前只在 JS 里悄悄 {@code slice} 一刀,回执里既没有全长也没有
+   * {@code truncated},调用方只能靠"看着像到头了"判断,于是把半篇文章当成全文交给模型。
    */
   public RespBodyVo extractStructuredData(Long browserId, String query, boolean extractLinks) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
     }
+    int limit = defaultExtractMaxChars();
     try {
-      Object text = inst.page
-          .evaluate("() => {" + " const c = document.getElementById('playwright-highlight-container');"
-              + " const prev = c ? c.style.display : null;" + " if (c) c.style.display = 'none';"
-              + " const t = document.body ? document.body.innerText.slice(0, 20000) : '';"
-              + " if (c) c.style.display = prev || '';" + " return t; }");
-      Kv kv = Kv.by("query", query).set("text", text);
+      Object out = inst.page.evaluate("() => {"
+          + " const c = document.getElementById('playwright-highlight-container');"
+          + " const prev = c ? c.style.display : null;" + " if (c) c.style.display = 'none';"
+          + " const raw = document.body ? document.body.innerText : '';"
+          + " const t = raw.slice(0, " + limit + ");"
+          + " if (c) c.style.display = prev || '';" + " return {text: t, total: raw.length}; }");
+      String text = null;
+      int total = 0;
+      if (out instanceof java.util.Map) {
+        java.util.Map<?, ?> map = (java.util.Map<?, ?>) out;
+        text = map.get("text") == null ? "" : String.valueOf(map.get("text"));
+        Object rawTotal = map.get("total");
+        total = rawTotal instanceof Number ? ((Number) rawTotal).intValue() : text.length();
+      } else {
+        text = out == null ? "" : String.valueOf(out);
+        total = text.length();
+      }
+      Kv kv = Kv.by("query", query).set("text", text).set("length", total)
+          .set("truncated", total > limit).set("limit", limit);
+      if (total > limit) {
+        kv.set("truncatedHint", "正文共 " + total + " 字符,这里只回了前 " + limit
+            + " 字符。要用全文请调大 " + MAX_CHARS_KEY + ",或改用 find_text 只取关心的片段");
+      }
       if (extractLinks) {
         kv.set("links", linksIn(inst.page.mainFrame()));
       }
@@ -4975,8 +5128,34 @@ public class PlaywrightService {
     }
   }
 
-  /** {@code extract_markdown} 默认的返回上限(字符),与 {@code extract_structured_data} 的正文上限一致 */
-  private static final int DEFAULT_MARKDOWN_MAX_CHARS = 20000;
+  /** 正文 / Markdown 提取的默认字符上限的配置键 */
+  public static final String MAX_CHARS_KEY = "browser.extract.maxChars";
+
+  /** 兜底上限:配置没给或给得不合法时用它(与历史行为一致) */
+  private static final int FALLBACK_EXTRACT_MAX_CHARS = 20000;
+
+  /**
+   * 正文 / Markdown 提取的默认上限
+   *
+   * <p>
+   * 抽成配置是因为 20000 这个数对**两种极端**都不合适:公告类页面整页动辄三四万字符(默认值一到就截断,
+   * 实测为了拿全一张表反而要多取一次),而只想要一小段时又太大。{@code extract_structured_data} 与
+   * {@code extract_markdown} 共用这一个键,免得两条命令各有一套默认值。
+   */
+  static int defaultExtractMaxChars() {
+    String configured = ChromeBrowser.config(MAX_CHARS_KEY);
+    if (configured != null) {
+      try {
+        int parsed = Integer.parseInt(configured.trim());
+        if (parsed > 0) {
+          return parsed;
+        }
+      } catch (NumberFormatException ignored) {
+        // 配错了就退回默认值:这里不该因为一个配置项把命令打死
+      }
+    }
+    return FALLBACK_EXTRACT_MAX_CHARS;
+  }
 
   /**
    * 把页面(或页面上的某个元素)转成 Markdown
@@ -4990,23 +5169,25 @@ public class PlaywrightService {
    *
    * <p>
    * {@code selector} 为空时转整个 {@code <body>}(整页列表/公告正文的常见用法);给了选择器就只转命中的
-   * **第一个**元素 —— 「只要那张表」时用它,能省掉整页噪声。选择器在跨域 iframe 里时传 {@code frame}
-   * (索引、序号或 URL/name 子串,与 {@code get_element_count} 同一套约定)。
+   * **第一个**元素 —— 「只要那张表」时用它,能省掉整页噪声。一个选择器命中多个而你要的是后面那个,传
+   * {@code nth}(0 基);先调 {@code list_tables} 拿到现成的选择器与序号更省事。
+   * 选择器在跨域 iframe 里时传 {@code frame}(索引、序号或 URL/name 子串,与 {@code get_element_count} 同一套约定)。
    *
    * <p>
    * 返回 {@code markdown} 与它的 {@code length};超过上限时截断并把 {@code truncated} 置为 true
-   * (默认 20000 字符,可用 {@code maxChars} 覆盖)。{@code source} 说明这次转的是什么
+   * (默认值与 {@code extract_structured_data} 同源,见 {@code browser.extract.maxChars},可用
+   * {@code maxChars} 按次覆盖)。{@code source} 说明这次转的是什么
    * ({@code body} 或你给的选择器),{@code url} / {@code title} 是当前页面的地址与标题 ——
    * 一次调用就能把「哪一页的什么内容」拼进上下文,不用再单独调 {@code get_url} / {@code get_title}。
    * {@code includeLinks} 为 true 时另附页面链接清单(与 {@code extract_structured_data} 同格式)。
    */
   public RespBodyVo extractMarkdown(Long browserId, String selector, String frame, boolean includeLinks,
-      Integer maxChars) {
+      Integer maxChars, Integer nth) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
     }
-    int limit = maxChars == null || maxChars <= 0 ? DEFAULT_MARKDOWN_MAX_CHARS : maxChars;
+    int limit = maxChars == null || maxChars <= 0 ? defaultExtractMaxChars() : maxChars;
     try {
       Frame target = frameOf(inst, frame);
       String html;
@@ -5016,13 +5197,10 @@ public class PlaywrightService {
         html = body == null ? "" : String.valueOf(body);
         source = "body";
       } else {
-        Locator locator = target.locator(selector);
-        if (locator.count() == 0) {
-          return RespBodyVo.fail("extract_markdown 失败：选择器没有匹配到元素: " + selector);
-        }
-        Object outer = locator.first().evaluate("el => el.outerHTML");
+        Locator locator = pickNth(target, selector, nth, "extract_markdown");
+        Object outer = locator.evaluate("el => el.outerHTML");
         html = outer == null ? "" : String.valueOf(outer);
-        source = selector;
+        source = nth == null ? selector : selector + " >> nth=" + nth;
       }
 
       String markdown = HtmlMarkdown.toMarkdown(html);
@@ -5036,17 +5214,322 @@ public class PlaywrightService {
       }
       return RespBodyVo.ok(kv);
     } catch (IllegalArgumentException e) {
-      // frame 序号越界 / 匹配不到 frame:原因在消息里,原样带出
+      // frame 序号越界 / 匹配不到 frame / nth 越界:原因在消息里,原样带出
       return RespBodyVo.fail("extract_markdown 失败：" + e.getMessage());
     } catch (PlaywrightException e) {
       return RespBodyVo.fail("extract_markdown 失败：" + briefMessage(e.getMessage()));
     }
   }
 
+  public RespBodyVo extractMarkdown(Long browserId, String selector, String frame, boolean includeLinks,
+      Integer maxChars) {
+    return extractMarkdown(browserId, selector, frame, includeLinks, maxChars, null);
+  }
+
+  /**
+   * 按选择器取元素,{@code nth} 为 null 时取第一个
+   *
+   * <p>
+   * <b>为什么要显式支持 nth</b>:一个选择器命中多个是常态(页面上同名的表格、同款的按钮),而
+   * 「取第一个」并不总是调用方要的那个。以前只能在"把选择器写得更具体"和"改用索引"之间绕,而
+   * 索引要先生成快照 —— 为了点第 2 个分页按钮取一次快照实在不值。命中 0 个与 nth 越界都给出
+   * 明确原因(而不是等到可操作性超时)。
+   */
+  static Locator pickNth(Frame root, String selector, Integer nth, String action) {
+    Locator all = root.locator(selector);
+    int matched = all.count();
+    if (matched == 0) {
+      throw new IllegalArgumentException(action + " 的选择器 " + selector + " 在页面里匹配到 0 个元素:"
+          + "这不是超时也不是被遮挡 —— 先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系");
+    }
+    if (nth == null) {
+      return all.first();
+    }
+    if (nth < 0 || nth >= matched) {
+      throw new IllegalArgumentException("nth 越界：" + nth + "，该选择器共匹配 " + matched
+          + " 个元素（nth 从 0 开始）；要精确定位请先用 list_tables 或 get_element_count 看清单");
+    }
+    return all.nth(nth);
+  }
+
   /** 页面链接清单:文本截到 80 字符,`href` 用解析后的绝对地址 */
   private static Object linksIn(Frame frame) {
     return frame.evaluate("() => Array.from(document.querySelectorAll('a[href]'))"
         + ".map(a => ({text: (a.innerText || '').trim().slice(0, 80), href: a.href}))");
+  }
+
+  /** 单张图片的落盘上限:比上传上限更紧一些,页面上的图不该拖垮磁盘 */
+  private static final long MAX_IMAGE_BYTES = 64L * 1024 * 1024;
+
+  /**
+   * 把页面上的图片**原始文件**取下来存到服务端
+   *
+   * <p>
+   * <b>为什么截图不够用</b>:{@code get_element_screenshot} 截的是"这个元素在屏幕上长什么样",而很多
+   * 场景要的是**原始文件本身** —— 政府公告里的「建设用地明细表」、票据、图章,原件是 1500px 的扫描图,
+   * 截成屏幕尺寸再 OCR 会明显掉字;而 {@code ocr_image} 要的正是"服务端上的一个文件"。
+   * 以前只能跳出工具、用 shell 去下载(还要自己补 Referer/UA),这条命令把这个缺口补上。
+   *
+   * <p>
+   * 取值顺序:<b>先让浏览器自己带 cookie 去取</b>({@code page.context().request()},同源与需要登录的
+   * 图都能拿到),失败再退回**页面内 fetch + base64**(对付只让页面自己取、或带防盗链的站点)。
+   * 两条路都失败才如实报错,并把失败原因写进 {@code data.note},不让调用方去猜"为什么图是空的"。
+   *
+   * <p>
+   * 落盘位置是 {@code data/<id>/}(与截图同一处),所以回执里的 {@code url} 可以直接 GET、贴给人看;
+   * {@code path} 可以直接喂给 {@code ocr_image -p path=…}。文件名可传 {@code filename} 指定(会被清洗),
+   * 不传就自动编号。
+   */
+  public RespBodyVo downloadImage(Long browserId, Integer index, String selector, String frame, String filename) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return notFound(browserId);
+    }
+    try {
+      Frame target = frameOf(inst, frame);
+      Locator locator;
+      if (index != null) {
+        locator = locatorOf(inst, index);
+        if (locator == null) {
+          return RespBodyVo.fail("download_image 索引越界: " + index + indexHint(inst));
+        }
+      } else if (selector != null && !selector.trim().isEmpty()) {
+        locator = pickNth(target, selector, null, "download_image");
+      } else {
+        return RespBodyVo.fail("download_image 需要 index 或 selector 之一");
+      }
+
+      String src = stringOf(locator.evaluate("el => el.currentSrc || el.src || ''"));
+      if (src == null || src.isEmpty()) {
+        return RespBodyVo.fail("download_image 失败：这个元素不是图片（没有 src/currentSrc）");
+      }
+      String alt = stringOf(locator.getAttribute("alt"));
+
+      byte[] bytes = null;
+      String contentType = null;
+      String via = null;
+      String apiNote = null;
+      try {
+        APIResponse response = inst.page.context().request().get(src);
+        if (response.ok()) {
+          bytes = response.body();
+          contentType = response.headers().get("content-type");
+          via = "browser-context";
+        } else {
+          apiNote = "带 cookie 直接取返回 HTTP " + response.status();
+        }
+      } catch (RuntimeException e) {
+        apiNote = "带 cookie 直接取失败:" + briefMessage(e.getMessage());
+      }
+      if (bytes == null || bytes.length == 0) {
+        // 退回页面内 fetch:跨域图片若站点没放行 CORS 也会失败,那时 apiNote 就是结论
+        Object fetched = target.evaluate("async (url) => {"
+            + " try { const r = await fetch(url, {credentials: 'include'});"
+            + " if (!r.ok) return {error: 'fetch 返回 HTTP ' + r.status};"
+            + " const buf = await r.arrayBuffer(); const u = new Uint8Array(buf); let s = '';"
+            + " const CH = 0x8000;"
+            + " for (let i = 0; i < u.length; i += CH) { s += String.fromCharCode.apply(null, u.subarray(i, i + CH)); }"
+            + " return {b64: btoa(s), type: r.headers.get('content-type') || ''}; }"
+            + " catch (e) { return {error: String(e && e.message || e)}; } }", src);
+        if (fetched instanceof java.util.Map) {
+          java.util.Map<?, ?> map = (java.util.Map<?, ?>) fetched;
+          Object b64 = map.get("b64");
+          if (b64 != null) {
+            bytes = Base64.getDecoder().decode(String.valueOf(b64));
+            contentType = stringOf(map.get("type"));
+            via = "in-page-fetch";
+          } else {
+            String reason = stringOf(map.get("error"));
+            return RespBodyVo.fail("download_image 失败：取不到这张图（" + (apiNote == null ? "" : apiNote + "；")
+                + "页面内 fetch：" + reason + "）。防盗链或跨域限制时,可以改用 get_element_screenshot 截图后再 ocr_image");
+          }
+        }
+      }
+      if (bytes == null || bytes.length == 0) {
+        return RespBodyVo.fail("download_image 失败：取到的内容是空的（" + apiNote + "）");
+      }
+      if (bytes.length > MAX_IMAGE_BYTES) {
+        return RespBodyVo.fail("download_image 失败：图片 " + bytes.length + " 字节，超过上限 " + MAX_IMAGE_BYTES + " 字节");
+      }
+
+      // dataDir() 给的是相对启动目录的 data/<id>:这里要写文件、还要做前缀校验,
+      // 先统一成绝对路径 —— 拿相对路径去和一个绝对前缀比 startsWith,永远为假(实测踩过)
+      Path dir = dataDir(inst.id).toAbsolutePath().normalize();
+      Files.createDirectories(dir);
+      String name = UploadStore.sanitize(filename);
+      if (name == null) {
+        name = "img-" + inst.shotSeq.incrementAndGet() + imageExtension(contentType, src);
+      }
+      Path file = dir.resolve(name).normalize();
+      if (!file.startsWith(dir)) {
+        return RespBodyVo.fail("download_image 失败：文件名非法：" + filename);
+      }
+      Files.write(file, bytes);
+
+      Kv kv = Kv.by("filename", file.getFileName().toString()).set("path", file.toString())
+          .set("size", bytes.length).set("sha256", UploadStore.sha256(bytes)).set("contentType", contentType)
+          .set("srcUrl", src).set("via", via)
+          .set("hint", "path 可直接交给 ocr_image（-p path=…）识别；url 可直接 GET、贴给人看");
+      if (alt != null && !alt.isEmpty()) {
+        kv.set("alt", alt);
+      }
+      Object natural = locator.evaluate("el => ({w: el.naturalWidth || 0, h: el.naturalHeight || 0})");
+      if (natural instanceof java.util.Map) {
+        java.util.Map<?, ?> map = (java.util.Map<?, ?>) natural;
+        kv.set("naturalWidth", map.get("w")).set("naturalHeight", map.get("h"));
+      }
+      String url = shotUrl(inst, file.toString());
+      if (url != null) {
+        kv.set("url", url);
+      }
+      return RespBodyVo.ok(kv);
+    } catch (IllegalArgumentException e) {
+      return RespBodyVo.fail("download_image 失败：" + e.getMessage());
+    } catch (PlaywrightException e) {
+      return RespBodyVo.fail("download_image 失败：" + briefMessage(e.getMessage()));
+    } catch (IOException e) {
+      return RespBodyVo.fail("download_image 失败：写文件出错：" + e.getMessage());
+    }
+  }
+
+  /** 按 content-type 猜扩展名,猜不出就从 URL 路径取,再不行给 .bin */
+  private static String imageExtension(String contentType, String src) {
+    String fromType = UploadStore.extensionForContentType(contentType);
+    if (fromType != null && !fromType.isEmpty()) {
+      return fromType;
+    }
+    String path = src == null ? "" : src;
+    int query = path.indexOf('?');
+    if (query >= 0) {
+      path = path.substring(0, query);
+    }
+    int slash = path.lastIndexOf('/');
+    int dot = path.lastIndexOf('.');
+    if (dot > slash && dot < path.length() - 1 && path.length() - dot <= 6) {
+      return path.substring(dot).toLowerCase(java.util.Locale.ROOT);
+    }
+    return ".bin";
+  }
+
+  /**
+   * 在页面文本里找东西,回命中位置与前后文
+   *
+   * <p>
+   * <b>为什么要有它</b>:调用方想知道的常常只是整页里的**一行**(某个文号在不在、某个乡镇有哪几行),
+   * 而把整页文本拉回上下文既慢又贵。这条命令把"找"留在服务端:给一个词或一条正则,拿回每处命中
+   * 的前后 {@code contextChars} 个字符、所在行号与命中总数。
+   *
+   * <p>
+   * 取文本的规则与 {@code extract_structured_data} 一致({@code innerText},读前隐藏高亮层),
+   * 所以**图里的字它同样找不到** —— 那种情况先用 {@code download_image} + {@code ocr_image}。
+   * {@code selector} 非空时只在该元素内找;跨域 iframe 要传 {@code frame}。
+   */
+  public RespBodyVo findText(Long browserId, String needle, Boolean regex, Integer contextChars,
+      Integer maxMatches, String selector, String frame) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return notFound(browserId);
+    }
+    try {
+      Frame target = frameOf(inst, frame);
+      String source;
+      String text;
+      if (selector == null || selector.trim().isEmpty()) {
+        text = stringOf(target.evaluate("() => {"
+            + " const c = document.getElementById('playwright-highlight-container');"
+            + " const prev = c ? c.style.display : null; if (c) c.style.display = 'none';"
+            + " const v = document.body ? document.body.innerText : '';"
+            + " if (c) c.style.display = prev || ''; return v; }"));
+        source = "body";
+      } else {
+        Locator locator = pickNth(target, selector, null, "find_text");
+        text = stringOf(locator.evaluate("el => {"
+            + " const c = el.ownerDocument.getElementById('playwright-highlight-container');"
+            + " const prev = c ? c.style.display : null; if (c) c.style.display = 'none';"
+            + " const v = el.innerText || '';"
+            + " if (c) c.style.display = prev || ''; return v; }"));
+        source = selector;
+      }
+      Kv result = TextSearch.find(text, needle, Boolean.TRUE.equals(regex),
+          contextChars == null ? 0 : contextChars, maxMatches == null ? 0 : maxMatches);
+      result.set("source", source).set("textLength", text == null ? 0 : text.length());
+      return RespBodyVo.ok(result);
+    } catch (IllegalArgumentException e) {
+      return RespBodyVo.fail("find_text 失败：" + e.getMessage());
+    } catch (PlaywrightException e) {
+      return RespBodyVo.fail("find_text 失败：" + briefMessage(e.getMessage()));
+    }
+  }
+
+  /**
+   * 列出页面上的表格,并给出可直接用的选择器
+   *
+   * <p>
+   * 以前找一张表要走三步:{@code get_element_count -p selector=table} 看有几张 → 写一段 JS 把每张表的
+   * class 与行数打出来 → 才敢用 {@code extract_markdown} 传选择器。这一步把它并成一条命令:每张表给出
+   * 序号、行列数、class、前 120 字预览、是否含图片,以及**现成的 {@code selector}({@code table >> nth=N})**
+   * —— 直接把它填进 {@code extract_markdown} 的 {@code selector} 即可,不必再猜 CSS 怎么写。
+   *
+   * <p>
+   * {@code hasImages} 值得看一眼:表格内容如果是图片(扫描件、截图),{@code extract_markdown} 转出来是空的,
+   * 该走 {@code download_image} + {@code ocr_image}。
+   */
+  public RespBodyVo listTables(Long browserId, String frame) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return notFound(browserId);
+    }
+    try {
+      Frame target = frameOf(inst, frame);
+      Object raw = target.evaluate("() => Array.from(document.querySelectorAll('table')).map((t, i) => ({"
+          + " index: i, className: String(t.className || ''), id: t.id || '',"
+          + " rows: t.rows ? t.rows.length : 0,"
+          + " cols: (t.rows && t.rows.length) ? t.rows[0].cells.length : 0,"
+          + " textLength: (t.innerText || '').length,"
+          + " images: t.querySelectorAll('img').length,"
+          + " preview: (t.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 120) }))");
+      List<Kv> tables = new ArrayList<>();
+      if (raw instanceof List) {
+        for (Object item : (List<?>) raw) {
+          if (!(item instanceof java.util.Map)) {
+            continue;
+          }
+          java.util.Map<?, ?> map = (java.util.Map<?, ?>) item;
+          int index = map.get("index") instanceof Number ? ((Number) map.get("index")).intValue() : tables.size();
+          Kv kv = Kv.by("index", index).set("selector", "table >> nth=" + index)
+              .set("rows", map.get("rows")).set("cols", map.get("cols"))
+              .set("textLength", map.get("textLength")).set("imageCount", map.get("images"))
+              .set("preview", map.get("preview"));
+          String className = stringOf(map.get("className"));
+          if (className != null && !className.isEmpty()) {
+            kv.set("className", className);
+          }
+          String id = stringOf(map.get("id"));
+          if (id != null && !id.isEmpty()) {
+            kv.set("id", id);
+          }
+          tables.add(kv);
+        }
+      }
+      Kv data = Kv.by("count", tables.size()).set("tables", tables).set("url", inst.page.url())
+          .set("title", inst.page.title());
+      if (tables.isEmpty()) {
+        data.set("hint", "页面上没有 <table>。内容可能是 div 布局、或者是图片/PDF —— 前者用 extract_markdown 直接转整页,"
+            + "后者用 download_image + ocr_image");
+      } else {
+        data.set("hint", "要转某张表,把它的 selector 原样填进 extract_markdown 的 selector");
+      }
+      return RespBodyVo.ok(data);
+    } catch (IllegalArgumentException e) {
+      return RespBodyVo.fail("list_tables 失败：" + e.getMessage());
+    } catch (PlaywrightException e) {
+      return RespBodyVo.fail("list_tables 失败：" + briefMessage(e.getMessage()));
+    }
+  }
+
+  /** evaluate 回来的值统一成字符串(null → 空串) */
+  private static String stringOf(Object value) {
+    return value == null ? "" : String.valueOf(value);
   }
 
   public RespBodyVo scroll(Long browserId, boolean down, int numPages, Integer index) {
@@ -5537,6 +6020,36 @@ public class PlaywrightService {
     return RespBodyVo.ok(Kv.by("title", safeTitle(inst.page)));
   }
 
+  /**
+   * 当前页面在哪 —— 只给**失败回执**用
+   *
+   * <p>
+   * 失败回执里没有地址,调用方就没法判断"这条命令到底动没动页面"。实测最典型的一次:
+   * {@code go_to_url} 连试 3 次都报 Playwright 事件分发的伪故障,而地址栏其实早就到了目标
+   * ({@code http} 被站点跳成了 {@code https}) —— 回执里只有一句"失败",只能再补一次 {@code get_url}
+   * 才知道真相。地址与标题本来就唾手可得,没有理由不带上。
+   *
+   * <p>
+   * 读不到时返回空 Kv(页面正在导航、任务已关闭都可能读不到):它只是附加信息,绝不能因为读它
+   * 把一条失败回执变成异常。
+   */
+  public Kv pageContext(Long browserId) {
+    Kv kv = new Kv();
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null || inst.page == null) {
+      return kv;
+    }
+    String url = safeUrl(inst);
+    if (url != null && !url.isEmpty()) {
+      kv.set("urlAfter", url);
+    }
+    String title = safeTitle(inst.page);
+    if (title != null && !title.isEmpty()) {
+      kv.set("titleAfter", title);
+    }
+    return kv;
+  }
+
   // ==================== 按索引操作元素 ====================
 
   public RespBodyVo doubleClickElementByIndex(Long browserId, int index) {
@@ -5920,6 +6433,20 @@ public class PlaywrightService {
    */
   public RespBodyVo clickElementBySelector(Long browserId, String selector, String mode, Integer timeoutMs,
       String frame) {
+    return clickElementBySelector(browserId, selector, mode, timeoutMs, frame, null);
+  }
+
+  /**
+   * 按选择器点击
+   *
+   * @param mode      {@code auto}(默认:原生失败自动降级为 JS 派发)/{@code native}/{@code js}
+   * @param timeoutMs 按次覆盖超时(毫秒)
+   * @param frame     frame 序号(见 {@code list_frames},0 是主 frame)或 URL/name 子串;不传就是主 frame。
+   *                  目标在跨域 iframe 里时必传 —— {@code page.locator} 够不着 iframe 内部
+   * @param nth       选择器命中多个时,显式指定要第几个(0 基);不传则按「优先可接收事件的可见元素」挑
+   */
+  public RespBodyVo clickElementBySelector(Long browserId, String selector, String mode, Integer timeoutMs,
+      String frame, Integer nth) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
@@ -5929,7 +6456,7 @@ public class PlaywrightService {
     Frame probeFrame;
     try {
       probeFrame = frame == null || frame.isBlank() ? null : frameOf(inst, frame);
-      resolved = resolveActionTarget(frameOf(inst, frame), selector, "click_element_by_selector");
+      resolved = resolveActionTarget(frameOf(inst, frame), selector, "click_element_by_selector", nth);
     } catch (IllegalArgumentException e) {
       return RespBodyVo.fail("click_element_by_selector 失败：" + e.getMessage());
     } catch (PlaywrightException e) {
@@ -5963,6 +6490,12 @@ public class PlaywrightService {
 
   /** 同上,{@code frame} 非空时把选择器限定在指定 frame 里(见 {@code click_element_by_selector} 的说明) */
   public RespBodyVo inputTextBySelector(Long browserId, String selector, String value, String mode, String frame) {
+    return inputTextBySelector(browserId, selector, value, mode, frame, null);
+  }
+
+  /** 同上,{@code nth} 用于「选择器命中多个、我就要第 N 个」(0 基) */
+  public RespBodyVo inputTextBySelector(Long browserId, String selector, String value, String mode, String frame,
+      Integer nth) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
@@ -5970,7 +6503,7 @@ public class PlaywrightService {
     ActionOutcome outcome = new ActionOutcome();
     ActionTarget resolved;
     try {
-      resolved = resolveActionTarget(frameOf(inst, frame), selector, "input_text_by_selector");
+      resolved = resolveActionTarget(frameOf(inst, frame), selector, "input_text_by_selector", nth);
     } catch (IllegalArgumentException e) {
       return RespBodyVo.fail("input_text_by_selector 失败：" + e.getMessage());
     } catch (PlaywrightException e) {
@@ -8698,7 +9231,7 @@ public class PlaywrightService {
     if (image == null || !Files.isRegularFile(image)) {
       return RespBodyVo.fail("ocr_image 找不到图片：" + image);
     }
-    Kv read = WindowsOcr.read(image, language);
+    Kv read = OcrEngine.read(image, language);
     Kv data = new Kv();
     data.putAll(read);
     data.set("target", target).set("imagePath", image.toAbsolutePath().toString());
@@ -8706,7 +9239,16 @@ public class PlaywrightService {
       data.set("imageUrl", imageUrl);
     }
     if (!Boolean.TRUE.equals(read.get("ok"))) {
-      data.set("ocrSupported", WindowsOcr.available());
+      // 只有走系统 OCR 时才谈"这台机器有没有 OCR 能力";外部命令失败要说的是命令本身
+      if (OcrEngine.ENGINE_WINDOWS.equals(read.getStr("engine"))) {
+        data.set("ocrSupported", WindowsOcr.available());
+      }
+      data.set("engineHint", OcrEngine.ENGINE_WINDOWS.equals(read.getStr("engine"))
+          ? "这次用的是系统 OCR（Windows.Media.Ocr），它擅长短文本、不擅长整页扫描件；"
+              + "公告/票据/表格截图这类整页文档建议把 " + OcrEngine.KEY_ENGINE + " 配成 command，"
+              + "用 " + OcrEngine.KEY_COMMAND + " 指定一个文档级 OCR 工具"
+          : "这次用的是外部命令 OCR（" + OcrEngine.describe() + "）；"
+              + "命令没跑通时可先手工执行一次同一条命令,确认工具本身可用");
     }
     return RespBodyVo.ok(data);
   }

@@ -125,8 +125,10 @@ public final class WindowsOcr {
         result.set("ok", false).set("error", "OCR 超时(" + TIMEOUT_SECONDS + " 秒)");
         return result;
       }
+      // 脚本写结果文件时带 UTF-8 BOM,而 trim() 吃不掉 U+FEFF:不清掉的话识别结果会变成 "\ufeff1234",
+      // 肉眼一样、拿去比对或填表单必然失败(验证码就是这么被坑的)。先去 BOM 再 trim,顺序反过来会留下空格
       String text = Files.isRegularFile(outFile)
-          ? new String(Files.readAllBytes(outFile), StandardCharsets.UTF_8).trim() : "";
+          ? OcrEngine.stripBom(new String(Files.readAllBytes(outFile), StandardCharsets.UTF_8)).trim() : "";
       result.set("ms", System.currentTimeMillis() - startedAt);
       if (process.exitValue() == 2 || text.startsWith("NO_ENGINE")) {
         result.set("ok", false).set("engineMissing", true)

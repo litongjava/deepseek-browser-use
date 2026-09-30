@@ -379,7 +379,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 | `request_human_input` | `id`, `prompt`, `index`(可选), `selector`(可选), `frame`(可选), `timeoutSeconds`(可选), `steps`(可选), `expiresAt`(可选), `ocr`(可选), `ocrLanguage`(可选), `inline`(可选) | 发起一个人工介入请求。传 `index`/`selector` 时把该元素（通常是验证码 / 二维码）截下来，并**同时**回 `data.imageBase64`、`data.imagePath`（服务端本地路径）、`data.imageUrl`（可直接 GET 的地址，能贴给用户）、`data.imageTarget`（截图取自哪个 frame / 选择器）；还把当前页签带到最前。返回 `data.requestId`、`data.prompt`、`data.expiresAt`、`data.expiresInSeconds`、`data.url`。**目标在跨域 iframe 里时传 `frame`**（`steps[]` 里每项也可各带一个） |
 | `submit_human_input` | `id`, `requestId`, `answer`, `stepId`(可选), `answers`(可选) | 提交人工答复。单步请求直接给 `answer`；多步请求（`steps`）用 `stepId` 逐条回填，或 `answers: {"s1":"...","s2":"..."}` 一次回填多步 |
 | `get_human_input` | `id`, `requestId`, `timeoutSeconds`(可选) | 取人工答复，返回 `data.status`（`pending`/`partial`/`answered`/`expired`）、`data.answer`、`data.steps`、`data.prompt`。传 `timeoutSeconds` 时长轮询等待，到时间还没答复就返回当前状态（**不算失败**）。过期时另给 `data.expired:true` 与提示 |
-| `ocr_image` | `id`, `path`(可选), `index`/`selector`(可选), `frame`(可选), `language`(可选) | 用**本机 OCR**（Windows 自带 `Windows.Media.Ocr`）把图上的文字读出来：`data.ok`、`data.text`、`data.lineCount`、`data.imagePath`/`data.imageUrl`。给 `path` 读服务端已有的一张图；给 `index`/`selector` 则先截这个元素再读。默认语言 `zh-Hans-CN`。**模型读不了图时的兜底**，见 `human-in-loop.md` |
+| `ocr_image` | `id`, `path`(可选), `index`/`selector`(可选), `frame`(可选), `language`(可选) | 用**本机 OCR**把图上的文字读出来：`data.ok`、`data.text`、`data.lineCount`、`data.imagePath`/`data.imageUrl`。给 `path` 读服务端已有的一张图（例如 `download_image` 落下来的原件）；给 `index`/`selector` 则先截这个元素再读。`data.engine` 说明这次是谁读的：`windows` = 系统 OCR（Windows 自带 `Windows.Media.Ocr`，擅长验证码这类短文本）；`command` = 配置指定的**外部文档 OCR 命令**（整页扫描件、票据、表格截图这类整页文档该走这条，见下方「OCR 后端」）。**模型读不了图时的兜底**，见 `human-in-loop.md` |
 
 完整流程见 `human-in-loop.md`。
 
@@ -387,8 +387,11 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `extract_structured_data` | `id`, `query`, `extractLinks`(bool) | 返回 `data.text`（正文，最多 20000 字符，读取时会临时隐藏高亮层）与 `data.links` |
-| `extract_markdown` | `id`, `selector`(可选), `frame`(可选), `includeLinks`(bool，可选), `maxChars`(可选) | 把页面（或 `selector` 命中的**第一个**元素）转成 Markdown：`data.markdown`、`data.length`、`data.truncated`、`data.source`（`body` 或选择器）、`data.url`、`data.title`；`includeLinks` 时另给 `data.links`。**表格按 GFM 表格输出**（`| 表头 |` + `| --- |` + 数据行），而 `extract_structured_data` 的 `innerText` 会把单元格逐行摊平、列对不上。默认上限 20000 字符，`maxChars` 可覆盖。`selector` 在跨域 iframe 里时传 `frame`（与 `get_element_count` 同一套取值） |
+| `extract_structured_data` | `id`, `query`, `extractLinks`(bool) | 返回 `data.text`（正文，读取时会临时隐藏高亮层）与 `data.links`；另有 `data.length`（截断前全长）、`data.truncated`、`data.limit`。上限默认 20000，可用配置 `browser.extract.maxChars` 改（与 `extract_markdown` 同源）。**判断读全了没有要认 `truncated`，别看"像不像到头了"** |
+| `extract_markdown` | `id`, `selector`(可选), `frame`(可选), `nth`(可选), `includeLinks`(bool，可选), `maxChars`(可选) | 把页面（或 `selector` 命中的元素）转成 Markdown：`data.markdown`、`data.length`、`data.truncated`、`data.source`（`body` 或选择器，指定了 `nth` 时形如 `table >> nth=1`）、`data.url`、`data.title`；`includeLinks` 时另给 `data.links`。**表格按 GFM 表格输出**（`| 表头 |` + `| --- |` + 数据行），而 `extract_structured_data` 的 `innerText` 会把单元格逐行摊平、列对不上。**命中多个时用 `nth` 指定第几个（0 基）**，越界会报出总数；先 `list_tables` 拿现成选择器最省事。`selector` 在跨域 iframe 里时传 `frame`（与 `get_element_count` 同一套取值） |
+| `find_text` | `id`, `text`(必填), `regex`(bool，可选), `contextChars`(可选，默认 80), `maxMatches`(可选，默认 20), `selector`(可选), `frame`(可选) | 在页面文本里找词（或正则），只回**命中与前后文**：`data.matchCount`、`data.returned`、`data.truncated`、`data.matches[]`（每项 `index`/`line`/`match`/`before`/`after`）、`data.source`、`data.textLength`。**想找一行就用它**，别把整页拉进上下文。取文本的规则与 `extract_structured_data` 一致（`innerText`，读前隐藏高亮层），所以**图里的字它同样找不到**。正则非法会当场失败（不会悄悄退化成字面量搜索）；不重叠匹配 |
+| `list_tables` | `id`, `frame`(可选) | 列出页面上所有 `<table>`：`data.count`、`data.tables[]`（`index`、**`selector`**（形如 `table >> nth=1`，可直接填进 `extract_markdown`）、`rows`、`cols`、`className`、`id`、`textLength`、`imageCount`、`preview`）、`data.url`、`data.title`。`imageCount > 0` 值得看一眼：表格内容是图片时 `extract_markdown` 转出来是空的，该走 `download_image` + `ocr_image` |
+| `download_image` | `id`, `index` 或 `selector`(二选一), `frame`(可选), `filename`(可选) | 把页面上的图片**原始文件**存到服务端 `data/<id>/`：`data.path`、`data.url`（可直接 GET）、`data.filename`、`data.size`、`data.sha256`、`data.contentType`、`data.srcUrl`、`data.via`、`data.naturalWidth`/`Height`。**要的是原件，不是屏幕截图**（扫描件截屏再 OCR 会明显掉字）。取值先走浏览器上下文（带 cookie），失败退回页面内 `fetch`；两条都不行才失败并说明原因。`data.path` 可直接交给 `ocr_image` |
 | `execute_js` | `id`, `body` 或 `bodyFile`, `vars`(可选), `frame`(可选), `retryOnSpurious`(可选) | 返回 `data.result`，见 `batch-and-js.md`。**会 await Promise**；在跨域 iframe 里执行要传 `frame`；脚本**重发无害**（读页面这类）时传 `retryOnSpurious: true`，服务端会替它吃掉「事件泵伪故障」 |
 | `commands` | `id`, `params.stopOnError`, `params.commands`, `params.async`(可选) | 批量指令，是 `method` 的一个取值，见 `batch-and-js.md` |
 
@@ -446,4 +449,31 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 | `query-and-read-table` | 点「查询」→ 等表格内容稳定 → 读表格。搜索结果是异步刷新的，点完立刻读会读到上一次的结果 |
 | `cnipa-list-drafts` | 中国商标网：「我的账户 → 申请管理 → 未提交」并把日期筛选切到「近三个月」再读列表 |
 | `open-console-from-iframe` | **主站把第三方控制台套在跨域 iframe 里**时的通用套路（反查 iframe.src → 找主站发 token 的接口 → 同源 execute_js 现取 → 顶层打开） |
+| `gov-site-search` | **国产政府/事业单位站的站内全文检索**：进高级搜索 → 选「包含完整关键词」→ 填词 → 可选日期区间 → 每页 50 → 点搜索。这类站的检索参数全在 JS 状态里，**直接拼 URL 会静默返回 0 条**，必须走表单 |
+
+## OCR 后端（`ocr_image` 走哪条路）
+
+`ocr_image` 默认用系统 OCR（`Windows.Media.Ocr`），够用在验证码、二维码、维护提示图这类**短文本**上：零配置、零依赖。但遇到**整页扫描件、票据、带合并单元格的表格截图**就不行了 —— 它给出的是错乱片段，而这类场景恰恰是「图就是数据」。
+
+这时把它换成外部文档 OCR 工具（本机往往已经有了一个现成的命令行工具）：
+
+```properties
+browser.ocr.engine=command
+browser.ocr.command=java -jar D:/tools/ocr-cli.jar -i "{input}" -o "{output}"
+browser.ocr.timeoutMs=120000
+```
+
+- `{input}` = 图片路径，`{output}` = 结果文本路径，`{language}` = 语言（默认 `zh-Hans-CN`）。**带空格或中文的路径一定要加双引号**。
+- 回执里的 `data.engine` 会写明这次是谁读的；`get_config` 的 `ocr` 段给出**生效值**（含 `describe`，配了 `engine=command` 却没给命令时会如实说明退回了系统 OCR）。
+- 外部命令失败**不会静默退回系统 OCR**：调用方明确要的是文档级识别，悄悄换个差一截的后端只会让人以为"这张图读不出来"。
+
+完整链路（典型用法）：
+
+```text
+list_tables / get_browser_state 的 mediaHint 发现有图
+  → download_image（取原始文件，拿到服务端 path）
+  → ocr_image -p path=…（读文字：表格通常是 HTML 或 Markdown 形式）
+  → 结果超过上限时用 find_text 只取关心的行
+```
+
 | `wework-qykit-open-console` | 企业微信后台的「邮件 / 微盘 / 文档 / 会议」：现取一个未被消费的 token，把 `exmail.qq.com` 控制台当顶层页面打开 |

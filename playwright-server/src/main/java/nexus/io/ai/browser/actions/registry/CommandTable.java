@@ -151,9 +151,11 @@ public class CommandTable {
     // 按索引的命令不需要它 —— 索引里已经带了 frame 信息,服务端自动路由
     put("click_element_by_selector",
         (svc, id, a) -> svc.clickElementBySelector(id, reqStr(a, "selector"), optStr(a, "mode"),
-            a.getInteger("timeoutMs"), optStr(a, "frame")));
+            a.getInteger("timeoutMs"), optStr(a, "frame"), a.getInteger("nth")));
+    // nth:选择器命中多个时显式指定第几个(0 基)。不加它就只能靠服务端替我们挑,而实测分页上
+    // 「页码 2」与「下一页」的 href 完全一样,回执只说 matched=2,调用方没法指定要哪个
     put("input_text_by_selector", (svc, id, a) -> svc.inputTextBySelector(id, reqStr(a, "selector"),
-        reqStr(a, "text"), optStr(a, "mode"), optStr(a, "frame")));
+        reqStr(a, "text"), optStr(a, "mode"), optStr(a, "frame"), a.getInteger("nth")));
     put("click_element_by_text", (svc, id, a) -> svc.clickElementByText(id, reqStr(a, "text"), optStr(a, "mode")));
     put("click_element_by_role",
         (svc, id, a) -> svc.clickElementByRole(id, reqStr(a, "role"), optStr(a, "name"), optStr(a, "mode")));
@@ -273,9 +275,19 @@ public class CommandTable {
     // ---------- 其它 ----------
     put("extract_structured_data",
         (svc, id, a) -> svc.extractStructuredData(id, optStr(a, "query"), optBool(a, "extractLinks")));
-    // 页面 -> Markdown(表格按 GFM 表格输出,不摊平)。selector 为空转整个 body;给了就只转第一个命中元素
+    // 页面 -> Markdown(表格按 GFM 表格输出,不摊平)。selector 为空转整个 body;给了就转命中的元素,
+    // 命中多个时用 nth 指定第几个(0 基;先 list_tables 拿现成的 selector 与序号更省事)
     put("extract_markdown", (svc, id, a) -> svc.extractMarkdown(id, optStr(a, "selector"), optStr(a, "frame"),
-        optBool(a, "includeLinks"), a.getInteger("maxChars")));
+        optBool(a, "includeLinks"), a.getInteger("maxChars"), a.getInteger("nth")));
+    // 在页面文本里找东西,只把命中与前后文带回来 —— 免得为了找一行而把整页(实测三万字符)拉进上下文
+    put("find_text", (svc, id, a) -> svc.findText(id, reqStr(a, "text"), optBool(a, "regex"),
+        a.getInteger("contextChars"), a.getInteger("maxMatches"), optStr(a, "selector"), optStr(a, "frame")));
+    // 列出页面上所有表格,并给出可直接填进 extract_markdown 的 selector("table >> nth=N")
+    put("list_tables", (svc, id, a) -> svc.listTables(id, optStr(a, "frame")));
+    // 把页面上的图片**原始文件**取到服务端(data/<id>/):path 直接喂 ocr_image,url 直接贴给人看。
+    // 公告扫描件、票据、表格截图这类"图就是数据"的场景,截图与 innerText 都不够用
+    put("download_image", (svc, id, a) -> svc.downloadImage(id, a.getInteger("index"), optStr(a, "selector"),
+        optStr(a, "frame"), optStr(a, "filename")));
     // body 直接写脚本;或用 bodyFile 从服务端脚本目录读(见 get_config 的 jsDir),
     // 再用 vars 注入 {{变量}} —— 中文/引号/换行都不用在客户端拼字符串
     put("execute_js", (svc, id, a) -> {

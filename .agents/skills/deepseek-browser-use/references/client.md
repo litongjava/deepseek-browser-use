@@ -16,6 +16,25 @@
 `--text-only` 是纯文本便利选项，与 `--json`/`--select` 同用时后两者优先。
 快照不可靠或动作结果未知时，筛选模式仍在 stderr 提示，不能靠选出的一个字段判断业务完成。
 
+### 回执太大：`--out` 落盘、`--grep` 只看命中行
+
+`run` 与 `js` 上有两个输出开关（只影响**怎么打印**，不改变发出去的请求，也不会多一次往返）：
+
+```bash
+# 完整 JSON 写进文件，stdout 只留一行「已写入 …（N 字符，M 行）」
+dsb --id 1001 run get_browser_state --out state.json
+
+# 只打匹配该正则的行，末尾附一行「共 N 行，命中 M 行」
+dsb --id 1001 run get_browser_state --grep mediaCount
+```
+
+- 读页面时最常用：一条回执动辄几万字符，而你只想确认某一行的存在。**服务端侧的等价能力是 `find_text`**
+  （它连文本都不用传回来），这里两个开关是给"回执已经拿到、只想看其中几行"准备的。
+- 两者可以同时用：先落盘，再从同一份文本里打命中行。
+- `--grep` 的正则**带 `|`（或其它 shell 元字符）时，走 `dsb.cmd` 会被 Windows 的批处理引号处理打断**
+  （报成 `'xxx' is not recognized as an internal or external command`）。这时直接调 `python client/dsb.py …`
+  绕开 `.cmd` 包装，或者把模式写简单一点（例如先 `--grep mediaCount`）。
+
 复杂请求继续使用 `--params @文件.json` / `batch 文件.json`，不为过滤输出改用裸 HTTP 请求，
 否则会丢失客户端脱敏、统一退出码和调用留档。
 

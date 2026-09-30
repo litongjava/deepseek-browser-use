@@ -93,6 +93,8 @@ public class CommandTableTest {
     cases.put("submit_human_input", "requestId");
     cases.put("get_human_input", "requestId");
     cases.put("execute_js", "body");
+    // find_text 唯一必填的是要找的那个词;搜索范围、上下文长度、条数都有默认值
+    cases.put("find_text", "text");
     return cases;
   }
 
@@ -163,6 +165,8 @@ public class CommandTableTest {
         "clear_local_storage", "set_offline", "get_dialog", "clear_dialog", "set_dialog_behavior",
         "get_console_logs", "clear_console_logs", "unroute", "get_requests", "get_response_body",
         "get_page_snapshot", "diff_dom_text", "get_interactive_map", "extract_structured_data", "extract_markdown",
+        // list_tables 只需 id;download_image 是 index / selector 二选一,两个都没传时由服务层报错
+        "list_tables", "download_image",
         // 这两个的参数全是可选的(超时/安静时长/作用范围都有默认值)
         "wait_for_idle", "get_form_state",
         // 新增的自省/弹窗/任务类命令:参数全可选,或压根不需要参数

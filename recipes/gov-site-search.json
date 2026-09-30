@@ -1,0 +1,47 @@
+{
+  "name": "gov-site-search",
+  "description": "国产政府/事业单位站的站内全文检索：走「高级搜索」表单（精确短语 + 日期区间 + 每页 50）再读结果。这类站的检索参数全在页面 JS 的状态里，直接拼 URL 会被静默重置成 0 条结果——必须走表单。",
+  "params": {
+    "keyword": "要检索的关键词（必填）",
+    "way": "queryand=包含全部关键词（默认）/ queryall=包含完整关键词（不按空格拆分，最接近「精确短语」）/ queryor=包含任意一个",
+    "begin": "起始日期，形如 2022-01-01（可选，与 end 一起给才生效）",
+    "end": "结束日期，形如 2022-12-31（可选）",
+    "pageSize": "每页条数，默认 50（一般可选 10/20/30/50；给 50 通常一页就能看全）",
+    "submit": "搜索按钮的选择器，默认 #sunbtim",
+    "resultSelector": "结果条目的选择器，默认 .result-list li（换一套 CMS 时改这里）"
+  },
+  "defaults": {
+    "way": "queryand",
+    "begin": "",
+    "end": "",
+    "pageSize": "50",
+    "submit": "#sunbtim",
+    "resultSelector": ".result-list li"
+  },
+  "commands": [
+    {
+      "execute_js": {
+        "body": "() => { const way = {{way}}, keyword = {{keyword}}, begin = {{begin}}, end = {{end}}, size = {{pageSize}}; const set = (sel, fn) => { const el = document.querySelector(sel); if (!el) return false; fn(el); el.dispatchEvent(new Event('change', { bubbles: true })); return true; }; const okWay = set('#searchWay', el => { el.value = way; }); const okText = set('#searchWayText', el => { el.value = keyword; el.dispatchEvent(new Event('input', { bubbles: true })); }); const okSize = set('#pagesize', el => { el.value = String(size); }); let okDate = false; if (begin || end) { set('#ultimetype', el => { for (const o of el.options) { if (o.textContent.indexOf('指定日期') >= 0) { el.value = o.value; break; } } }); set('#begintime', el => { el.value = begin; }); set('#endtime', el => { el.value = end; }); okDate = true; } return { searchWay: okWay, searchText: okText, pageSize: okSize, dateRange: okDate, keyword: keyword, way: way }; }",
+        "retryOnSpurious": true
+      }
+    },
+    {
+      "click_element_by_selector": {
+        "selector": "{{submit}}",
+        "mode": "mouse"
+      }
+    },
+    {
+      "wait_for_stable": {
+        "quietMs": 900,
+        "timeoutSeconds": 20
+      }
+    },
+    {
+      "execute_js": {
+        "body": "() => { const sel = {{resultSelector}}; const rows = Array.from(document.querySelectorAll(sel)); const items = rows.map(li => { const a = li.querySelector('h4 a, h3 a, a[href]'); if (!a) return null; const attr = li.querySelector('.attribution'); return { title: (a.innerText || '').trim().replace(/\\s+/g, ' '), url: a.href, attribution: attr ? (attr.innerText || '').trim().replace(/\\s+/g, ' ') : '' }; }).filter(Boolean); const text = document.body ? document.body.innerText : ''; const total = (text.match(/共\\s*(\\d+)\\s*条信息/) || [])[1] || null; return { total: total, count: items.length, items: items.slice(0, 50) }; }",
+        "retryOnSpurious": true
+      }
+    }
+  ]
+}

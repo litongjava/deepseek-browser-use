@@ -821,6 +821,51 @@ def cmd_shutdown(client: Client, args, out: Printer) -> int:
     return EXIT_OK if response.ok else EXIT_BUSINESS
 
 
+def add_output_switches(parser) -> None:
+    """给 run / js 挂上两个输出开关(--out 落盘、--grep 只看命中行)
+
+    为什么需要:读页面常常**只关心其中一行** —— 某个文号在不在、某张表里有没有那个数字。
+    而一条命令的完整回执动辄几万字符(实测一次整页文本 3.7 万),直接打出来又长又贵;
+    以前只能 `dsb … > 文件` 再用别的工具去切。这两个开关把最常用的两种切法收进客户端。
+    """
+    parser.add_argument("--out", metavar="FILE",
+                        help="把完整(脱敏后的)JSON 写进文件,标准输出只留一行提示")
+    parser.add_argument("--grep", metavar="REGEX",
+                        help="只打印 JSON 里匹配该正则的行,并附一行「共 N 行、命中 M 行」")
+
+
+def emit_side_output(printer: Printer, args, value) -> bool:
+    """处理 --out / --grep;返回 True 表示输出已由这里完成,调用方不必再打整封
+
+    两个开关都**不改变发出去的请求**,只是把返回的东西换个打法 —— 所以带上它们不会让一次
+    已经成功的调用变成失败,也不会多花一次往返。
+    """
+    out_path = getattr(args, "out", None)
+    pattern = getattr(args, "grep", None)
+    if not out_path and not pattern:
+        return False
+    body = redact_obj(value, printer.patterns) if printer.mask else value
+    text = json.dumps(body, ensure_ascii=False, indent=2)
+    if out_path:
+        target = Path(out_path)
+        if str(target.parent) not in ("", "."):
+            target.parent.mkdir(parents=True, exist_ok=True)
+        # 用 UTF-8 写、并且明确不带 BOM:回执里全是中文,Windows 上用默认编码写会直接抛异常
+        target.write_text(text, encoding="utf-8")
+        print(printer._clean(f"已写入 {target}（{len(text)} 字符，{len(text.splitlines())} 行）"), file=printer.out)
+    if pattern:
+        try:
+            rx = re.compile(pattern)
+        except re.error as error:
+            raise UsageError(f"--grep 的正则写法非法:{error}") from None
+        lines = text.splitlines()
+        hits = [line for line in lines if rx.search(line)]
+        for line in hits:
+            print(printer._clean(line), file=printer.out)
+        print(printer._clean(f"--grep {pattern!r}:共 {len(lines)} 行,命中 {len(hits)} 行"), file=printer.out)
+    return True
+
+
 def cmd_run(client: Client, args, out: Printer) -> int:
     params = load_payload(args.params, args.param)
     # 动作类命令服务端默认一次都不重发(可能已经生效),但伪故障里有很大一支是「命令还没发出去就撞上了
@@ -831,7 +876,9 @@ def cmd_run(client: Client, args, out: Printer) -> int:
         params["retryOnSpurious"] = True
     response = client.command(args.method, params)
     picked = pick_index(response.envelope, args.index) if args.index is not None else None
-    out.response(response, label=args.method, payload=picked)
+    value = picked if picked is not None else response.envelope
+    if not emit_side_output(out, args, value):
+        out.response(response, label=args.method, payload=picked)
     return EXIT_OK if response.ok else EXIT_BUSINESS
 
 
@@ -986,6 +1033,9 @@ def cmd_js(client: Client, args, out: Printer) -> int:
         params["retryOnSpurious"] = True
     response = client.command("execute_js", params, label="execute_js")
     # JS 的「值」才是重点:默认只打摘要 + 返回值,信封里的截图/序号是噪音
+    value = pick_index(response.envelope, args.index) if args.index is not None else response.envelope
+    if emit_side_output(out, args, value):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     if out.mode == "json" or out.select is not None:
         out.json(pick_index(response.envelope, args.index) if args.index is not None else response.envelope)
     else:
@@ -1257,6 +1307,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry-on-spurious", "--retry-spurious", dest="retry_on_spurious", action="store_true",
                    help="这次重发无害时打开:页面上报 Object doesn't exist 这类伪故障时由服务端自动重发"
                         "(动作类命令默认不重发,先用只读命令确认上次没生效再开这个开关)")
+    add_output_switches(p)
 
     p = subs.add_parser("batch", parents=[common], help="批量执行命令(数组 JSON,默认读标准输入)")
     p.add_argument("file", nargs="?", help="命令数组文件;省略或 - 表示读标准输入")
@@ -1293,6 +1344,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--var", action="append", help="注入 {{变量}},写成 k=v,可重复")
     p.add_argument("--retry-on-spurious", "--retry-spurious", dest="retry_on_spurious", action="store_true",
                    help="脚本只读、重发无害时打开:页面上报 Object doesn't exist 这类伪故障时由服务端自动重发")
+    add_output_switches(p)
 
     p = subs.add_parser("selftest", parents=[common], help="对当前服务跑一遍端到端自检")
     p.add_argument("--browser", help="自检时用哪个浏览器(默认服务配置)")
