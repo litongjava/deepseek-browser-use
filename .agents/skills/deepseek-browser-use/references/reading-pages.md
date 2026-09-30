@@ -181,6 +181,32 @@ current tab is: 1
 | 文本顺序 | DOM 顺序；`[21]<li >新/>` 里的 `新` 是角标文字，真正的链接文字在它内部的 `[22]` 里 |
 | 元素在快照里找不到 | **不可见的元素不进快照**。实测百度首页的真实搜索框是 `INPUT#kw name=wd`，但它 `offsetParent === null`（被新的 AI 输入框取代而隐藏），快照里就没有它，只剩 `[16]<button >百度一下/>`。这种元素用选择器类方法也会失败（隐藏元素不满足可操作性），只能用 `execute_js` 设值，见 `pitfalls.md` 第 16 条 |
 
+## 表格：`data.text` 里读不出来，要用 `extract_markdown`
+
+`data.text` 与 `extract_structured_data` 的正文都取自 `innerText`，而 `innerText` **按单元格把表格摊平**：表头格与数据格交替出现，列与列的对应关系只能靠位置猜，`colspan`/`rowspan` 更是直接丢失。这在「面积、金额、数量」这类数字上很危险 —— 读出来每个数字都在，配错列却看不出来。
+
+要对上列，用 `extract_markdown`，它把表格转成 GFM 表格（表头一行、分隔行、数据各一行）：
+
+```json
+{ "id": 1001, "method": "extract_markdown", "params": { "selector": "table.detail" } }
+```
+
+返回 `data.markdown` 形如：
+
+```markdown
+| 地类 | 面积(公顷) |
+|------|----------|
+| 农用地 | 187.9883 |
+| 建设用地 | 2.8867 |
+| 未利用地 | 0.3431 |
+```
+
+- 不传 `selector` 时转整个 `<body>`；**只要某一张表就传选择器**，能省掉整页噪声（尤其政府/后台页面，导航与页脚很长）。
+- `data.length` 是转换后的全长，超过上限（默认 20000 字符，可用 `maxChars` 改）时截断并把 `data.truncated` 置为 true。
+- `data.source` 说明这次转的是什么（`body` 或你给的选择器），`data.url` / `data.title` 是当前页面 —— 一次调用就能把「哪一页的什么内容」拼进上下文。
+- 选择器落在跨域 iframe 里时传 `frame`（与 `get_element_count` 同一套取值，见上面「跨域 iframe」）。
+- 表格是**图片**（扫描件、`<img>` 截图）时这条路读不到东西：那是像素不是 DOM，用 `get_element_screenshot` + `ocr_image`。
+
 其它要点：
 
 - 有索引的是 buildDomTree 判定为可交互的节点（含带 `onclick`、`cursor:pointer` 的 `div`/`span`）；普通纯文本容器的文字会直接出现在文本里，但没有索引。

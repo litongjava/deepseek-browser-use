@@ -20,7 +20,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 - **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物，实测有一版连 `list_methods` / `get_config` / `shutdown` 都不支持，拿它开工会在半路撞「不支持的方法」。**开工第一条命令永远是 `list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就用开发态起（Windows 用 `scripts/run/start-server.cmd`，macOS/Linux 用 `scripts/run/start-server.sh`；停止分别对应 `stop-server.cmd` / `stop-server.sh`）。
 - **只有一个业务端点**：`POST http://localhost:10049/playwright/command`
 - 另有 `GET /playwright/health`（健康检查）与 `GET /data/**`（读取截图与结构化文本）
-- 共 116 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测
+- 共 117 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测
 
 **本文只放「每次都要用的核心」；细节按需再读同目录分册（都在 `.agents/skills/deepseek-browser-use/references/`）：**
 
@@ -53,6 +53,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | --- | --- |
 | **快照里找不到明明在页面上的元素** | 先看 `data.pixels_above` / `data.pixels_below` —— 非 0 就说明元素在视口外、**没有索引**。三条解法按优先级：① `get_browser_state` 传 `viewportExpansion`（例如 `1500`）；② 改用 `click_element_by_selector` / `input_text_by_selector`（不依赖索引）；③ 滚动到目标位置后重取快照 |
 | **整页读完还是空的、元素像不存在**（主站把第三方控制台套在 iframe 里） | `list_frames` 看有哪些 frame；再 `get_browser_state` 传 `includeFrames: true`。见 `references/reading-pages.md`「跨域 iframe」 |
+| **页面上的表格读出来是一行行散文本，列对不上**（金额、面积、数量这类数字尤其危险） | 读表格**别**用 `data.text` 或 `extract_structured_data` —— 它们的正文都取自 `innerText`，会把单元格逐行摊平、表头与数据交替出现，`colspan`/`rowspan` 直接丢失。改用 `extract_markdown`（表格转 GFM 表格，行列关系显式）；只要某一张表就传 `selector`，省掉整页噪声 |
 | 点了没反应，但返回 `ok:true` | 看 `data.changed` / `data.effective`；看 `data.hit`（这次命中的元素）；改用 `click_element_by_text` 复核命中的是不是纯文本容器 |
 | 不确定页面到底动没动 | `diff_dom_text`（不落盘、比重读整页省） |
 | 表单填了但提交说为空 | 看 `data.mode` / `data.committed`；改用 `input_text_by_selector`（可见字段走真实输入，进框架模型） |
@@ -240,7 +241,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 
 其余要点：同一个 `id` 不能重复 `start`；每个任务有自己的一组页签（别的任务的页签看不见也点不到）；`close` 只关这个任务的页签，**最后一个任务关闭时**浏览器才退出；实例只在内存里，服务重启后 id 失效（登录态在 profile 里，仍在）；服务没有鉴权，默认只监听本机。各引擎的差异表、profile 目录按端口分开、强杀服务留下孤儿浏览器怎么处理，见 `references/browsers.md`。
 
-## 四、命令速查（全部 116 个方法）
+## 四、命令速查（全部 117 个方法）
 
 下面的名字就是 `method` 的取值，也是 `params` 里的参数名。**参数与返回字段的全量表**见 `references/commands.md`；下列各表里省略了每个方法都要带的 `id`（任务 ID）。
 
@@ -422,6 +423,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 | 方法 | 说明 |
 | --- | --- |
 | `extract_structured_data` | 取正文（最多 20000 字符，读取时会临时隐藏高亮层）与链接 |
+| `extract_markdown` | 把页面（或某个元素）转成 **Markdown**，表格按 GFM 表格输出 —— **页面上有表格时用这条**，别用上一条 |
 | `execute_js` | 执行任意 JavaScript，返回 `data.result`（见第六节）；在跨域 iframe 里执行要传 `frame` |
 | `list_methods` | 全部方法名（**拿不准先查，别靠猜**） |
 | `get_config` | 服务端**生效**配置：`engine`/`configuredType`、`profileDir`、`action`（超时与降级开关）、`jsDir`、`trace`、`upload`、`tasks`、`commands` |

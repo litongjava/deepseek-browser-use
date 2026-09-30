@@ -29,6 +29,7 @@ import nexus.io.ai.browser.dom.model.DOMElementNode;
 import nexus.io.ai.browser.dom.model.DOMState;
 import nexus.io.ai.browser.dom.model.FrameSnapshot;
 import nexus.io.ai.browser.dom.service.DomService;
+import nexus.io.ai.browser.dom.service.HtmlMarkdown;
 import nexus.io.ai.browser.handler.CommandTraceLog;
 import nexus.io.ai.browser.upload.UploadStore;
 import nexus.io.ai.browser.util.ListenerProbe;
@@ -4966,14 +4967,86 @@ public class PlaywrightService {
               + " if (c) c.style.display = prev || '';" + " return t; }");
       Kv kv = Kv.by("query", query).set("text", text);
       if (extractLinks) {
-        Object links = inst.page.evaluate("() => Array.from(document.querySelectorAll('a[href]'))"
-            + ".map(a => ({text: (a.innerText || '').trim().slice(0, 80), href: a.href}))");
-        kv.set("links", links);
+        kv.set("links", linksIn(inst.page.mainFrame()));
       }
       return RespBodyVo.ok(kv);
     } catch (PlaywrightException e) {
       return RespBodyVo.fail("extract_structured_data 失败：" + briefMessage(e.getMessage()));
     }
+  }
+
+  /** {@code extract_markdown} 默认的返回上限(字符),与 {@code extract_structured_data} 的正文上限一致 */
+  private static final int DEFAULT_MARKDOWN_MAX_CHARS = 20000;
+
+  /**
+   * 把页面(或页面上的某个元素)转成 Markdown
+   *
+   * <p>
+   * <b>它和 {@code extract_structured_data} 的分工</b>:那条返回 {@code innerText} 正文,表格会被
+   * **按单元格逐行摊平** —— 表头与数据格交替出现,列对应关系只能靠位置猜,合并单元格直接丢失。
+   * 这条返回真正的 Markdown,表格是 GFM 表格({@code | 表头 |} / {@code | --- |} / {@code | 数据 |}),
+   * 行列关系是显式的。**只要页面上有表格、或者结构本身携带信息,就该用这条**;只想要一段纯文本时
+   * {@code extract_structured_data} 更省。
+   *
+   * <p>
+   * {@code selector} 为空时转整个 {@code <body>}(整页列表/公告正文的常见用法);给了选择器就只转命中的
+   * **第一个**元素 —— 「只要那张表」时用它,能省掉整页噪声。选择器在跨域 iframe 里时传 {@code frame}
+   * (索引、序号或 URL/name 子串,与 {@code get_element_count} 同一套约定)。
+   *
+   * <p>
+   * 返回 {@code markdown} 与它的 {@code length};超过上限时截断并把 {@code truncated} 置为 true
+   * (默认 20000 字符,可用 {@code maxChars} 覆盖)。{@code source} 说明这次转的是什么
+   * ({@code body} 或你给的选择器),{@code url} / {@code title} 是当前页面的地址与标题 ——
+   * 一次调用就能把「哪一页的什么内容」拼进上下文,不用再单独调 {@code get_url} / {@code get_title}。
+   * {@code includeLinks} 为 true 时另附页面链接清单(与 {@code extract_structured_data} 同格式)。
+   */
+  public RespBodyVo extractMarkdown(Long browserId, String selector, String frame, boolean includeLinks,
+      Integer maxChars) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return notFound(browserId);
+    }
+    int limit = maxChars == null || maxChars <= 0 ? DEFAULT_MARKDOWN_MAX_CHARS : maxChars;
+    try {
+      Frame target = frameOf(inst, frame);
+      String html;
+      String source;
+      if (selector == null || selector.trim().isEmpty()) {
+        Object body = target.evaluate("() => document.body ? document.body.innerHTML : ''");
+        html = body == null ? "" : String.valueOf(body);
+        source = "body";
+      } else {
+        Locator locator = target.locator(selector);
+        if (locator.count() == 0) {
+          return RespBodyVo.fail("extract_markdown 失败：选择器没有匹配到元素: " + selector);
+        }
+        Object outer = locator.first().evaluate("el => el.outerHTML");
+        html = outer == null ? "" : String.valueOf(outer);
+        source = selector;
+      }
+
+      String markdown = HtmlMarkdown.toMarkdown(html);
+      int length = markdown.length();
+      boolean truncated = length > limit;
+      Kv kv = Kv.by("markdown", truncated ? markdown.substring(0, limit) : markdown).set("length", length)
+          .set("truncated", truncated).set("source", source).set("url", inst.page.url())
+          .set("title", inst.page.title());
+      if (includeLinks) {
+        kv.set("links", linksIn(target));
+      }
+      return RespBodyVo.ok(kv);
+    } catch (IllegalArgumentException e) {
+      // frame 序号越界 / 匹配不到 frame:原因在消息里,原样带出
+      return RespBodyVo.fail("extract_markdown 失败：" + e.getMessage());
+    } catch (PlaywrightException e) {
+      return RespBodyVo.fail("extract_markdown 失败：" + briefMessage(e.getMessage()));
+    }
+  }
+
+  /** 页面链接清单:文本截到 80 字符,`href` 用解析后的绝对地址 */
+  private static Object linksIn(Frame frame) {
+    return frame.evaluate("() => Array.from(document.querySelectorAll('a[href]'))"
+        + ".map(a => ({text: (a.innerText || '').trim().slice(0, 80), href: a.href}))");
   }
 
   public RespBodyVo scroll(Long browserId, boolean down, int numPages, Integer index) {

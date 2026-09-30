@@ -388,6 +388,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
 | `extract_structured_data` | `id`, `query`, `extractLinks`(bool) | 返回 `data.text`（正文，最多 20000 字符，读取时会临时隐藏高亮层）与 `data.links` |
+| `extract_markdown` | `id`, `selector`(可选), `frame`(可选), `includeLinks`(bool，可选), `maxChars`(可选) | 把页面（或 `selector` 命中的**第一个**元素）转成 Markdown：`data.markdown`、`data.length`、`data.truncated`、`data.source`（`body` 或选择器）、`data.url`、`data.title`；`includeLinks` 时另给 `data.links`。**表格按 GFM 表格输出**（`| 表头 |` + `| --- |` + 数据行），而 `extract_structured_data` 的 `innerText` 会把单元格逐行摊平、列对不上。默认上限 20000 字符，`maxChars` 可覆盖。`selector` 在跨域 iframe 里时传 `frame`（与 `get_element_count` 同一套取值） |
 | `execute_js` | `id`, `body` 或 `bodyFile`, `vars`(可选), `frame`(可选), `retryOnSpurious`(可选) | 返回 `data.result`，见 `batch-and-js.md`。**会 await Promise**；在跨域 iframe 里执行要传 `frame`；脚本**重发无害**（读页面这类）时传 `retryOnSpurious: true`，服务端会替它吃掉「事件泵伪故障」 |
 | `commands` | `id`, `params.stopOnError`, `params.commands`, `params.async`(可选) | 批量指令，是 `method` 的一个取值，见 `batch-and-js.md` |
 

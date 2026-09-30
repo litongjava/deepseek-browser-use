@@ -56,6 +56,28 @@
       <artifactId>playwright</artifactId>
       <version>1.53.0</version>
     </dependency>
+
+
+    <!--
+      HTML -> Markdown（extract_markdown 命令用）。
+
+      分工：jsoup 把页面 HTML 解析成可靠的 DOM（顺带剔除 <script>/<style> 与自己画的高亮层），
+      flexmark 的 html2md 负责转 Markdown —— 表格按 GFM 表格输出，这正是「读页面时表格被压成
+      一行行文本」那个问题的解法。
+
+      为什么显式声明 jsoup：flexmark-html2md 自己也依赖 jsoup，但我们在这里**直接**调用了它的 API，
+      按「直接用的依赖必须自己声明」写，免得哪天 flexmark 换掉内部解析器时这里静默编译不过。
+    -->
+    <dependency>
+      <groupId>org.jsoup</groupId>
+      <artifactId>jsoup</artifactId>
+      <version>1.18.3</version>
+    </dependency>
+    <dependency>
+      <groupId>com.vladsch.flexmark</groupId>
+      <artifactId>flexmark-html2md-converter</artifactId>
+      <version>0.64.0</version>
+    </dependency>
   </dependencies>
   <profiles>
     <!-- 开发环境配置 -->

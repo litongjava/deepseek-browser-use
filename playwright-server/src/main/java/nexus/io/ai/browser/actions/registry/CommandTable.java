@@ -273,6 +273,9 @@ public class CommandTable {
     // ---------- 其它 ----------
     put("extract_structured_data",
         (svc, id, a) -> svc.extractStructuredData(id, optStr(a, "query"), optBool(a, "extractLinks")));
+    // 页面 -> Markdown(表格按 GFM 表格输出,不摊平)。selector 为空转整个 body;给了就只转第一个命中元素
+    put("extract_markdown", (svc, id, a) -> svc.extractMarkdown(id, optStr(a, "selector"), optStr(a, "frame"),
+        optBool(a, "includeLinks"), a.getInteger("maxChars")));
     // body 直接写脚本;或用 bodyFile 从服务端脚本目录读(见 get_config 的 jsDir),
     // 再用 vars 注入 {{变量}} —— 中文/引号/换行都不用在客户端拼字符串
     put("execute_js", (svc, id, a) -> {

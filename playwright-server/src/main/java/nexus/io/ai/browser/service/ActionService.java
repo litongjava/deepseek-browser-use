@@ -74,7 +74,7 @@ public class ActionService {
   public static final Set<String> SPURIOUS_RETRY_SAFE = Set.of(
       // 只读:页面状态
       "get_browser_state", "get_page_snapshot", "diff_dom_text", "get_interactive_map", "get_form_state",
-      "list_frames", "extract_structured_data",
+      "list_frames", "extract_structured_data", "extract_markdown",
       // 只读:页签与地址
       "get_tabs", "get_url", "get_title",
       // 只读:元素
