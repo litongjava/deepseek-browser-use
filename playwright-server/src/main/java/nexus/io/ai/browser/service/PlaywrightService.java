@@ -22,6 +22,7 @@ import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.jfinal.kit.Kv;
 import nexus.io.ai.browser.consts.BrowserUserAgent;
@@ -9281,6 +9282,31 @@ public class PlaywrightService {
   // ==================== 人机协同 ====================
 
   /**
+   * 人工待办的过期时刻
+   *
+   * <p>
+   * 三个参数说的是同一件事,优先级从高到低:{@code expiresAt}(绝对毫秒时间戳)→
+   * {@code expiresInSeconds}(相对秒数)→ {@code timeoutSeconds}(相对秒数,历史名字)。都不给时用默认时长。
+   *
+   * <p>
+   * 抽成静态方法是为了能直接对「优先级」写用例。这段逻辑原先埋在方法体里,而它恰好是那次
+   * 「参数被静默忽略」事故的责任点:调用方按回执里输出的 {@code expiresInSeconds} 写回参数,
+   * 却因为没有这个入参而落到默认值上,待办在人看到之前就过期了。
+   */
+  static long humanDeadline(long now, Integer timeoutSeconds, Long expiresAt, Integer expiresInSeconds) {
+    if (expiresAt != null && expiresAt > 0) {
+      return expiresAt;
+    }
+    int ttl;
+    if (expiresInSeconds != null && expiresInSeconds > 0) {
+      ttl = expiresInSeconds;
+    } else {
+      ttl = timeoutSeconds == null || timeoutSeconds <= 0 ? DEFAULT_HUMAN_TIMEOUT_SECONDS : timeoutSeconds;
+    }
+    return now + ttl * 1_000L;
+  }
+
+  /**
    * 发起一个人工介入请求
    *
    * <p>
@@ -9305,13 +9331,16 @@ public class PlaywrightService {
    * @param steps          一次带多个待办:{@code [{prompt, index?, selector?}, ...]},人一次做完,少几次往返
    * @param expiresAt      绝对过期时刻(毫秒时间戳):二维码这类**有短时效**的场景用它,比 timeoutSeconds 直白,
    *                       并且过期后会明确回 {@code status:"expired"} 而不是让人干等
+   * @param expiresInSeconds 相对时长(秒),与 {@code timeoutSeconds} 是同一件事的另一个名字。
+   *                       回执里本来就输出 {@code expiresInSeconds},调用方照着回执写回来是最自然的写法,
+   *                       所以这里也收下它;两个都给时以它为准。
    * @param ocr            是否用本机 OCR 读图上的文字,默认 false
    * @param ocrLanguage    OCR 语言,默认 {@code zh-Hans-CN}
    * @param inline         是否内联 base64,默认 true(要省 token 可以关掉,只用 imagePath/imageUrl)
    */
   public RespBodyVo requestHumanInput(Long browserId, String prompt, Integer index, String selector,
-      Integer timeoutSeconds, List<Kv> steps, Long expiresAt, Boolean ocr, String ocrLanguage, Boolean inline,
-      String frame) {
+      Integer timeoutSeconds, List<Kv> steps, Long expiresAt, Integer expiresInSeconds, Boolean ocr,
+      String ocrLanguage, Boolean inline, String frame) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
@@ -9320,13 +9349,7 @@ public class PlaywrightService {
       return RespBodyVo.fail("request_human_input 需要 prompt,或用 steps 给出待办清单");
     }
     long now = System.currentTimeMillis();
-    long deadline;
-    if (expiresAt != null && expiresAt > 0) {
-      deadline = expiresAt;
-    } else {
-    int ttl = timeoutSeconds == null || timeoutSeconds <= 0 ? DEFAULT_HUMAN_TIMEOUT_SECONDS : timeoutSeconds;
-      deadline = now + ttl * 1_000L;
-    }
+    long deadline = humanDeadline(now, timeoutSeconds, expiresAt, expiresInSeconds);
     String requestId = "hr-" + inst.humanSeq.incrementAndGet() + "-" + SnowflakeIdUtils.id();
     Kv request = Kv.by("requestId", requestId).set("prompt", prompt).set("status", "pending").set("answer", null)
         .set("createdAt", now).set("expiresAt", deadline);
@@ -9424,6 +9447,98 @@ public class PlaywrightService {
     return RespBodyVo.ok(data);
   }
 
+  /**
+   * 向用户提问,拿一个答复回来
+   *
+   * <p>
+   * 与 {@link #requestHumanInput} 的区别是<b>语义与形态</b>,不是机制:
+   *
+   * <ul>
+   * <li>{@code request_human_input} 说的是「请人到浏览器里做一件事」(扫码、登录、过滑块),可以带一张
+   * 元素的截图;</li>
+   * <li>{@code ask_user} 说的是「有一个只有人知道的值,请告诉我」——银行卡号、身份证号、验证码、
+   * 「这两张卡用哪一张」。它<b>不截图、不抢焦点</b>,但可以带选项让用户挑。</li>
+   * </ul>
+   *
+   * <p>
+   * 实测这一类需求出现得非常频繁(换绑手机号要卡号 + 身份证号 + 两个验证码;银行卡验证要选卡),
+   * 而当时只能借 {@code request_human_input} 的壳子说「请输入图片验证码」这种话,语义是拧的。
+   *
+   * <p>
+   * <b>参数与答复的形态对齐 agent 侧的同名工具</b>({@code ask_user_question}),这样模型在两边
+   * 不必换心智模型:
+   *
+   * <pre>
+   * questions: [{ id, question, header?, options?: [{label, description?}], multiSelect? }]
+   * </pre>
+   *
+   * 答复用 {@code submit_human_input} 的 {@code answers} 按 {@code id} 逐条回填
+   * ({@code {"卡号":"6212…"}}),多选可以给数组;全部回填完 {@code status} 才是 {@code answered}。
+   * 取答复用 {@code get_human_input},回执里除了逐条的 {@code steps},还会给一份与 agent 侧同形的
+   * {@code answers:[{id, selected[], custom?}]}。
+   *
+   * <p>
+   * <b>实现上复用 {@code steps} 那套机制</b>:一个问题就是一步({@code stepId} 就是问题的 {@code id}),
+   * 于是「按 id 逐条回填 / 部分回填 / 全部填完才算完成」这些行为都不用再写一遍。
+   */
+  public RespBodyVo askUser(Long browserId, List<Kv> questions, Integer timeoutSeconds, Long expiresAt,
+      Integer expiresInSeconds) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return notFound(browserId);
+    }
+    if (questions == null || questions.isEmpty()) {
+      return RespBodyVo.fail("ask_user 需要 questions(至少一个问题,每个问题要有 id 与 question)");
+    }
+    for (int i = 0; i < questions.size(); i++) {
+      Kv question = questions.get(i);
+      if (question == null || question.getStr("id") == null || question.getStr("id").isBlank()) {
+        return RespBodyVo.fail("ask_user 第 " + (i + 1) + " 个问题缺少 id:答复要按 id 回填,没有 id 就对不上");
+      }
+      if (question.getStr("question") == null || question.getStr("question").isBlank()) {
+        return RespBodyVo.fail("ask_user 第 " + (i + 1) + " 个问题缺少 question");
+      }
+    }
+    long now = System.currentTimeMillis();
+    long deadline = humanDeadline(now, timeoutSeconds, expiresAt, expiresInSeconds);
+    String requestId = "aq-" + inst.humanSeq.incrementAndGet() + "-" + SnowflakeIdUtils.id();
+
+    List<Kv> steps = new ArrayList<>();
+    List<String> ids = new ArrayList<>();
+    for (Kv question : questions) {
+      String id = question.getStr("id");
+      Kv step = Kv.by("stepId", id).set("prompt", question.getStr("question")).set("status", "pending")
+          .set("answer", null);
+      if (question.get("header") != null) {
+        step.set("header", question.get("header"));
+      }
+      if (question.get("options") != null) {
+        step.set("options", question.get("options"));
+      }
+      if (question.get("multiSelect") != null) {
+        step.set("multiSelect", question.get("multiSelect"));
+      }
+      steps.add(step);
+      ids.add(id);
+    }
+
+    String prompt = "请回答 " + steps.size() + " 个问题:" + String.join(" / ", ids);
+    Kv request = Kv.by("requestId", requestId).set("prompt", prompt).set("status", "pending").set("answer", null)
+        .set("createdAt", now).set("expiresAt", deadline).set("kind", "ask_user").set("steps", steps);
+    inst.humanRequests.put(requestId, request);
+
+    Kv data = Kv.by("requestId", requestId).set("prompt", prompt).set("expiresAt", deadline)
+        .set("expiresInSeconds", Math.max(0, (deadline - now) / 1000)).set("questions", questions)
+        .set("questionIds", ids);
+    if (deadline <= now) {
+      request.set("status", "expired");
+      data.set("status", "expired").set("note", "expiresAt 已经过去了,这个提问没有生效;请重新发起");
+      return RespBodyVo.ok(data);
+    }
+    // 与 request_human_input 不同:纯问答**不抢焦点**。人可能正看着别处,而这个问题不要求他去看页面
+    return RespBodyVo.ok(data);
+  }
+
   /** 提交人工答复,返回 data.status 与 data.answer */
   public RespBodyVo submitHumanInput(Long browserId, String requestId, String answer) {
     return submitHumanInput(browserId, requestId, answer, null, null);
@@ -9450,10 +9565,11 @@ public class PlaywrightService {
     // 多步待办:必须按 stepId / answers 逐条回填 —— 直接给一个 answer 说不清它对应哪一步,静默接受
     // 只会让剩下的步骤一直挂在 pending 上,所以这里明确报错并给出待办清单
     if (!steps.isEmpty()) {
-      Map<String, String> filled = new LinkedHashMap<>();
+      Map<String, Object> filled = new LinkedHashMap<>();
       if (answers != null) {
         for (String key : answers.keySet()) {
-          filled.put(key, answers.getString(key));
+          // 不把值强转成字符串:多选题的答复是一个数组(选了哪几项),强转会把选项信息压扁
+          filled.put(key, answers.get(key));
         }
       }
       if (stepId != null) {
@@ -9468,7 +9584,7 @@ public class PlaywrightService {
             + "请用 stepId 指定回填哪一步,或用 answers 一次回填多步。待办:" + String.join(" / ", pendingIds));
       }
       List<String> unknown = new ArrayList<>();
-      for (Map.Entry<String, String> entry : filled.entrySet()) {
+      for (Map.Entry<String, Object> entry : filled.entrySet()) {
         Kv target = null;
         for (Kv step : steps) {
           if (entry.getKey().equals(step.getStr("stepId"))) {
@@ -9574,6 +9690,11 @@ public class PlaywrightService {
         status = "partial";
       }
     }
+    if ("ask_user".equals(request.getStr("kind"))) {
+      // 除了逐条的 steps,再给一份与 agent 侧 ask_user_question 同形的 answers:
+      // 调用方拿到的就是它熟悉的那个结构,不必自己把 steps 再拼一遍
+      data.set("answers", askUserAnswers(steps));
+    }
     if ("expired".equals(status)) {
       data.set("expired", true)
           .set("hint", "这个人工请求已经过期:二维码/短信码这类有短时效的凭证通常也已经失效,"
@@ -9582,9 +9703,69 @@ public class PlaywrightService {
     return RespBodyVo.ok(data);
   }
 
+  /**
+   * 把逐条答复整理成 agent 侧工具的同形结构:{@code [{id, selected:[], custom?}]}
+   *
+   * <p>
+   * 调用方按 {@code id} 回填一个字符串时:能对上某个选项 label 的算「选了那一项」({@code selected}),
+   * 对不上的算「自己输入的」({@code custom})—— 与 {@code ask_user_question} 的语义一致,免得下游还要
+   * 自己判断「这到底是选择还是自由输入」。回填数组(多选题)则整份进 {@code selected}。
+   */
+  static JSONArray askUserAnswers(List<Kv> steps) {
+    JSONArray out = new JSONArray();
+    for (Kv step : steps) {
+      JSONObject one = new JSONObject();
+      one.put("id", step.getStr("stepId"));
+      List<String> selected = new ArrayList<>();
+      String custom = null;
+      Object raw = step.get("answer");
+      if (raw instanceof List) {
+        for (Object item : (List<?>) raw) {
+          selected.add(String.valueOf(item));
+        }
+      } else if (raw != null) {
+        String text = String.valueOf(raw);
+        for (String label : optionLabels(step)) {
+          if (label.equals(text)) {
+            selected.add(label);
+            break;
+          }
+        }
+        if (selected.isEmpty()) {
+          custom = text;
+        }
+      }
+      one.put("selected", selected);
+      if (custom != null) {
+        one.put("custom", custom);
+      }
+      out.add(one);
+    }
+    return out;
+  }
+
+  /** 某个问题的选项标签:选项允许写成字符串或 {@code {label, description}} 两种形态 */
+  private static List<String> optionLabels(Kv step) {
+    List<String> labels = new ArrayList<>();
+    Object raw = step.get("options");
+    if (!(raw instanceof List)) {
+      return labels;
+    }
+    for (Object item : (List<?>) raw) {
+      if (item instanceof Map) {
+        Object label = ((Map<?, ?>) item).get("label");
+        if (label != null) {
+          labels.add(String.valueOf(label));
+        }
+      } else if (item != null) {
+        labels.add(String.valueOf(item));
+      }
+    }
+    return labels;
+  }
+
   /** pending 且已过 expiresAt 时算 expired */
-  private static String humanStatus(Kv request) {
-    Object status = request.get("status");
+  private static String humanStatus(Kv request) {    Object status = request.get("status");
     Object expiresAt = request.get("expiresAt");
     if ("pending".equals(status) && expiresAt instanceof Number
         && System.currentTimeMillis() > ((Number) expiresAt).longValue()) {

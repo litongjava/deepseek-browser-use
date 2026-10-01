@@ -34,7 +34,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | `references/human-in-loop.md` | 验证码 / 扫码 / 短信码 / 人工登录、`ocr_image`、多步 `steps` |
 | `references/payment-onboarding.md` | 商户申请、多层弹窗、短信验证、密钥上传、审核状态及资料脱敏 |
 | `references/browsers.md` | 选浏览器与引擎、profile 与登录态、实例生命周期、残留进程 |
-| `references/pitfalls.md` | 60 条坑与限制（下面「症状表」与「最常踩的坑」里说的「第 N 条」都指它） |
+| `references/pitfalls.md` | 72 条坑与限制（下面「症状表」与「最常踩的坑」里说的「第 N 条」都指它） |
 
 > ## 省 token 铁律：非必要不要读图
 >
@@ -67,6 +67,8 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | 多行 JS 报 `SyntaxError: Unexpected end of input` | 脚本在命令行里被截断了：改用 `js @脚本.js`（或服务端 `bodyFile`），别看语法错误去改脚本 |
 | 某个元素到底有没有挂事件 | `get_element_listeners`；`get_interactive_map` 每条也带 `hasListeners` |
 | 需要人扫码 / 输验证码 / 支付确认 | `request_human_input`（一串动作用 `steps` 一次交办） |
+| **需要向用户「要一个值」，或让用户在几个选项里挑一个**（卡号、身份证号、验证码、「这两张卡用哪张」） | `ask_user`：不截图、不抢焦点，`questions: [{id, question, options?, multiSelect?}]`；答复按 `id` 用 `submit_human_input` 的 `answers` 回填，`get_human_input` 回 `data.answers: [{id, selected[], custom?}]`。**别借 `request_human_input` 的壳子**——它是「请人去页面操作」，语义会拧 |
+| **要用户提供敏感字段（银行卡号 / 身份证号 / 验证码）** | **先问，别替用户决定**：让他选「自己在页面上填」还是「告诉你、你来填」（第 72 条）。用户选了自己填，就**不要**再把值要过来 |
 | 模型读不了图，但要读验证码 / 维护图 | `ocr_image`（Windows 自带 OCR，支持中文） |
 | 长批次怕 HTTP 超时 | `commands` 加 `async: true` + `get_job`；或客户端 `batch cmds.json --async --wait` |
 | 手拼 JSON 被引号 / 中文 / 编码坑了（Windows 尤其） | 别硬拼，用仓库里的 `dsb` 客户端：Windows 敲 `.\client\dsb.cmd`，macOS/Linux 敲 `./client/dsb`，参数进文件用 `batch cmds.json` / `js @脚本.js`，见 `references/client.md` |
@@ -443,7 +445,8 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 | 方法 | 说明 |
 | --- | --- |
 | `request_human_input` | 发起人工介入请求（验证码 / 短信码 / 扫码 / 支付）。传 `index`/`selector` 时把该元素截下来，**同时**回 `data.imageBase64`、`data.imagePath`、`data.imageUrl`（可直接 GET、能贴给用户）；一串动作用 `steps` 一次交办 |
-| `submit_human_input` | 提交人工答复：单步给 `answer`；多步用 `stepId` 逐条回填，或 `answers: {"s1":"…"}` 一次回填多步 |
+| `ask_user` | **向用户「要一个值」**（银行卡号 / 身份证号 / 验证码 / 二选一），不截图、不抢焦点。传 `questions: [{id, question, header?, options?: [{label, description?}], multiSelect?}]`，形态与 agent 侧的 ``ask_user_question`` 一致；答复用 `submit_human_input` 的 `answers` 按 `id` 回填（多选给数组），`get_human_input` 回 `data.answers: [{id, selected[], custom?}]` |
+| `submit_human_input` | 提交人工答复：单步给 `answer`；多步/多问用 `stepId` 逐条回填，或 `answers: {"s1":"…"}` 一次回填多条（多选题的值给数组） |
 | `get_human_input` | 取答复：`data.status` 取 `pending`/`partial`/`answered`/`expired`。传 `timeoutSeconds` 时长轮询等待，到时间还没答复返回当前状态（**不算失败**） |
 | `ocr_image` | 用**本机 OCR**（Windows 自带 `Windows.Media.Ocr`）把图上的文字读出来：给 `path` 读服务端已有的一张图，给 `index`/`selector` 则先截这个元素再读。**模型读不了图时的兜底** |
 
@@ -540,7 +543,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 | 判断点击到底生效没有 | 看点击回执里的 `data.changed`，或 `diff_dom_text` 确认快照有没有变。**不要为了这个去读 `data.screenshot`** |
 | 事后复看某一步的页面 | `GET http://localhost:10049/data/<id>/<seq>.png`（截图）与同序号的 `.txt`（页签 + 可交互结构化文本，两者序号相同表示同一时刻） |
 
-## 九、最常踩的 12 条坑（完整 60 条见 `references/pitfalls.md`）
+## 九、最常踩的 12 条坑（完整 72 条见 `references/pitfalls.md`）
 
 1. **页面变化后索引全部重算**：点击、跳转、异步渲染之后必须重新 `get_browser_state`；沿用旧索引会得到 `索引越界` 或超时（报错里带快照年龄与元素范围，照它判断就行）。
 2. **快照里没有 `id`/`class`/`href`**：按 id/class 定位用选择器类命令，取 href 用 `execute_js`，批量看属性用 `get_interactive_map`。
@@ -555,4 +558,4 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 11. **`send_keys` 回了 `ok:true` 但页面毫无反应**：看回执里的 `focused` —— 焦点可能根本不在输入框上（落在 `<body>` 上时会给 `focusNote`）。先 `click` 目标输入框再送键。
 12. **`go_to_url` 报失败、可地址栏其实已经跳过去了**：幂等导航会读一次地址栏核对（比较主机+路径，忽略 `?vd_source=…` 这类会话参数），到达了就按成功返回并带 `data.warning`。
 
-其余 52 条里最值得先翻的几类：跨域 iframe（第 37 条）、弹窗与遮挡（第 20 / 39 条）、网络响应体缓存（第 23 条）、`data/<id>/` 与日志不会自动清理（第 27 / 34 条）、强杀服务留下孤儿浏览器（第 32 条）、`get_dialog` 是「最近一次弹窗」（第 20 条）、`Object doesn't exist` 伪故障的机制（第 47 条）、整页截不出图的 ``capture_degraded``（第 48 条）、回读看不到 input 不等于上传失败（第 45 条）、**截图里的彩色高亮层会让二维码扫不出来**（第 54 条）、**按文本点击点中了"包含"它的长容器**（第 55 条）、**`get_form_state` 对自定义下拉撒的两个谎**（第 56 条）、**`wait_for_idle` 在轮询页面上永远等不到**（第 57 条）、**首次 `start` 卡在下载浏览器**（第 58 条）、**JDK 架构/版本不匹配让服务起不来**（第 59 条）、**`get_response_body` 传 `requestId` 读不到时的三种归因**（第 60 条）、**实时页面上索引「永久失效」的成因与新的结构/内容变更分界**（第 61 条）、**`--select` 在失败批次上、`--params` 认整个请求体、`js --retry-on-spurious`**（第 62–64 条）。
+其余 60 条里最值得先翻的几类：跨域 iframe（第 37 条）、弹窗与遮挡（第 20 / 39 条）、网络响应体缓存（第 23 条）、`data/<id>/` 与日志不会自动清理（第 27 / 34 条）、强杀服务留下孤儿浏览器（第 32 条）、`get_dialog` 是「最近一次弹窗」（第 20 条）、`Object doesn't exist` 伪故障的机制（第 47 条）、整页截不出图的 ``capture_degraded``（第 48 条）、回读看不到 input 不等于上传失败（第 45 条）、**截图里的彩色高亮层会让二维码扫不出来**（第 54 条）、**按文本点击点中了"包含"它的长容器**（第 55 条）、**`get_form_state` 对自定义下拉撒的两个谎**（第 56 条）、**`wait_for_idle` 在轮询页面上永远等不到**（第 57 条）、**首次 `start` 卡在下载浏览器**（第 58 条）、**JDK 架构/版本不匹配让服务起不来**（第 59 条）、**`get_response_body` 传 `requestId` 读不到时的三种归因**（第 60 条）、**实时页面上索引「永久失效」的成因与新的结构/内容变更分界**（第 61 条）、**`--select` 在失败批次上、`--params` 认整个请求体、`js --retry-on-spurious`**（第 62–64 条）、**传了参数却被静默忽略（看 `unknownParams`）**（第 69 条）、**自定义控件里的按钮扫不到、容器 `height:0` 不代表没渲染**（第 70 条）、**快照只读到一部分时结论可能是反的**（第 71 条）、**敏感字段要先问用户怎么填**（第 72 条）。

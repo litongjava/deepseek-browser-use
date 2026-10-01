@@ -10,6 +10,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.jfinal.kit.Kv;
 
 import nexus.io.ai.browser.actions.registry.CommandTable;
+import nexus.io.ai.browser.actions.registry.TrackedArgs;
 
 import nexus.io.jfinal.aop.Aop;
 import nexus.io.model.body.RespBodyVo;
@@ -129,6 +130,30 @@ public class ActionService {
     Object data = result.getData();
     Kv merged = data instanceof Kv ? (Kv) data : Kv.by("result", data);
     merged.set(capture);
+    result.setData(merged);
+  }
+
+  /**
+   * 把「传了但一次也没被用过」的参数写进回执
+   *
+   * <p>
+   * 命令表里的执行体各自读自己认识的键,没有一份声明式的参数清单,所以拼错的参数名会被**静默丢弃**:
+   * 回执照样 {@code ok:true},调用方以为自己的意图生效了。
+   *
+   * <p>
+   * 这里**只加说明、不改结论**——命令该成功还是成功。因为动作类命令一旦被翻成失败,调用方很可能
+   * 重发,而重发等于重复点击、重复提交(与 {@link #dispatchWithSpuriousRetry} 里「不确定」那段是
+   * 同一条理由)。把线索放进回执让人一眼看穿,与 {@code start} 的 {@code engineWarning} 是同一种处理。
+   */
+  private void attachUnknownParams(RespBodyVo result, TrackedArgs args, String method) {
+    Set<String> unread = args.unreadKeys();
+    if (unread.isEmpty()) {
+      return;
+    }
+    Object data = result.getData();
+    Kv merged = data instanceof Kv ? (Kv) data : new Kv();
+    merged.set("unknownParams", new ArrayList<>(unread));
+    merged.set("unknownParamNote", TrackedArgs.unknownParamNote(method, unread, args.readKeys()));
     result.setData(merged);
   }
 
@@ -315,7 +340,11 @@ public class ActionService {
     if (executor == null) {
       return RespBodyVo.fail(unknownMethodMessage(method));
     }
-    JSONObject args = params == null ? new JSONObject() : params;
+    // 包一层「会记录读过哪些参数」的对象:命令跑完后就能看出哪些参数被传了却一次也没用上。
+    // 以前这类参数是被**静默丢弃**的——回执照样 ok:true,调用方以为自己的意图生效了。实测踩过:
+    // 把 request_human_input 的 timeoutSeconds 写成 expiresInSeconds,待办按默认 300 秒建好,
+    // 人还没看到请求就已经过期,而回执里一个字都没提。
+    TrackedArgs args = new TrackedArgs(params);
     try {
       RespBodyVo result = dispatchWithSpuriousRetry(method, args, () -> executor.run(svc, id, args));
       if (!result.isOk() && result.getMsg() != null) {
@@ -332,6 +361,7 @@ public class ActionService {
         result.setData(detail);
       }
       attachCapture(result, id, method);
+      attachUnknownParams(result, args, method);
       return result;
     } catch (IllegalArgumentException e) {
       // 参数校验错(CommandTable 的 reqInt/reqStr 等):命令**根本没发出去**,不存在「可能已生效」的问题,

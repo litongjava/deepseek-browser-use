@@ -90,6 +90,8 @@ public class CommandTableTest {
     cases.put("route", "urlPattern");
     cases.put("wait_for_response", "urlPattern");
     cases.put("request_human_input", "prompt");
+    // ask_user 的 questions 是必填的:没有它就没有要问的东西
+    cases.put("ask_user", "questions");
     cases.put("submit_human_input", "requestId");
     cases.put("get_human_input", "requestId");
     cases.put("execute_js", "body");

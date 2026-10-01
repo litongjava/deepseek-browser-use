@@ -20,6 +20,46 @@
 | 2 | 人看图 → 把答案回填 | 通过 `submit_human_input`（`requestId` + `answer`）提交；**或者**直接在有头浏览器里自己把这一步操作完 |
 | 3 | `get_human_input`，`requestId=hr-1-xxx`，`timeoutSeconds=60` | 取答复。`data.status` 为 `pending` / `partial` / `answered` / `expired` |
 
+## 「请人去页面上做一件事」与「向用户要一个值」是两件事
+
+方法也不同，别混用：
+
+| 场景 | 用哪个 | 为什么 |
+| --- | --- | --- |
+| 扫码登录、滑块、过验证、支付确认、让人看一眼画面 | `request_human_input` | 它能把某个元素截成图，并把窗口带到最前 |
+| 要一个只有人知道的值（银行卡号、身份证号、验证码），或在几个选项里挑一个（「两张卡用哪张」） | `ask_user` | 不截图、**不抢焦点**；可以带选项 |
+
+拿 `request_human_input` 的壳子去要一个值，语义是拧的（实测为了要一个卡号，只能写「请输入图片验证码」这种话）。
+`ask_user` 的参数形态与模型侧的同名提问工具一致，模型不必换心智模型：
+
+```json
+{"id":1001,"method":"ask_user","params":{
+  "questions":[
+    {"id":"card","question":"请提供完整银行卡号（尾号 0196 那张）","header":"银行卡号",
+     "options":[{"label":"在这里输入卡号给你","description":"你把卡号写在回答里"},
+                {"label":"我自己在页面上输入","description":"卡号不进入对话记录"}]},
+    {"id":"idcard","question":"请提供持卡人身份证号"},
+    {"id":"scope","question":"站点领域最多选 3 项","multiSelect":true,
+     "options":[{"label":"教育培训"},{"label":"信息技术"},{"label":"工具服务及在线查询"}]}]}}
+# 回执：data.requestId / data.questions / data.questionIds / data.expiresInSeconds / data.expiresAt
+```
+
+答复仍用 `submit_human_input`，按问题的 `id` 回填；多选题的值给数组：
+
+```json
+{"id":1001,"method":"submit_human_input","params":{
+  "requestId":"aq-1-xxx","answers":{"card":"6212…0196","scope":["教育培训","信息技术"]}}}
+```
+
+`get_human_input` 除了逐条的 `data.steps`，还会回一份与模型侧同形的 `data.answers:[{id, selected[], custom?}]`：
+回填的字符串**能对上某个选项**就算 `selected`，对不上就算 `custom`（自己输入的）；没答的问题也照样出现，
+`selected` 为空数组，方便调用方按 `id` 对齐而不用判空。
+
+**要敏感字段时，先问「你自己填，还是告诉我我来填」。** 这是实测被用户纠正过两次的地方：卡号与身份证号
+属于只有用户知道的东西，**该由他决定怎么给你**，不要替他做决定，也不要在正文里顺带一提就当问过了。
+另外两点也要记住：**只给选项时要不到具体的值**——用户点完选项就结束了，值并不会传过来，要值就得留一条
+自由输入的答复路径；**用户说「我自己填」之后就别再把值要过来**，你的职责转成「把表单准备好、把焦点交给他」。
+
 **模型读不了图怎么办**（``read_image`` 报 ``model ... does not declare image input`` 时）：这是「必须看图」环节最容易卡住的地方。三条路，按顺序试：
 
 1. **先让服务端自己读**：`ocr_image`（或 `request_human_input` 加 `ocr: true`）用本机 OCR（Windows 自带 `Windows.Media.Ocr`）直接把图上的文字返回，识别中文需要系统装了对应语言包。验证码这类印刷体字符识别率不错，能自己答就直接答，省掉一次人工往返：

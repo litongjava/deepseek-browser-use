@@ -372,9 +372,22 @@ public class CommandTable {
       if (a.getJSONArray("steps") == null && optStrRaw(a, "prompt") == null) {
         throw new IllegalArgumentException("缺少参数 prompt");
       }
+      // expiresInSeconds 与 timeoutSeconds 是同一件事的两个名字:回执里输出的字段就叫
+      // expiresInSeconds,照着回执写回来却完全没有效果(被静默忽略、按默认 300 秒过期),
+      // 这个不对称实测确实坑过人,所以两个名字都收。
       return svc.requestHumanInput(id, optStrRaw(a, "prompt"), a.getInteger("index"), optStr(a, "selector"),
           a.getInteger("timeoutSeconds"), stepListOf(a.getJSONArray("steps")), a.getLong("expiresAt"),
-          a.getBoolean("ocr"), optStr(a, "ocrLanguage"), a.getBoolean("inline"), optStr(a, "frame"));
+          a.getInteger("expiresInSeconds"), a.getBoolean("ocr"), optStr(a, "ocrLanguage"),
+          a.getBoolean("inline"), optStr(a, "frame"));
+    });
+    // 向用户「要一个值」,而不是「请人去页面上操作」:银行卡号、身份证号、验证码、二选一。
+    // 与 request_human_input 共用同一套待办存储,所以 submit_human_input / get_human_input 原样可用。
+    put("ask_user", (svc, id, a) -> {
+      if (a.getJSONArray("questions") == null) {
+        throw new IllegalArgumentException("缺少参数 questions");
+      }
+      return svc.askUser(id, questionListOf(a.getJSONArray("questions")), a.getInteger("timeoutSeconds"),
+          a.getLong("expiresAt"), a.getInteger("expiresInSeconds"));
     });
     put("submit_human_input", (svc, id, a) -> svc.submitHumanInput(id, reqStr(a, "requestId"),
         optStrRaw(a, "answer"), optStr(a, "stepId"), a.getJSONObject("answers")));
@@ -403,9 +416,19 @@ public class CommandTable {
     return list;
   }
 
-  private CommandTable() {
+  /**
+   * questions: [{id, question, header?, options?, multiSelect?}, ...] → List&lt;Kv&gt;
+   *
+   * <p>
+   * 形状与 steps 完全一样(问题的 {@code id} 就对应步骤的 {@code stepId}),所以直接复用同一段转换:
+   * <b>一个问题就是一步</b>,于是「按 id 逐条回填 / 部分回填 / 全部填完才算完成」这些行为都不必再写一遍。
+   */
+  private static java.util.List<Kv> questionListOf(com.alibaba.fastjson2.JSONArray questions) {
+    return stepListOf(questions);
   }
 
+  private CommandTable() {
+  }
   private static void put(String command, Executor executor) {
     TABLE.put(command, executor);
   }
