@@ -16,7 +16,7 @@
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
 | `navigate` | `id`, `url` | 返回 `data.status` |
-| `go_to_url` | `id`, `url` | 与 `navigate` 等价 |
+| `go_to_url` | `id`, `url` | 与 `navigate` 等价。**打不开的地址会报 `errorCode:NETWORK_ERROR`**，并带上 `data.netError`（Chrome 的错误码，如 `ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED`）与可重试建议 —— 这时页面是 **Chrome 自己的网络错误页**，上面没有任何内容可读，别去查选择器，先看本机代理 / VPN（见 `pitfalls.md` 第 74 条） |
 | `get_browser_state` | `id`, `highlight`, `viewportExpansion`, `includeElements`, `maxElements`, `includeFrames`, `strictSnapshot` | 见 `reading-pages.md`。`strictSnapshot`(bool，默认 false) 决定「这份索引什么时候作废」：默认只作废**结构变更**（读取期间增删了元素）与逐元素重校验失败的快照，实时行情这类只有文字/属性在变的页面索引仍然可用；传 `true` 恢复旧的「读取期间任何 DOM 变更即作废」判据 |
 | `list_frames` | `id`, `refresh`(bool，默认 true) | 列出页面上的**全部 frame**（含跨域 iframe）：`data.frames[]`（`index`/`url`/`name`/`isMain`/`parentIndex`/`depth`/`elementCount`/`indexRange`；读不出来的 frame 另有 `readError`）。`index 0` 固定是主 frame，其余按 frame 树深度优先编号。**顶层读不到元素时先看它**，见 `reading-pages.md`「跨域 iframe」 |
 | `get_page_snapshot` | `id`, `includeConsole`(bool), `includeRequests`(bool), `requestFilter` | 一次拿到页面状态：`data.url`、`data.title`、`data.tabs`、`data.dialog`、`data.loading`；`includeConsole=true` 再带 `data.logs`/`data.errors`，`includeRequests=true` 再带 `data.requests`（可用 `requestFilter` 按 URL 子串过滤）。替代六次单独调用，**不含 DOM 快照文本** |
@@ -51,7 +51,7 @@
 | `type_text` | `id`, `index`, `text` | 逐字输入，**不清空**原有内容 |
 | `input_text` | `id`, `index`, `text`, `mode`(可选) | 覆盖式填充（等价 `fill`，会清空）；`text` 必填，**清空请用 `clear_text`** |
 | `drag_element_by_index` | `id`, `index`, `targetIndex` | 把第 index 个元素拖到第 targetIndex 个元素 |
-| `upload_file` | `id`, `path`, `index` 或 `selector`(二选一), `timeoutMs`(可选), `frame`(可选) | `path` 是**服务器本地路径**：绝对路径或按服务端暂存目录解析的相对路径（见下面的「上传文件」）。**上传完会回读校验**，见下 |
+| `upload_file` | `id`, `path`, `index` 或 `selector`(二选一), `nth`(可选), `timeoutMs`(可选), `frame`(可选) | `path` 是**服务器本地路径**：绝对路径或按服务端暂存目录解析的相对路径（见下面的「上传文件」）。**上传完会回读校验**，见下。`selector` 命中多个 file input 时回执报 `data.matched` / `data.chosenIndex` / `data.visibleMatched`（file input 基本都是隐藏的，所以**不做可见性挑选**，按文档顺序取第一个）——要精确指定就传 `nth`（0 基） |
 | `send_keys` | `id`, `keys` | `keys` 收**两种形态**：① **按键**——单个键名（`Enter`、`Tab`、`ArrowDown`、`F5`）或「修饰键 + 一个键」的组合（`Control+A`、`Shift+Enter`、`Control+Shift+T`）；② **整段文本**（`CRCL`、`hello world`、中文）。回执里 `data.mode` 是 `press` 还是 `type` 直接告诉你走了哪条路，另有 `data.keys` / `data.text` 与 `data.focused`。整段文本走逐字符打字（会触发 `keydown/keypress/input`，受控输入框也认），所以「隐藏输入框没选择器、又不想先取快照拿索引」时可以直接用它 |
 | `key_down` | `id`, `keys` | 按住不放（配合 `key_up`） |
 | `key_up` | `id`, `keys` | 松开按键 |
@@ -82,6 +82,25 @@
 # 把 file input 的选择器喂给它（不需要元素可见，也不需要索引）
 {"id":"1001","method":"upload_file","params":{"selector":"#form_item_imageAttJson","path":"图样.jpg"}}
 ```
+
+##### 命中多个 file input 时：先看 `matched`，要精确指定就传 `nth`
+
+真实站点上「同名的隐藏文件框有两份」是常态（X 的投稿页就是：发推弹窗里一个、后面的内联编辑器里一个，**两个都是 0×0**）。`upload_file` **不做可见性挑选** —— file input 基本都是隐藏的，「挑可见的」会把唯一正确的那个排除掉 —— 所以它按**文档顺序**取第一个，并把话说明白：
+
+| 字段 | 含义 |
+| --- | --- |
+| `data.matched` | 选择器一共命中几个 file input。**大于 1 就说明这次是「猜的」**，值得确认一下 |
+| `data.chosenIndex` | 这次用的是第几个（0 基） |
+| `data.visibleMatched` | 命中的前 20 个里有几个是可见的（file input 正常情况下是 0） |
+| `data.selectorNote` | 一句话说清「怎么挑的、要精确指定该怎么办」 |
+| `data.explicitNth` | 传了 `nth` 时为 `true`（此时不做任何挑选，就是你要的那个） |
+
+```bash
+# 命中两个时，明确要第二个
+{"id":"1001","method":"upload_file","params":{"selector":"input[data-testid='fileInput']","nth":1,"path":"图样.jpg"}}
+```
+
+选择器**一个都没匹配到**时会当场以 `ELEMENT_NOT_FOUND` 失败，不会等满可操作性超时再报一句「超时」—— 那会让调用方以为「元素在、只是不可点」，方向全错。
 
 **客户端-服务器模式**（智能体在客户端、浏览器在服务端）下，客户端本地文件服务端读不到，先把文件 POST 到暂存接口，再用回执里的路径：
 
@@ -138,7 +157,7 @@ curl -H "Content-Type: application/json" \
 2. 改用**组件方法直调**：`execute_js` 里拿到页面上的 Vue 实例，直接调它的 `upload()` / `emitChange()`（企业微信那个 `ImageUploader` 就是这么绕过去的，见 `.agents/skills/wecom-register-certify`）；
 3. 或先点它的可见父元素 / 触发框架自己的入口，再上传。
 
-### 读取元素信息与状态（按索引）
+### 读取元素信息与状态（按索引，或按选择器）
 
 | 方法 | 参数 | 返回 |
 | --- | --- | --- |
@@ -149,9 +168,9 @@ curl -H "Content-Type: application/json" \
 | `get_element_listeners` | `id`, `index` 或 `selector`(二选一), `frame`(可选) | 这个元素挂了哪些事件监听器：`data.found`、`data.tag`/`className`/`type`、`data.vue2`/`vue3`/`react`/`inline`/`jquery`、`data.listeners`（事件名数组）、`data.hasListeners`、`data.detection`（`cdp` = 浏览器自己报的清单，可信；`heuristic` = 只探到框架痕迹）、`data.note`。**「有没有挂事件」是 SPA 自动化的基础诊断信息**，凡「设了值/派发了事件但页面没反应」先查它 |
 | `get_element_count` | `id`, `selector`, `frame`(可选) | `data.count`（CSS 选择器匹配数量，不需要索引） |
 | `get_element_box` | `id`, `index` | `data.x/y/width/height`；元素不可见时失败 |
-| `is_visible` | `id`, `index` | `data.visible` |
-| `is_enabled` | `id`, `index` | `data.enabled` |
-| `is_checked` | `id`, `index` | `data.checked` |
+| `is_visible` | `id`, `index` 或 `selector`(二选一), `frame`(可选) | `data.visible` + `data.target`。**「这个按钮现在能不能点」正是不想读整页快照时才问的**，而元素有没有索引取决于它在不在视口内 —— 所以这一族与 `get_element_text` 同形，也能只按 `selector` 问 |
+| `is_enabled` | `id`, `index` 或 `selector`(二选一), `frame`(可选) | `data.enabled` + `data.target` |
+| `is_checked` | `id`, `index` 或 `selector`(二选一), `frame`(可选) | `data.checked` + `data.target` |
 
 ##### `hasListeners` 的三态，以及它为什么不能瞎猜
 

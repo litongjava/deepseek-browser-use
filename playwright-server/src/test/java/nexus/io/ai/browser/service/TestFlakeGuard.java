@@ -52,10 +52,19 @@ final class TestFlakeGuard {
         last);
   }
 
-  /** 同上,带返回值 */
+  /**
+   * 同上,带返回值
+   *
+   * <p>
+   * <b>这里必须先把 lambda 装进显式的 {@code Runnable}</b>:以前直接写
+   * {@code retry(what, () -> holder[0] = call.get())},而赋值表达式既满足 {@code Runnable}
+   * 又满足 {@code Supplier},重载解析把它交给了**自己** —— 这个方法一被调用就 {@code StackOverflowError}。
+   * 因为在此之前没人用过带返回值的那个重载,这个坑一直藏着,直到有用例开始读回值才炸出来。
+   */
   static <T> T retry(String what, java.util.function.Supplier<T> call) {
     final Object[] holder = new Object[1];
-    retry(what, () -> holder[0] = call.get());
+    Runnable body = () -> holder[0] = call.get();
+    retry(what, body);
     @SuppressWarnings("unchecked")
     T result = (T) holder[0];
     return result;

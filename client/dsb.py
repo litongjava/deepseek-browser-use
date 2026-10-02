@@ -580,13 +580,18 @@ def read_batch_source(source: str | None) -> str:
 
 
 def setup_stdout() -> None:
-    """管道输出用 UTF-8(便于 `| jq`);终端输出按控制台编码并容错,避免中文直接崩掉"""
+    """管道输出用 UTF-8(便于 `| jq`);终端输出按控制台编码并容错,避免中文直接崩掉
+
+    stderr 与 stdout 走**同一条**策略。以前 stderr 只设了 ``errors="replace"`` 而没设编码,
+    于是这个客户端所有中文提示(``--select`` 路径不存在、批量里某一步失败的原因……)在 Windows 上
+    整句变成问号 —— 报错信息本身不可读,比不报还糟。实测原样:``--select data.ok ?????????,??????``。
+    """
     try:
-        if sys.stdout.isatty():
-            sys.stdout.reconfigure(errors="replace")
-        else:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(errors="replace")
+        for stream in (sys.stdout, sys.stderr):
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
 

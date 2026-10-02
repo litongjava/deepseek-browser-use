@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -4399,8 +4400,175 @@ public class PlaywrightService {
                 + "(Object doesn't exist,与本次命令无关),但地址栏**已经是目标地址**,按成功处理")
             .set("spuriousDispatch", true));
       }
+      // 网络层失败:报成 ACTION_TIMEOUT 会把调用方带向「元素/选择器」这条完全错误的路。
+      // 真正该说的是「Chrome 停在他自己的网络错误页上,这一页没有任何内容可读」(见 networkFailureReceipt)
+      RespBodyVo networkFailure = networkFailureReceipt(inst, url, e);
+      if (networkFailure != null) {
+        return networkFailure;
+      }
       return RespBodyVo.fail("go_to_url 失败：" + briefMessage(e.getMessage()));
     }
+  }
+
+  /** Chrome 自己的网络错误页用的地址前缀(页面内容就是那几行「无法访问此网站」) */
+  private static final String CHROME_ERROR_SCHEME = "chrome-error://";
+
+  /**
+   * 导航失败后,还要不要再探一次「页面是不是 Chrome 的网络错误页」
+   *
+   * <p>
+   * 为什么要探几次:实测(2026-10-01,TUN 抖动导致的 {@code ERR_NETWORK_CHANGED})失败**那一刻**地址栏
+   * 还是 {@code about:blank},错误页晚一拍才提交 —— 只探一次会漏掉,而漏掉的代价就是又回到
+   * 「Timeout 30000ms exceeded」这种毫无方向的提示。这里只在导航**已经失败**之后才付出这点等待。
+   */
+  private static final int CHROME_ERROR_PROBE_ATTEMPTS = 4;
+
+  /** 两次探测之间的间隔(毫秒):4 次 × 400ms,最多多等 1.2 秒 */
+  private static final long CHROME_ERROR_PROBE_INTERVAL_MS = 400;
+
+  /**
+   * 只在 Chrome 自己的错误页上才成立的错误码来源
+   *
+   * <p>
+   * {@code #main-frame-error} 是 Chrome 错误页的根节点,普通页面几乎不可能有这个 id —— 用它把
+   * 「从正文里扫 {@code ERR_xxx}」限制在错误页上,免得给一张正常页面(正文里恰好写了某个 ERR 常量)
+   * 误判成网络故障。读不到具体码也没关系:地址以 {@code chrome-error://} 开头本身就是证据。
+   */
+  private static final String CHROME_ERROR_PAGE_PROBE_JS = """
+      () => {
+        const root = document.querySelector('#main-frame-error');
+        const codeNode = document.querySelector('.error-code');
+        if (!root && !codeNode) return '';
+        const scope = codeNode || root;
+        const text = scope.innerText || scope.textContent || '';
+        const match = text.match(/ERR_[A-Z_]+/);
+        return match ? match[0] : '';
+      }
+      """;
+
+  /**
+   * 导航失败之后探测到的「Chrome 自己的网络错误页」
+   */
+  static final class ChromeNetworkFailure {
+    /** Chrome 的错误码(例如 {@code ERR_NETWORK_CHANGED});页面上读不到具体码时为 {@code null} */
+    final String netError;
+
+    /** 错误页自己的地址,通常是 {@code chrome-error://chromewebdata/} */
+    final String pageUrl;
+
+    ChromeNetworkFailure(String netError, String pageUrl) {
+      this.netError = netError;
+      this.pageUrl = pageUrl;
+    }
+  }
+
+  /**
+   * 这一次导航失败,是不是「Chrome 停在自己的网络错误页上」
+   *
+   * <p>
+   * 两条判据:页面地址已经是 {@code chrome-error://},或者页面上能读到 Chrome 自己渲染的
+   * {@code ERR_xxx}。都拿不到就返回 {@code null}(调用方照旧报原来的错)。
+   *
+   * <p>只读、无副作用,而且**任何取不到都只是「没探到」** —— 它只是附加信息,不能把一条失败回执
+   * 变成异常。包级可见是为了让单测直接对着一个真实的错误页问一次。
+   */
+  static ChromeNetworkFailure detectChromeNetworkFailure(Page page) {
+    if (page == null) {
+      return null;
+    }
+    String pageUrl = null;
+    try {
+      pageUrl = page.url();
+    } catch (PlaywrightException ignored) {
+      // 读不到地址就只看 DOM
+    }
+    boolean errorPageUrl = pageUrl != null && pageUrl.startsWith(CHROME_ERROR_SCHEME);
+    String netError = null;
+    try {
+      Object raw = page.evaluate(CHROME_ERROR_PAGE_PROBE_JS);
+      if (raw instanceof String) {
+        Matcher match = Pattern.compile("ERR_[A-Z_]+").matcher((String) raw);
+        if (match.find()) {
+          netError = match.group();
+        }
+      }
+    } catch (PlaywrightException ignored) {
+      // 错误页的 DOM 也可能读不到(上下文正在重建),那就只剩地址这一条判据
+    }
+    return netError != null || errorPageUrl ? new ChromeNetworkFailure(netError, pageUrl) : null;
+  }
+
+  /**
+   * 在最多 {@link #CHROME_ERROR_PROBE_ATTEMPTS} 次探测里等错误页出现
+   *
+   * <p>页面已经是一张**正常**页面时就立刻收手:那种情况下导航失败是别的原因(例如某个子资源拖着
+   * {@code load} 没结束),再等下去没有意义。
+   */
+  private static ChromeNetworkFailure awaitChromeNetworkFailure(BrowserInstance inst) {
+    for (int attempt = 1; attempt <= CHROME_ERROR_PROBE_ATTEMPTS; attempt++) {
+      ChromeNetworkFailure found = detectChromeNetworkFailure(inst.page);
+      if (found != null) {
+        return found;
+      }
+      String current = safeUrl(inst);
+      boolean stillCouldBeAnErrorPage = current == null || current.isEmpty() || "about:blank".equals(current)
+          || current.startsWith(CHROME_ERROR_SCHEME);
+      if (!stillCouldBeAnErrorPage) {
+        return null;
+      }
+      if (attempt < CHROME_ERROR_PROBE_ATTEMPTS) {
+        sleepQuietly(CHROME_ERROR_PROBE_INTERVAL_MS);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 导航失败时,如果确认是 Chrome 的网络错误页,就给一条**有方向**的失败回执
+   *
+   * <p>
+   * 背景见 {@link ActionError#NETWORK_ERROR}:老回执只有一句 {@code Timeout 30000ms exceeded} +
+   * {@code errorCode:ACTION_TIMEOUT},而调用方(尤其是看不到画面的 agent)只能从这句里去猜,
+   * 于是去查选择器、去重复导航。真相是这一页**根本没有内容**。
+   *
+   * @return 命中网络错误页时返回失败回执;不是网络错误页就返回 {@code null},由调用方报原来的错
+   */
+  private static RespBodyVo networkFailureReceipt(BrowserInstance inst, String url, PlaywrightException cause) {
+    String netError = ActionError.netErrorFromMessage(cause.getMessage());
+    String pageUrl = null;
+    if (netError != null) {
+      // 快路:Playwright 自己就把 net::ERR_xxx 写在异常里了,不必再去页面上找
+      pageUrl = safeUrl(inst);
+      if (pageUrl != null && !pageUrl.startsWith(CHROME_ERROR_SCHEME)) {
+        pageUrl = null;
+      }
+    } else {
+      // 慢路:异常只是一句 Timeout,真相在页面上(错误页可能晚一拍才提交)
+      ChromeNetworkFailure probe = awaitChromeNetworkFailure(inst);
+      if (probe != null) {
+        netError = probe.netError;
+        pageUrl = probe.pageUrl;
+      }
+    }
+    if (netError == null && pageUrl == null) {
+      return null;
+    }
+    Kv data = Kv.by("errorCode", ActionError.NETWORK_ERROR)
+        .set("retryable", true)
+        .set("retryAfterMs", ActionError.retryAfterMs(ActionError.NETWORK_ERROR))
+        .set("networkErrorPage", true)
+        .set("urlRequested", url);
+    if (netError != null) {
+      data.set("netError", netError);
+    }
+    if (pageUrl != null) {
+      data.set("errorPageUrl", pageUrl);
+    }
+    data.set("hint", "Chrome 没打开这个地址,停下来的是它自己的网络错误页(页面上只有「无法访问此网站」那几行):"
+        + "先去确认本机代理 / VPN 的状态,再重发;不要在这一页上找元素或换选择器");
+    RespBodyVo response = RespBodyVo.fail(ActionError.describeNetworkError("go_to_url", netError));
+    response.setData(data);
+    return response;
   }
 
   /**
@@ -4630,6 +4798,24 @@ public class PlaywrightService {
    */
   public RespBodyVo uploadFile(Long browserId, Integer index, String selector, String path, Integer timeoutMs,
       String frame) {
+    return uploadFile(browserId, index, selector, path, timeoutMs, frame, null);
+  }
+
+  /**
+   * 同上,额外支持 {@code nth}(选择器命中多个 file input 时显式指定用第几个)
+   *
+   * <p>
+   * <b>为什么 upload_file 尤其需要它</b>:真实站点上的 file input 几乎都是隐藏的,而且常常**同时存在
+   * 好几份**。实测 X 的投稿页上 {@code input[data-testid='fileInput']} 匹配到 2 个(发推弹窗里一个、
+   * 后面内联编辑器里一个),两个都是 0×0 —— 动作类命令那套「优先挑可见的」在这里完全无从判断,
+   * 只能按文档顺序取第一个。这次恰好蒙对了;顺序反过来就会把文件静默塞进另一个编辑器。
+   * 所以这里除了收 {@code nth},回执还会**报出 {@code matched} 与 {@code chosenIndex}**,
+   * 让调用方至少能发现「这里存在歧义」。
+   *
+   * @param nth 选择器命中多个时的序号(0 基);不传按文档顺序取第一个
+   */
+  public RespBodyVo uploadFile(Long browserId, Integer index, String selector, String path, Integer timeoutMs,
+      String frame, Integer nth) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return RespBodyVo.fail("没有找到对应的浏览器实例：" + browserId);
@@ -4649,15 +4835,44 @@ public class PlaywrightService {
     Locator locator;
     String target;
     Frame probeFrame;
+    Kv pick = new Kv();
     if (selector != null && !selector.isBlank()) {
+      // 权威的监听器探测(CDP)必须知道元素在哪个 frame 里:不传 frame 参数就是主 frame
+      Frame root;
       try {
-        // 权威的监听器探测(CDP)必须知道元素在哪个 frame 里:不传 frame 参数就是主 frame
-        probeFrame = frame == null || frame.isBlank() ? inst.page.mainFrame() : frameOf(inst, frame);
-        locator = locatorIn(inst, frame, selector);
+        root = frame == null || frame.isBlank() ? inst.page.mainFrame() : frameOf(inst, frame);
       } catch (IllegalArgumentException e) {
         return RespBodyVo.fail("upload_file 失败：" + e.getMessage());
       }
+      probeFrame = root;
       target = "selector=" + selector + frameSuffix(frame);
+      // 先数一次:命中 0 个时当场失败,不要等满可操作性超时再报一句「超时」——
+      // 那会让调用方以为「元素在、只是不可点」,方向全错(与动作类命令的 ELEMENT_NOT_FOUND 同一条理由)
+      int matched = root.locator(selector).count();
+      if (matched == 0) {
+        return RespBodyVo.fail(locateFailure("upload_file", target, new PlaywrightException(
+            ActionError.ELEMENT_NOT_FOUND + " upload_file 的选择器 " + target + " 在页面里匹配到 0 个元素")));
+      }
+      if (nth != null && (nth < 0 || nth >= matched)) {
+        return RespBodyVo.fail("upload_file 的 nth 越界：" + nth + "，该选择器共匹配 " + matched
+            + " 个元素（nth 从 0 开始，可用 get_element_count 复核数量）");
+      }
+      boolean explicitNth = nth != null;
+      int chosenIndex = explicitNth ? nth : 0;
+      locator = explicitNth ? root.locator(selector).nth(nth) : root.locator(selector).first();
+      pick.set("matched", matched);
+      if (matched > 1 || explicitNth) {
+        pick.set("chosenIndex", chosenIndex);
+      }
+      if (explicitNth) {
+        pick.set("explicitNth", true).set("selectorNote",
+            "按调用方指定的 nth=" + chosenIndex + " 定位（该选择器共匹配 " + matched + " 个元素）；显式指定时不做可见性挑选");
+      } else if (matched > 1) {
+        pick.set("visibleMatched", visibleMatches(root, selector, matched)).set("selectorNote",
+            "选择器匹配到 " + matched + " 个元素,这次用的是第 " + chosenIndex
+                + " 个（file input 基本都是隐藏的,这里按**文档顺序**取第一个,不做可见性挑选）;"
+                + "要精确指定就传 nth,或把选择器写得更具体");
+      }
     } else {
       locator = locatorOf(inst, index);
       target = "index=" + index;
@@ -4677,13 +4892,14 @@ public class PlaywrightService {
     }
     Kv data = Kv.by("filename", file.getFileName().toString()).set("path", file.toString())
         .set("size", UploadStore.sizeOf(file)).set("target", target).set("mode", "native");
+    data.set(pick);
     // setInputFiles 的语义只是「把文件放进 input」,页面有没有消费完全是另一回事 —— 所以必须回读。
     // 顺序上**先取回执、再回读 input**:观察窗口(最多 500ms)正好给框架把文件收走的时间,
     // 回读看到的就是「被消费之后」的状态;而且回执里的 changed 本身就是回读结论要用的证据。
     Kv report = receipt(before, inst, probeFrame);
     data.set("changed", report.get("changed")).set("changeStatus", report.get("changeStatus"))
         .set("observationWindowMs", report.get("observationWindowMs"));
-    appendUploadReadback(locator, probeFrame, elementResolveScript(inst, index, selector), data,
+    appendUploadReadback(locator, probeFrame, elementResolveScript(inst, index, selector, nth), data,
         Boolean.TRUE.equals(report.getBoolean("changed")));
     if ("noListener".equals(data.getStr("consumed")) && Boolean.FALSE.equals(report.getBoolean("changed"))) {
       data.set("effective", false);
@@ -4692,14 +4908,44 @@ public class PlaywrightService {
   }
 
   /**
+   * 选择器命中的前 {@link #VISIBLE_SCAN_LIMIT} 个里,有几个是可见的
+   *
+   * <p>只在「命中多个」时才调用(upload_file 回执用):file input 基本都是隐藏的,报一个
+   * {@code visibleMatched} 是为了让调用方看出「这个选择器是不是还捎带匹配到了别的可见元素」。
+   * 数不出来就少报一个 —— 这只是附加信息,不该让一条上传命令失败。
+   */
+  private static int visibleMatches(Frame root, String selector, int matched) {
+    int scanned = Math.min(matched, VISIBLE_SCAN_LIMIT);
+    int visible = 0;
+    for (int i = 0; i < scanned; i++) {
+      try {
+        if (root.locator(selector).nth(i).isVisible()) {
+          visible++;
+        }
+      } catch (PlaywrightException ignored) {
+        // 见上:附加信息,读不到就算了
+      }
+    }
+    return visible;
+  }
+
+  /**
    * 给 CDP 用的「解析这个元素」表达式
    *
    * <p>优先用调用方给的 CSS 选择器;按索引定位时用快照里的 xpath。两条都拿不到就返回 null,
    * 这时只走启发式探测(结论会如实标成「未知」,而不是「没有」)。
+   *
+   * <p>带 {@code nth} 时要按序号取,不能用 {@code document.querySelector} —— 命中多个 file input 时
+   * 它永远只认第一个,回读就会去问另一个元素,结论跟着错。
    */
   private static String elementResolveScript(BrowserInstance inst, Integer index, String selector) {
+    return elementResolveScript(inst, index, selector, null);
+  }
+
+  private static String elementResolveScript(BrowserInstance inst, Integer index, String selector, Integer nth) {
     if (selector != null && !selector.isBlank()) {
-      return "document.querySelector(" + JSON.toJSONString(selector) + ")";
+      String all = "document.querySelectorAll(" + JSON.toJSONString(selector) + ")";
+      return nth == null ? all + "[0]" : all + "[" + nth + "]";
     }
     if (index == null || inst.domState == null) {
       return null;
@@ -4863,6 +5109,13 @@ public class PlaywrightService {
   /** 同上,额外支持 {@code frame} */
   public RespBodyVo uploadFileInline(Long browserId, Integer index, String selector, String filename,
       String contentType, String contentBase64, String url, Integer timeoutMs, String frame) {
+    return uploadFileInline(browserId, index, selector, filename, contentType, contentBase64, url, timeoutMs, frame,
+        null);
+  }
+
+  /** 同上,额外支持 {@code nth}(选择器命中多个 file input 时显式指定用第几个,见 {@link #uploadFile}) */
+  public RespBodyVo uploadFileInline(Long browserId, Integer index, String selector, String filename,
+      String contentType, String contentBase64, String url, Integer timeoutMs, String frame, Integer nth) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return RespBodyVo.fail("没有找到对应的浏览器实例：" + browserId);
@@ -4903,7 +5156,7 @@ public class PlaywrightService {
     } catch (IOException e) {
       return RespBodyVo.fail("upload_file 失败：写入服务端暂存目录出错（" + briefMessage(e.getMessage()) + "）");
     }
-    RespBodyVo uploaded = uploadFile(browserId, index, selector, saved.getStr("path"), timeoutMs, frame);
+    RespBodyVo uploaded = uploadFile(browserId, index, selector, saved.getStr("path"), timeoutMs, frame, nth);
     if (!uploaded.isOk()) {
       return uploaded;
     }
@@ -6411,15 +6664,82 @@ public class PlaywrightService {
   // ==================== 元素状态 ====================
 
   public RespBodyVo isVisible(Long browserId, int index) {
-    return read(browserId, index, "is_visible", "visible", (locator) -> locator.isVisible());
+    return isVisible(browserId, Integer.valueOf(index), null, null);
+  }
+
+  /**
+   * 元素现在可不可见;{@code index} 与 {@code selector} 二选一
+   *
+   * <p>
+   * <b>为什么这一族也要收 {@code selector}</b>:以前只有 {@code index} 这一条路,而「元素有没有索引」
+   * 取决于它在不在视口内、快照给没给它编号 —— 偏偏「这个按钮现在能不能点」正是**不想读整页快照**时
+   * 才问的问题。实测(2026-10-01)一个批次里 {@code get_element_text} 传 {@code selector} 成功,
+   * 紧跟的 {@code is_enabled} 传 {@code selector} 却回「缺少参数 index」,同一族命令两套参数规则。
+   * 现在这三个与 {@code get_element_text} / {@code get_element_listeners} 同形。
+   *
+   * @param frame {@code selector} 在跨域 iframe 里时传(序号见 {@code list_frames},或 URL/name 子串)
+   */
+  public RespBodyVo isVisible(Long browserId, Integer index, String selector, String frame) {
+    return readState(browserId, index, selector, frame, "is_visible", "visible", (locator) -> locator.isVisible());
   }
 
   public RespBodyVo isEnabled(Long browserId, int index) {
-    return read(browserId, index, "is_enabled", "enabled", (locator) -> locator.isEnabled());
+    return isEnabled(browserId, Integer.valueOf(index), null, null);
+  }
+
+  /** 元素现在可不可以用(禁用/只读不算);{@code index} 与 {@code selector} 二选一,见 {@link #isVisible} */
+  public RespBodyVo isEnabled(Long browserId, Integer index, String selector, String frame) {
+    return readState(browserId, index, selector, frame, "is_enabled", "enabled", (locator) -> locator.isEnabled());
   }
 
   public RespBodyVo isChecked(Long browserId, int index) {
-    return read(browserId, index, "is_checked", "checked", (locator) -> locator.isChecked());
+    return isChecked(browserId, Integer.valueOf(index), null, null);
+  }
+
+  /** 复选框/单选框现在有没有被勾上;{@code index} 与 {@code selector} 二选一,见 {@link #isVisible} */
+  public RespBodyVo isChecked(Long browserId, Integer index, String selector, String frame) {
+    return readState(browserId, index, selector, frame, "is_checked", "checked", (locator) -> locator.isChecked());
+  }
+
+  /**
+   * 读元素状态类命令的统一入口:{@code index} 与 {@code selector} 二选一
+   *
+   * <p>与只认索引的 {@link #read} 并列存在,而不是把它改掉 —— {@code get_element_html} /
+   * {@code get_element_value} 这些仍走 {@code read},两者的差别只在「要不要收 selector」。
+   */
+  private RespBodyVo readState(Long browserId, Integer index, String selector, String frame, String action,
+      String key, Function<Locator, Object> reader) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return notFound(browserId);
+    }
+    if ((selector == null || selector.isBlank()) && index == null) {
+      return RespBodyVo.fail(action + " 需要 index 或 selector 之一");
+    }
+    Locator locator;
+    String target;
+    if (selector != null && !selector.isBlank()) {
+      try {
+        locator = locatorIn(inst, frame, selector);
+      } catch (IllegalArgumentException e) {
+        return RespBodyVo.fail(action + " 失败：" + e.getMessage());
+      }
+      if (locator.count() == 0) {
+        return RespBodyVo.fail(action + " 没匹配到元素: 选择器 " + selector + frameSuffix(frame));
+      }
+      target = "选择器 " + selector + frameSuffix(frame);
+    } else {
+      locator = locatorOf(inst, index);
+      if (locator == null) {
+        return RespBodyVo.fail(action + " 索引越界: " + index + indexHint(inst));
+      }
+      target = "index=" + index;
+    }
+    try {
+      return RespBodyVo.ok(Kv.by(key, reader.apply(locator)).set("target", target));
+    } catch (PlaywrightException e) {
+      return RespBodyVo.fail(actionFailure(action, e));
+    }
   }
 
   // ==================== 按选择器/文本/语义定位 ====================

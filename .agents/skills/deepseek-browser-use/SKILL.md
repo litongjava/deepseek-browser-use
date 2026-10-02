@@ -93,6 +93,8 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **`send_keys` 回了 `ok:true` 但页面毫无反应** | 看回执里的 `focused`：焦点可能根本不在输入框上（`isBody:true` 时会给 `focusNote`）。先 `click` 目标输入框，再送键 |
 | **要往输入框里打一段文本，却不知道该用哪条命令**（隐藏输入框没选择器、又不想先取快照拿索引） | 直接 `send_keys` 传整段文本（`keys: "CRCL"`）：回执 `data.mode` 为 `type` 时说明走的是逐字符打字（进框架模型）；`Enter` / `Control+A` / `Shift+Enter` 这类**按键**走 `mode:press`。判据是输入形态，不用你选 |
 | **`go_to_url` 报失败，可地址栏其实已经跳过去了** | 幂等导航现在会读地址栏核对（忽略 `?vd_source=…` 这类会话参数），到达了就按成功返回并带 `data.warning` |
+| **`go_to_url` 等满 30 秒才失败，或者只回一句「Timeout」** | 先看 `data.errorCode`：是 `NETWORK_ERROR` 就说明**页面是 Chrome 自己的网络错误页**（`data.netError` 给错误码，如 `ERR_NETWORK_CHANGED`），这一页没有任何内容可读 —— 去查本机代理 / VPN（TUN 抖动、刚切节点、断网重连），等几秒重发；**不要**在这一页上找元素或换选择器（第 74 条） |
+| **`upload_file` 传了 `selector`，但不确定文件进了哪个框** | 看回执的 `data.matched`：**大于 1 就是「按文档顺序猜的」**（file input 都不做可见性挑选），`chosenIndex` / `visibleMatched` / `selectorNote` 会说清这次用了哪个；要精确指定就传 `nth`，或把选择器写具体（第 73 条） |
 | **把二维码/验证码图给人，人说"扫不出来 / 颜色太多了"** | 是 `get_browser_state` 画的**彩色高亮层被截进了图里**（第 54 条）。现在所有截图口都会自动隐藏它；旧构建用 `execute_js` 删掉 `#playwright-highlight-container` 再截。确认真干净了用**像素直方图**：正常二维码只有黑白灰 |
 | **按文本点了一下，回 `ok:true` 但页面毫无反应** | 看 `data.textMatch`：`contains` 说明点中的是"包含"这个词的**更长容器**（第 55 条）。现在按「完全相等 → 可点击 → 可见 → 文本短」打分，`data.hit.text` / `data.textClickable` 会告诉你到底点中了什么 |
 | **图表上的「文字」怎么都读不出来**（K 线的时间轴日期、刻度、地图上的标注） | 那些是画在 `canvas` 上的**像素**，不是 DOM 文字，`innerText` 必然为空——而且 canvas **不进快照**（不可交互 → 没索引），所以它读不到也不在 `data.text` 里。正确做法：① 读页面上**同时是文字**的地方（图例 / 数据面板 / 工具栏，那里是真 DOM 文字）；② 需要图上某一点的数值就用鼠标按住（见下一条）；③ 实在只能读像素才截图 + `ocr_image`。诊断时可用 `get_element_text` 传 `selector` + `canvasOnly:true`：它会回 `canvasOnly:true` 与 `hint`，直接告诉你「不是选择器错了」 |
@@ -262,7 +264,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 
 | 方法 | 说明 |
 | --- | --- |
-| `navigate` / `go_to_url` | 打开地址（两者等价）；`go_to_url` 是幂等导航，会读地址栏核对是否真的到了 |
+| `navigate` / `go_to_url` | 打开地址（两者等价）；`go_to_url` 是幂等导航，会读地址栏核对是否真的到了。**打不开的地址回 `errorCode:NETWORK_ERROR` + `data.netError`**（Chrome 的错误码，例如 `ERR_NETWORK_CHANGED`）—— 那是 **Chrome 自己的网络错误页**，页面没有任何内容可读，先去看代理 / VPN，别去查选择器 |
 | `go_back` / `go_forward` / `reload` | 后退 / 前进 / 刷新 |
 | `get_url` / `get_title` | 读当前 URL / 标题 |
 | `get_browser_state` | 页签信息 + 元素索引 + 结构化文本（见第二节） |
@@ -280,7 +282,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 | `input_text` | 覆盖式填充（会清空），`text` 必填 |
 | `type_text` | 逐字输入，**不清空**原有内容 |
 | `send_keys` / `key_down` / `key_up` | 按键（`Enter`、`Tab`、`Control+A`、`ArrowDown`）/ 按住 / 松开 |
-| `upload_file` | 上传文件：`path` 是**服务器本地路径**，`index` 与 `selector` 二选一（**优先 `selector`**：隐藏的 file input 没有索引） |
+| `upload_file` | 上传文件：`path` 是**服务器本地路径**，`index` 与 `selector` 二选一（**优先 `selector`**：隐藏的 file input 没有索引）。命中多个 file input 时看回执的 `data.matched` / `chosenIndex`（**不做可见性挑选**，按文档顺序取第一个），要精确指定就传 `nth` |
 | `drag_element_by_index` | 把第 `index` 个元素拖到第 `targetIndex` 个元素 |
 | `get_dropdown_options` / `select_dropdown_option` | 读下拉选项 / 按**选项文本**（label）选择 |
 | `scroll` / `scroll_to_text` | 翻页（`down` + `numPages`）或对某元素滚动；`scroll_to_text` 找不到文本会等满 30 秒，别用它探测元素是否存在 |
@@ -311,7 +313,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 | `get_element_listeners` | 这个元素挂了哪些事件监听器：`data.vue2`/`vue3`/`react`/`inline`/`jquery`、`data.listeners`、`data.hasListeners`、`data.detection`。**「有没有挂事件」是 SPA 自动化的基础诊断信息**，凡「设了值 / 上传了文件但页面没反应」先查它 |
 | `get_element_count` | `data.count`（CSS 选择器匹配数量，不需要索引） |
 | `get_element_box` | `data.x/y/width/height`；元素不可见时失败 |
-| `is_visible` / `is_enabled` / `is_checked` | `data.visible` / `data.enabled` / `data.checked` |
+| `is_visible` / `is_enabled` / `is_checked` | `data.visible` / `data.enabled` / `data.checked` + `data.target`。**这三个也是 `index` 与 `selector` 二选一**（与 `get_element_text` 同形）：元素有没有索引取决于它在不在视口内，而「这个按钮现在能不能点」正是不想读整页快照时才问的 |
 
 > **`hasListeners` 有三态，别把 `null` 当成 `false`**：`true` 确认有（CDP 清单非空或探到框架痕迹）、`false` **确认没有**（只有 CDP，即 `data.detection: "cdp"` 才给得出这个结论）、`null` **未知**（既没走 CDP 也没探到框架痕迹；原生 `addEventListener` 在元素上不留可枚举痕迹）。元素清单（`get_interactive_map`）里的 `hasListeners` 是**启发式的**，只会是 `true` 或 `null`，永远不会是 `false`。
 
@@ -552,10 +554,10 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 5. **`execute_js` 里的 `.click()` 触发不了「真点击才有的东西」**：JS 派发的 click 不是可信事件，`window.open` 会被浏览器拦掉，部分框架的提交按钮也不认它，**而接口照样回 `ok:true`**。要真点击用 `click_element_by_selector` / `click_element_by_index`。判断有没有生效看 `data.mode`（`js` 就是没走真实交互）与 `data.changed`。
 6. **「设了值 / 上传了文件 / 派发了事件，但页面没反应」先查监听器**：`get_element_listeners` 或在 `get_interactive_map` 里看 `hasListeners`。`upload_file` 的回执会直接给 `data.consumed`（`listened`/`noListener`/`unknown`）与 `data.hint`；**看到 `noListener` 就别再换选择器了**，改用组件方法直调（`execute_js` 里拿到页面上的实例调它的 `upload()`），或先点它的可见父元素。
 7. **`ELEMENT_NOT_FOUND` = 选择器一个都没匹配到**（不是超时、不是被遮挡）：去改选择器，先 `get_element_count` 复核数量，再检查父子/兄弟关系写错没有。
-8. **`get_element_count` 说有好几个、点击/输入却不可操作**：多半命中了**隐藏副本**（同名控件在隐藏弹窗里还有一份，是 0×0）。动作类命令会**优先挑可见的那个**，把解析结果写进回执（`matched`/`chosenIndex`/`visibleMatched`/`hiddenMatchNote`）。
+8. **`get_element_count` 说有好几个、点击/输入却不可操作**：多半命中了**隐藏副本**（同名控件在隐藏弹窗里还有一份，是 0×0）。动作类命令会**优先挑可见的那个**，把解析结果写进回执（`matched`/`chosenIndex`/`visibleMatched`/`hiddenMatchNote`）；`upload_file` 是例外 —— file input 基本都是隐藏的，所以它**不挑可见性**、按文档顺序取第一个，回执给 `matched`/`chosenIndex`，要精确指定就传 `nth`（第 73 条）。
 9. **回执里 `probeTrustworthy:false` / `observationComplete:false` 时这次取证什么都不能说明**：页面正在导航或 SPA 整页重建，`changed` 与 `coveredBy` 都是假象。**既不要重复点击**（可能重复提交），也不要急着重新取快照，等几秒再说。
 10. **`frame` 为 null 是 `PAGE_NAVIGATING`**（用户刷新、SPA 重建），**可重试**（建议 1 秒后重发）；只读命令服务端会自己等页面回来。
 11. **`send_keys` 回了 `ok:true` 但页面毫无反应**：看回执里的 `focused` —— 焦点可能根本不在输入框上（落在 `<body>` 上时会给 `focusNote`）。先 `click` 目标输入框再送键。
 12. **`go_to_url` 报失败、可地址栏其实已经跳过去了**：幂等导航会读一次地址栏核对（比较主机+路径，忽略 `?vd_source=…` 这类会话参数），到达了就按成功返回并带 `data.warning`。
 
-其余 60 条里最值得先翻的几类：跨域 iframe（第 37 条）、弹窗与遮挡（第 20 / 39 条）、网络响应体缓存（第 23 条）、`data/<id>/` 与日志不会自动清理（第 27 / 34 条）、强杀服务留下孤儿浏览器（第 32 条）、`get_dialog` 是「最近一次弹窗」（第 20 条）、`Object doesn't exist` 伪故障的机制（第 47 条）、整页截不出图的 ``capture_degraded``（第 48 条）、回读看不到 input 不等于上传失败（第 45 条）、**截图里的彩色高亮层会让二维码扫不出来**（第 54 条）、**按文本点击点中了"包含"它的长容器**（第 55 条）、**`get_form_state` 对自定义下拉撒的两个谎**（第 56 条）、**`wait_for_idle` 在轮询页面上永远等不到**（第 57 条）、**首次 `start` 卡在下载浏览器**（第 58 条）、**JDK 架构/版本不匹配让服务起不来**（第 59 条）、**`get_response_body` 传 `requestId` 读不到时的三种归因**（第 60 条）、**实时页面上索引「永久失效」的成因与新的结构/内容变更分界**（第 61 条）、**`--select` 在失败批次上、`--params` 认整个请求体、`js --retry-on-spurious`**（第 62–64 条）、**传了参数却被静默忽略（看 `unknownParams`）**（第 69 条）、**自定义控件里的按钮扫不到、容器 `height:0` 不代表没渲染**（第 70 条）、**快照只读到一部分时结论可能是反的**（第 71 条）、**敏感字段要先问用户怎么填**（第 72 条）。
+其余 60 条里最值得先翻的几类：跨域 iframe（第 37 条）、弹窗与遮挡（第 20 / 39 条）、网络响应体缓存（第 23 条）、`data/<id>/` 与日志不会自动清理（第 27 / 34 条）、强杀服务留下孤儿浏览器（第 32 条）、`get_dialog` 是「最近一次弹窗」（第 20 条）、`Object doesn't exist` 伪故障的机制（第 47 条）、整页截不出图的 ``capture_degraded``（第 48 条）、回读看不到 input 不等于上传失败（第 45 条）、**截图里的彩色高亮层会让二维码扫不出来**（第 54 条）、**按文本点击点中了"包含"它的长容器**（第 55 条）、**`get_form_state` 对自定义下拉撒的两个谎**（第 56 条）、**`wait_for_idle` 在轮询页面上永远等不到**（第 57 条）、**首次 `start` 卡在下载浏览器**（第 58 条）、**JDK 架构/版本不匹配让服务起不来**（第 59 条）、**`get_response_body` 传 `requestId` 读不到时的三种归因**（第 60 条）、**实时页面上索引「永久失效」的成因与新的结构/内容变更分界**（第 61 条）、**`--select` 在失败批次上、`--params` 认整个请求体、`js --retry-on-spurious`**（第 62–64 条）、**传了参数却被静默忽略（看 `unknownParams`）**（第 69 条）、**自定义控件里的按钮扫不到、容器 `height:0` 不代表没渲染**（第 70 条）、**快照只读到一部分时结论可能是反的**（第 71 条）、**敏感字段要先问用户怎么填**（第 72 条）、**同名隐藏 file input 有两份时 `upload_file` 是猜的**（第 73 条）、**`go_to_url` 的「Timeout」其实是 Chrome 的网络错误页**（第 74 条）。

@@ -1,6 +1,8 @@
 package nexus.io.ai.browser.service;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Classify the complete Playwright call log, not only the first timeout line.
@@ -72,6 +74,55 @@ public final class ActionError {
   public static final String PAGE_NAVIGATING = "PAGE_NAVIGATING";
 
   /**
+   * Chrome 压根没打开这个地址:页面停在他自己的**网络错误页**上
+   *
+   * <p>
+   * <b>为什么要单独一个码</b>:实测(2026-10-01,本机开着 v2ray 的 TUN)第一次 {@code go_to_url}
+   * 到 x.com 时,回执只有一句 {@code go_to_url 失败：Timeout 30000ms exceeded.} 加
+   * {@code errorCode:ACTION_TIMEOUT} —— 调用方等了 30 秒,拿到的线索却指向「超时」这个方向,
+   * 而真相是**这一页是 Chrome 的错误页**({@code ERR_NETWORK_CHANGED},TUN 网卡抖动),
+   * 页面上一个字的内容都没有。当时是另跑一次 {@code get_browser_state}、从错误页的正文里
+   * 才读出 {@code ERR_NETWORK_CHANGED} 的。
+   *
+   * <p>
+   * 这一族错误的代价全在**方向**上:报成 {@code ACTION_TIMEOUT} 会让人以为「元素在、只是不可点」
+   * 或「站点慢」,于是去查选择器、去重试;报成 {@code NETWORK_ERROR} 才会让人去看代理。
+   * 判据有两条,任一命中即可:异常文本里带 {@code net::ERR_xxx}(Chrome 自己的错误码),
+   * 或者导航失败后探测到页面就是 {@code chrome-error://} 那张错误页。
+   */
+  public static final String NETWORK_ERROR = "NETWORK_ERROR";
+
+  /**
+   * Chrome 的网络错误码,例如 {@code net::ERR_NETWORK_CHANGED} 里的 {@code ERR_NETWORK_CHANGED}
+   *
+   * <p>
+   * <b>必须忽略大小写</b>:{@link #code} 拿到的是**已转小写**的文本,而 {@code netErrorFromMessage}
+   * 又会被单独用在同一份原文上。曾经写成大小写敏感,结果 {@code net::ERR_NETWORK_CHANGED} 在
+   * {@code code()} 里认不出来,整条网络错误又退回成 {@code ACTION_TIMEOUT}(由
+   * {@code ActionErrorTest.networkFailureIsNotSwallowedByTheTimeoutBranch} 钉着)。
+   */
+  private static final Pattern NET_ERROR_CODE = Pattern.compile("net::(ERR_[A-Za-z_]+)",
+      Pattern.CASE_INSENSITIVE);
+
+  /**
+   * 从异常文本里抠出 Chrome 的网络错误码
+   *
+   * <p>
+   * {@code page.navigate} 撞上网络层错误时抛的是
+   * {@code Error: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:1/} —— 错误码就在文本里,
+   * 不必再去页面上找。纯函数,便于单测。
+   *
+   * @return 大写的错误码(如 {@code ERR_CONNECTION_REFUSED});文本里没有就返回 {@code null}
+   */
+  public static String netErrorFromMessage(String message) {
+    if (message == null) {
+      return null;
+    }
+    Matcher matcher = NET_ERROR_CODE.matcher(message);
+    return matcher.find() ? matcher.group(1).toUpperCase(Locale.ROOT) : null;
+  }
+
+  /**
    * 这是「事件泵投递过来的伪故障」吗
    *
    * <p>
@@ -129,6 +180,11 @@ public final class ActionError {
     if (isPageNavigating(text)) {
       return PAGE_NAVIGATING;
     }
+    // 网络层的失败必须排在 timeout 之前:URL 打不开时 Playwright 常常只抛一句
+    // 「Timeout 30000ms exceeded」,而真相在 net::ERR_xxx 里(或者由调用方补上 NETWORK_ERROR 哨兵)
+    if (netErrorFromMessage(text) != null || text.contains("network_error")) {
+      return NETWORK_ERROR;
+    }
     if (text.contains("element_read_only") || text.contains("read-only") || text.contains("readonly"))
       return "ELEMENT_READ_ONLY";
     if (text.contains("element_disabled") || text.contains("not enabled") || text.contains("element is disabled"))
@@ -166,12 +222,17 @@ public final class ActionError {
    * {@code SPURIOUS_DISPATCH} 也**刻意不标成可重试**:只读命令服务端已经自己重发过了
    * (见 {@code ActionService} 的 {@code SPURIOUS_RETRY_SAFE}),而动作类命令可能已经生效 ——
    * 在这里回一句「可以重试」会诱导调用方重复提交。
+   *
+   * <p>
+   * {@code NETWORK_ERROR} **要标成可重试**:它不是站点语义决定的,而是本机网络/代理的瞬时状态
+   * (实测 TUN 网卡抖动),等几秒重发一次多半就过了;不让它重试只会逼调用方去改选择器。
    */
   public static boolean retryable(String code) {
     switch (code) {
     case "RATE_LIMITED":
     case "ACTION_TIMEOUT":
     case "STALE_ELEMENT":
+    case NETWORK_ERROR:
     case PAGE_NAVIGATING:
       return true;
     default:
@@ -193,12 +254,27 @@ public final class ActionError {
       return 1_500;
     case "STALE_ELEMENT":
       return 300;
+    case NETWORK_ERROR:
+      // 代理/TUN 抖动之后要几秒才恢复(换节点、重连),给 5 秒;太短的重试只会连着失败几次
+      return 5_000;
     case PAGE_NAVIGATING:
       // SPA 整页重建通常几百毫秒就回来了;给 1 秒,足够而不用让调用方干等
       return 1_000;
     default:
       return 0;
     }
+  }
+
+  /**
+   * 网络错误页失败的统一措辞
+   *
+   * <p>
+   * 把 {@code netError} 拼成 {@link #code} 认得的形态({@code NETWORK_ERROR} 哨兵 + {@code net::ERR_xxx}),
+   * 再交给 {@link #describe} —— 理由只有一份,改文案时不会两边漏。调用方(导航)只需要说
+   * 「我探到了哪个错误码」,不必自己拼中文。
+   */
+  public static String describeNetworkError(String action, String netError) {
+    return describe(action, NETWORK_ERROR + (netError == null ? "" : " net::" + netError));
   }
 
   public static String describe(String action, String message) {
@@ -237,6 +313,20 @@ public final class ActionError {
     case PAGE_NAVIGATING:
       reason = "页面正在导航/重载，这一刻拿不到 DOM（主 frame 还是 null）："
           + "等它稳定下来再重发即可；只读命令服务端已经自己等过，动作类命令请先读页面状态确认没有生效";
+      break;
+    case NETWORK_ERROR:
+      String netCode = netErrorFromMessage(message);
+      boolean aborted = "ERR_ABORTED".equals(netCode);
+      reason = "Chrome 压根没打开这个地址，页面停在他自己的**网络错误页**上"
+          + (netCode == null ? "" : "（错误码 " + netCode + "）")
+          + "："
+          + (aborted
+              ? "ERR_ABORTED 通常是这次导航被页面自己取消或替换掉了（例如点到了下载、站点主动跳走），"
+                  + "不一定是网络不通 —— 先确认地址本身能不能打开，再决定要不要重发"
+              : "这不是选择器写错，也不是「元素在、只是暂时不可点」—— 这一刻页面里根本没有内容可读。"
+                  + "常见成因：本机代理 / VPN 的 TUN 网卡抖动或刚切节点、代理进程还没起来、断网重连。"
+                  + "下一步：确认代理在跑，等一会儿（见 retryAfterMs）重发一次；"
+                  + "**不要**停在这一页上找元素或换选择器");
       break;
     case ACTION_UNCERTAIN:
       reason = "执行器抛了未预期异常，**无法判断动作是否已经生效**；"

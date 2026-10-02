@@ -59,9 +59,8 @@ public class CommandTableTest {
     cases.put("get_element_attribute", "index");
     cases.put("get_element_count", "selector");
     cases.put("get_element_box", "index");
-    cases.put("is_visible", "index");
-    cases.put("is_enabled", "index");
-    cases.put("is_checked", "index");
+    // is_visible / is_enabled / is_checked 现在也是 index 与 selector 二选一,
+    // 两个都没传时由服务层报「需要 index 或 selector 之一」(见下面的 uncovered 名单)
     cases.put("click_element_by_selector", "selector");
     cases.put("input_text_by_selector", "selector");
     cases.put("click_element_by_text", "text");
@@ -180,6 +179,9 @@ public class CommandTableTest {
         // get_element_text 同理:index/selector 二选一,两个都没传时由服务层报错
         // (canvas 这类不进快照的元素只能按 selector 定位,所以它不能是「必填 index」)
         "get_element_text",
+        // is_visible / is_enabled / is_checked 也统一成 index/selector 二选一了:
+        // 「元素有没有索引」取决于它在不在视口内,所以「这个按钮现在能不能点」不能只能按索引问
+        "is_visible", "is_enabled", "is_checked",
         // ocr_image 同理:path 或 index/selector 三选一,服务层报「需要 path,或 index / selector 之一」
         "ocr_image"));
     assertTrue("这些命令没有缺参数用例:" + uncovered, uncovered.isEmpty());

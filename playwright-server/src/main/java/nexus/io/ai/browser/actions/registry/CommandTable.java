@@ -108,14 +108,18 @@ public class CommandTable {
     // index 与 selector 传一个即可:隐藏的 file input 没有索引,只能用 selector;
     // path 可以是服务端绝对路径,也可以是 /playwright/upload 返回的 relativePath(按服务端 upload 目录解析);
     // 也可以完全不走 upload 接口:直接给 contentBase64 或 url,服务端自己落盘再交给页面
+    // nth:选择器命中多个 file input 时显式指定第几个(0 基)。实测 X 的投稿页上
+    // input[data-testid='fileInput'] 同时匹配到 2 个(弹窗里一个、后面的内联编辑器一个),而且
+    // **两个都是 0×0 隐藏**——「优先挑可见的」在这里无从判断,只能按文档顺序取第一个。所以除了要能
+    // 指定 nth,回执里还必须报出 matched 与 chosenIndex,否则调用方连「这里有没有歧义」都不知道
     put("upload_file", (svc, id, a) -> {
       if (optStr(a, "contentBase64") != null || optStr(a, "url") != null) {
         return svc.uploadFileInline(id, a.getInteger("index"), optStr(a, "selector"), optStr(a, "filename"),
             optStr(a, "contentType"), optStr(a, "contentBase64"), optStr(a, "url"), a.getInteger("timeoutMs"),
-            optStr(a, "frame"));
+            optStr(a, "frame"), a.getInteger("nth"));
       }
       return svc.uploadFile(id, a.getInteger("index"), optStr(a, "selector"), reqStr(a, "path"),
-          a.getInteger("timeoutMs"), optStr(a, "frame"));
+          a.getInteger("timeoutMs"), optStr(a, "frame"), a.getInteger("nth"));
     });
     put("drag_element_by_index",
         (svc, id, a) -> svc.dragElementByIndex(id, reqInt(a, "index"), reqInt(a, "targetIndex")));
@@ -142,9 +146,16 @@ public class CommandTable {
         optStr(a, "selector"), optStr(a, "frame")));
     put("get_element_count", (svc, id, a) -> svc.getElementCount(id, reqStr(a, "selector"), optStr(a, "frame")));
     put("get_element_box", (svc, id, a) -> svc.getElementBox(id, reqInt(a, "index")));
-    put("is_visible", (svc, id, a) -> svc.isVisible(id, reqInt(a, "index")));
-    put("is_enabled", (svc, id, a) -> svc.isEnabled(id, reqInt(a, "index")));
-    put("is_checked", (svc, id, a) -> svc.isChecked(id, reqInt(a, "index")));
+    // is_visible / is_enabled / is_checked:index 与 selector 二选一(与 get_element_text 同形)。
+    // 「这个按钮现在能不能点」正是不想读整页快照时才问的问题,而元素有没有索引取决于它在不在视口内,
+    // 所以这一族也必须能按选择器问 —— 实测一批里 get_element_text(selector) 成功、is_enabled(selector)
+    // 却回「缺少参数 index」,同一族两套规则
+    put("is_visible", (svc, id, a) -> svc.isVisible(id, a.getInteger("index"), optStr(a, "selector"),
+        optStr(a, "frame")));
+    put("is_enabled", (svc, id, a) -> svc.isEnabled(id, a.getInteger("index"), optStr(a, "selector"),
+        optStr(a, "frame")));
+    put("is_checked", (svc, id, a) -> svc.isChecked(id, a.getInteger("index"), optStr(a, "selector"),
+        optStr(a, "frame")));
 
     // ---------- 选择器与语义定位 ----------
     // frame:目标在跨域 iframe 里时必传(序号见 list_frames,或写 URL/name 子串);

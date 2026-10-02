@@ -555,3 +555,48 @@
       用户选了「在这里输入卡号给你」，可回答里只有选项本身，只好再问一次）；
     - 用户选了「我自己填」之后，**不要再把值要过来**；你的职责转成「把表单准备好、把焦点交给他」；
     - 说过的承诺要算数：讲了「验证码我不经手」，下一步就别再问他要验证码。
+
+73. **同一个选择器命中多个隐藏 file input 时，`upload_file` 是「按文档顺序猜的」——先看 `matched`。**
+
+    实测往 X 发一条推时，`/compose/post` 上 `input[data-testid='fileInput']` **匹配到 2 个**：发推弹窗里
+    一个、后面内联编辑器里一个，而且**两个都是 0×0 隐藏**。动作类命令那套「优先挑可见的」在这里完全
+    无从判断，`upload_file` 只能按文档顺序取第一个 —— 这次恰好就是弹窗里那个，所以成了；顺序反过来，
+    图片会静默进到另一个编辑器，而**当时的回执里连 `matched` 都没有**，调用方根本不知道这里有歧义。
+
+    处置办法：
+
+    - 传 `selector` 之后先看回执的 **`data.matched`**：**大于 1 就别假设自己传对了**，回执里的
+      `chosenIndex` / `visibleMatched` / `selectorNote` 会把「这次用的是第几个、为什么」说清楚；
+    - 要精确指定就传 **`nth`**（0 基），此时不做任何挑选；`nth` 越界会直接报出总数；
+    - 更稳的写法是**把选择器写具体**：既然两份都在 DOM 里，就用容器把范围收窄
+      （实测 `div[role='dialog'] input[data-testid='fileInput']` 能唯一命中弹窗里那个）。
+      注意**回读也跟 `nth` 走**：以前回读写死 `document.querySelector`，永远只认第一个，
+      传了 `nth` 也会去问错的那个元素。
+
+74. **`go_to_url` 等满 30 秒才失败？先确认页面是不是 Chrome 自己的网络错误页。**
+
+    实测（2026-10-01，本机开着 v2ray 的 **TUN**）第一次 `go_to_url` 到 x.com，回执只有一句
+    `go_to_url 失败：Timeout 30000ms exceeded.` 加 `errorCode:ACTION_TIMEOUT`。这句话把人带向
+    「站点慢」「元素在、只是不可点」这条完全错误的路 —— 而真相是**这一页是 Chrome 的错误页**
+    （`ERR_NETWORK_CHANGED`，TUN 网卡抖动），页面上一个字的正文都没有。当时只能另跑一次
+    `get_browser_state`，从错误页的正文里把 `ERR_NETWORK_CHANGED` 读出来。
+
+    现在导航失败会自己探这张错误页，并给出有方向的回执：
+
+    - `data.errorCode: "NETWORK_ERROR"` + **`data.netError`**（Chrome 的错误码，如
+      `ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED` / `ERR_ABORTED`）；
+    - `data.retryable: true` 与 `data.retryAfterMs`（网络错误给 5 秒，比普通超时的 1.5 秒长 ——
+      代理抖动、换节点之后要几秒才恢复，退避给太短只会连着失败几次）；
+    - `data.networkErrorPage: true`、`data.urlRequested`（错误页会把 `urlAfter` 变成
+      `chrome-error://chromewebdata/`，原始地址只剩这一处）、以及一句 `data.hint`。
+
+    拿到它该做什么：**去看本机代理 / VPN 的状态**（TUN 网卡抖动、代理进程没起来、刚切节点、
+    断网重连），等一会儿重发；**不要**在这一页上找元素、换选择器或反复重发。
+
+    两条判据：异常文本里有 `net::ERR_xxx`，或者页面上能读到 Chrome 自己渲染的错误码 /
+    地址已经是 `chrome-error://`。错误页的提交**比 `navigate` 抛异常晚一拍**（实测失败那一刻
+    地址栏还是 `about:blank`），所以探测会在导航失败后最多重试 4 次、每次间隔 400ms ——
+    只在已经失败之后才付这点等待。
+
+    顺带一条：`ERR_ABORTED` 的措辞是分开的。它通常意味着这次导航被页面自己**取消或替换**了
+    （例如点到了下载、站点主动跳走），不一定是网络不通，别一看到 `NETWORK_ERROR` 就去重启代理。
