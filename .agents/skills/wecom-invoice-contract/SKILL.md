@@ -513,8 +513,8 @@ python client/dsb.py --port 10049 selftest
  "params":{"prompt":"请在弹出的浏览器窗口里完成个人实名认证的扫脸","timeoutSeconds":600}}
 ```
 
-  传 `selector`（指向二维码/扫脸区域）时，服务会把该元素截成 `data.imageBase64` 一并返回，
-  并**把当前页签带到窗口最前**，人可以直接看到该点哪里。
+  传 `selector`（指向二维码/扫脸区域）时，服务会把该元素截图落盘并给出 `data.imageUrl`（默认**不**回
+  `data.imageBase64`，要内联才传 `inline: true`），并**把当前页签带到窗口最前**，人可以直接看到该点哪里。
 
 - 人做完之后：
 
@@ -778,7 +778,7 @@ click_element_by_index 失败：元素不存在或页面已变化,请重新调�
 
 | 步骤 | 调用 | 做什么 |
 | --- | --- | --- |
-| 1 | `request_human_input`（`prompt`、可选 `index`/`selector`、`timeoutSeconds`） | 建待办；传 `selector` 会把元素截成 `data.imageBase64` 返回，**并把页签带到窗口最前** |
+| 1 | `request_human_input`（`prompt`、可选 `index`/`selector`、`timeoutSeconds`） | 建待办；传 `selector` 会把元素截图落盘并回 `data.imageUrl`（默认不回 `data.imageBase64`），**并把页签带到窗口最前** |
 | 2 | 人看图 → 操作 | 通过 `submit_human_input`（`requestId`+`answer`）提交，**或者**直接在有头浏览器里自己做完 |
 | 3 | `get_human_input`（`requestId`、`timeoutSeconds`） | 取答复，`data.status` 为 `pending`/`answered`/`expired` |
 
@@ -803,8 +803,8 @@ click_element_by_index 失败：元素不存在或页面已变化,请重新调�
    在聊天里点不开。
 2. **同时仍然要 `bring_to_front`**：二维码有短时效（实测 900 秒），让用户能立刻看到有头窗口里的
    那一份最稳妥；聊天里的图是**方便**，不是替代。
-3. **不要把 `data.imageBase64` 回填到上下文里**——它很大（一张 180×180 的二维码就有几十 KB base64），
-   而且模型多半读不了图。要图就给 URL。
+3. **别去要 `data.imageBase64`**——它很大（一张 180×180 的二维码就有几十 KB base64），而且模型多半
+   读不了图；服务端现在默认也不回了（要内联才传 `inline: true`）。要图就给 URL。
 
 配合 `bring_to_front` 可以把任意页签推到人眼前（只切窗口、**不改当前操作页**）。
 

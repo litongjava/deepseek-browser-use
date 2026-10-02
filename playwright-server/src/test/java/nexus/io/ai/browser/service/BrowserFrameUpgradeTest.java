@@ -741,6 +741,38 @@ public class BrowserFrameUpgradeTest {
     assertNotNull("定位不到时必须说清楚(这正是不传 frame 的后果)", topOnly.getStr("imageError"));
   }
 
+  /**
+   * 默认**不**把 base64 塞进回执
+   *
+   * <p>
+   * 实测事故:一次扫码登录的 {@code request_human_input} 回执里带了一份二维码的 base64,调用方把它原样读进
+   * 上下文 —— 一个 120×120 的二维码就有近 4 KB base64(稍大的验证码图几十 KB),而模型既读不了图、也不需要它
+   * (要把图给用户看,{@code imageUrl} 更好用)。所以默认与 {@code screenshot} / {@code get_element_screenshot}
+   * 对齐:只落盘、只给路径与 URL,显式 {@code inline:true} 才内联。
+   */
+  @Test
+  public void humanInputDoesNotInlineBase64ByDefault() {
+    openMain();
+    JSONObject params = new JSONObject();
+    params.put("prompt", "请扫码");
+    params.put("selector", "#topBtn");
+    Kv byDefault = data(actions.execute(id, "request_human_input", params));
+    assertNotNull("默认要落盘并给出可 GET 的 URL", byDefault.getStr("imageUrl"));
+    assertNotNull("默认要给出服务端路径", byDefault.getStr("imagePath"));
+    assertNull("默认不该内联 base64(几十 KB 只会白占上下文),实际:" + byDefault.getStr("imageBase64"),
+        byDefault.getStr("imageBase64"));
+    assertEquals(Boolean.TRUE, byDefault.get("base64Omitted"));
+    assertNotNull("要说清怎么才能拿到 base64", byDefault.getStr("imageNote"));
+
+    JSONObject inline = new JSONObject();
+    inline.put("prompt", "请扫码");
+    inline.put("selector", "#topBtn");
+    inline.put("inline", true);
+    Kv wanted = data(actions.execute(id, "request_human_input", inline));
+    assertNotNull("显式要了才给 base64", wanted.getStr("imageBase64"));
+    assertNull("这次不该再说不回 base64", wanted.get("base64Omitted"));
+  }
+
   // ==================== 截图 / OCR ====================
 
   /** ocr_image 必须给出结构化结果(有没有装 OCR 语言包都要能回话,不能抛异常) */

@@ -16,7 +16,7 @@
 
 | 步骤 | 调用 | 做什么 |
 | --- | --- | --- |
-| 1 | `request_human_input`，`prompt=请输入图片验证码`，`index=7`，`timeoutSeconds=300` | 建一个待办；`index`/`selector` 指向验证码图时把图截下来，回 `data.imageBase64`、`data.imagePath`、`data.imageUrl` 三份，同时把页签带到窗口最前 |
+| 1 | `request_human_input`，`prompt=请输入图片验证码`，`index=7`，`timeoutSeconds=300` | 建一个待办；`index`/`selector` 指向验证码图时把图截下来，回 `data.imagePath`、`data.imageUrl` 两份（**默认不回 `data.imageBase64`**，要内联才传 `inline: true`），同时把页签带到窗口最前 |
 | 2 | 人看图 → 把答案回填 | 通过 `submit_human_input`（`requestId` + `answer`）提交；**或者**直接在有头浏览器里自己把这一步操作完 |
 | 3 | `get_human_input`，`requestId=hr-1-xxx`，`timeoutSeconds=60` | 取答复。`data.status` 为 `pending` / `partial` / `answered` / `expired` |
 
@@ -100,7 +100,7 @@
 要点：
 
 - **`get_element_screenshot` 是这套流程的地基**：没有它，`request_human_input` 也没东西可以给人看。要单独把图拿出来（不发起人工请求）就直接调它。
-- `data.imageBase64` 是 PNG 的 base64，需要向用户展示验证图片时可以使用；`data.imagePath` 是服务端本地路径，`data.imageUrl` 是可以直接 GET 的地址（贴给用户最方便）。取到图片不代表验证已完成。
+- `data.imagePath` 是服务端本地路径，`data.imageUrl` 是可以直接 GET 的地址（贴给用户最方便）；这两份**默认就够用**。`data.imageBase64` 只在传了 `inline: true` 时才回，而它很大（一张二维码几 KB、验证码图可能几十 KB）——**默认别要、要了也别读进上下文**，那正是服务端把默认值改成 false 的原因。取到图片不代表验证已完成。
 - 用户直接在浏览器里操作不会自动更新人工请求记录，`get_human_input` 可能仍为 `pending`。不要只等该字段，也不能直接跳过验证：重新读取页面，确认登录或验证已成功后才继续后续步骤；一般页面变化本身不足以证明验证成功。
 - **验证码有时效**：实测税务系统的图片验证码约 **120 秒**过期，而且**一次性**（用过的码再提交必然失败）。所以拿到答复后要**立刻**提交，不要攒着；提交失败先换一张新图再让人看，别拿旧码重试。用 `expiresAt` 把这件事写进请求里。
 - **登录态跟着共享 profile 走，不跟任务 ID 走**：所有任务用的是同一份 profile（`data.browser.profileDir`），换任务、换 id 都不影响；是否仍有效由网站决定，登录过期时再次请求用户协助。若 `data.browser.userProfile=false`（退回托管 profile，例如 Chrome 正在运行）或 `chrome=false`（没装 Chrome），说明这次不是用户日常那份登录态，需要重新走登录流程。
@@ -111,8 +111,9 @@
 curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
   "id":1001,"method":"request_human_input",
   "params":{"prompt":"请输入图片验证码","index":7}}'
-# {"data":{"requestId":"hr-1001-3001","prompt":"请输入图片验证码","imageBase64":"iVBORw0...",
+# {"data":{"requestId":"hr-1001-3001","prompt":"请输入图片验证码","base64Omitted":true,
 #          "imagePath":"data/1001/shot-3.png","imageUrl":"/data/1001/shot-3.png","expiresAt":1750000000000},...}
+# 确实要内联 base64（喂视觉模型）时再加 "inline":true
 
 # 1'. 读不了图的模型：先让服务端用本机 OCR 读一遍
 curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{

@@ -106,7 +106,8 @@ POST http://localhost:10049/playwright/command
 ```
 
 - `request_human_input` 会把当前页签**带到窗口最前**，人一眼就能看到该操作哪一页；传 `selector`/`index`
-  还会把该元素截成 `data.imageBase64` 一并返回（二维码场景用它，见 5.2）。
+  还会把该元素截图落盘并给出 `data.imageUrl`（二维码场景用它，见 5.2）。内联的 `data.imageBase64`
+  **默认已经不回了**（一张图几 KB 到几十 KB，白占上下文），确实要喂视觉模型才传 `inline: true`。
 - 登录成功的判据：页面左侧出现「我的企业 / 通讯录 / 协作 / 应用管理 / 安全与管理」这套菜单，
   并且 `#profile` 能读到企业全称。**不要靠 `document.title` 判断**（标题一直是「企业微信」）。
 - 登录态留在共享 profile 里，**后续任务不用再登**；换 id、换任务都不影响（主技能第九节最后一条）。
@@ -532,8 +533,8 @@ POST http://localhost:10049/playwright/command
  "params":{"prompt":"请输入收到的短信验证码","selector":"#sms_code","timeoutSeconds":300}}
 ```
 
-- 传 `selector`/`index` 指向二维码/验证码图时，服务会把该元素截成 **`data.imageBase64`** 一并返回，
-  同时把页签带到窗口最前——**人既能看到浏览器，也能拿到图**。
+- 传 `selector`/`index` 指向二维码/验证码图时，服务会把该元素截图落盘并回 **`data.imageUrl`**
+  （默认**不**回 `data.imageBase64`，要内联才传 `inline: true`），同时把页签带到窗口最前——**人既能看到浏览器，也能拿到图**。
 - 人答复后 `submit_human_input`（`requestId` + `answer`）回填，或直接让他在浏览器里自己填。
 - 取答复用 `get_human_input`（可传 `timeoutSeconds` 长轮询）。`data.status` 为 `pending` / `answered` / `expired`。
 
@@ -555,7 +556,7 @@ POST http://localhost:10049/playwright/command
 
   这样用户**在对话里就能直接扫码**，不用去浏览器窗口找。同时仍然 `bring_to_front` ——
   二维码有短时效，有头窗口里那一份是最新的。
-  **不要**把 `data.imageBase64` 回填到上下文（几十 KB，且模型多半读不了图），要图就给 URL。
+  **不要**去要 `data.imageBase64`（几十 KB，且模型多半读不了图），也用不着读它——要图就给 URL。
 - **必须是法定代表人本人**扫脸。实测这一步完成后 `formData.legalperson_face_info.verify_result` 变成 `1`——
   **用这个字段判断扫脸过没过**，不要看页面文案。
 - 扫脸超时/失败会重置，重新发起即可；不要让智能体去"重试人脸识别"。

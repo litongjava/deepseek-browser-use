@@ -9633,16 +9633,18 @@ public class PlaywrightService {
    * 验证码、短信码、人工登录这类环节,智能体既读不了图也拿不到凭证,只能请人来做。这个接口 把「请人」这件事固定下来:
    *
    * <ol>
-   * <li>request_human_input 建一个待办,可选把某个元素(验证码图)截成 base64 + 落盘路径一起返回,并把当前页签带到最前</li>
+   * <li>request_human_input 建一个待办,可选把某个元素(验证码图)截下来落盘,回执给 imagePath/imageUrl
+   * (要内联 base64 才传 inline:true),并把当前页签带到最前</li>
    * <li>人看到图和页面后,把答案用 submit_human_input 提交(或者直接在有头浏览器里自己操作完)</li>
    * <li>智能体用 get_human_input 取答案;带 timeoutSeconds 时可以当长轮询用</li>
    * </ol>
    *
    * <p>
-   * <b>读不了图的模型怎么办</b>:只回 {@code imageBase64} 对「不支持图片输入」的模型仍然没用。所以这里同时回
-   * {@code imagePath}(服务端本地路径)与 {@code imageUrl}(可直接 GET 的地址,能贴给用户),并在 {@code ocr:true}
-   * 时用**本机 OCR**(Windows 自带 {@code Windows.Media.Ocr})把图上的文字一并读出来 —— 「验证码是什么」
-   * 这类问题读不了图的模型也能自己答一部分。
+   * <b>读不了图的模型怎么办</b>:默认**不**回 {@code imageBase64}(那张图的 base64 动辄几十 KB,落到回执里
+   * 基本只会被原样读进上下文,白烧 token,而且多数模型读不了图)。默认给的是 {@code imagePath}(服务端本地路径)
+   * 与 {@code imageUrl}(可直接 GET 的地址,能贴给用户);确实要把图喂给视觉模型时才传 {@code inline:true}。
+   * 另外在 {@code ocr:true} 时用**本机 OCR**(Windows 自带 {@code Windows.Media.Ocr})把图上的文字一并读出来
+   * —— 「验证码是什么」这类问题读不了图的模型也能自己答一部分。
    *
    * @param prompt         要人做什么(不传 steps 时必填)
    * @param index          要截图的元素索引(可选)
@@ -9656,7 +9658,8 @@ public class PlaywrightService {
    *                       所以这里也收下它;两个都给时以它为准。
    * @param ocr            是否用本机 OCR 读图上的文字,默认 false
    * @param ocrLanguage    OCR 语言,默认 {@code zh-Hans-CN}
-   * @param inline         是否内联 base64,默认 true(要省 token 可以关掉,只用 imagePath/imageUrl)
+   * @param inline         是否内联 base64,默认 false:默认只回 imagePath/imageUrl(省上下文,与 screenshot /
+   *                       get_element_screenshot 一致);确实要把图喂给视觉模型时才传 true
    */
   public RespBodyVo requestHumanInput(Long browserId, String prompt, Integer index, String selector,
       Integer timeoutSeconds, List<Kv> steps, Long expiresAt, Integer expiresInSeconds, Boolean ocr,
@@ -9686,7 +9689,10 @@ public class PlaywrightService {
     }
 
     boolean wantOcr = Boolean.TRUE.equals(ocr);
-    boolean wantInline = inline == null || inline;
+    // 默认**不**内联 base64:一张 120×120 的二维码 PNG 就有几 KB,稍大的验证码图几十 KB,而它落到
+    // 回执里基本只有一个下场 —— 被调用方原样读进上下文(几万 token,多数模型还读不了图)。
+    // 与 screenshot / get_element_screenshot 的默认保持一致:落盘 + 给 URL,要内联才显式传 inline=true。
+    boolean wantInline = Boolean.TRUE.equals(inline);
     // 第一个要看图的目标:老写法(index/selector)或 steps 里第一个带目标的步骤
     Integer shotIndex = index;
     String shotSelector = selector;
@@ -9739,6 +9745,11 @@ public class PlaywrightService {
         Kv shotData = (Kv) shot.getData();
         if (wantInline) {
           data.set("imageBase64", shotData.getStr("base64"));
+        } else {
+          // 说清「为什么没有 base64」以及怎么拿到它,免得调用方以为截图失败了
+          data.set("base64Omitted", true).set("imageNote",
+              "默认不内联 base64(一张验证码/二维码就几十 KB,读进上下文只烧 token):要看图请 GET data.imageUrl,"
+                  + "确实需要内联再传 inline=true");
         }
         data.set("imageSize", shotData.get("size"))
             .set("imagePath", shotData.getStr("path"))

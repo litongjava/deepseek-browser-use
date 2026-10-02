@@ -446,7 +446,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 
 | 方法 | 说明 |
 | --- | --- |
-| `request_human_input` | 发起人工介入请求（验证码 / 短信码 / 扫码 / 支付）。传 `index`/`selector` 时把该元素截下来，**同时**回 `data.imageBase64`、`data.imagePath`、`data.imageUrl`（可直接 GET、能贴给用户）；一串动作用 `steps` 一次交办 |
+| `request_human_input` | 发起人工介入请求（验证码 / 短信码 / 扫码 / 支付）。传 `index`/`selector` 时把该元素截下来，回 `data.imagePath`、`data.imageUrl`（可直接 GET、能贴给用户）、`data.imageTarget`；**默认不回 `data.imageBase64`**（一张验证码/二维码就几 KB 到几十 KB，读进上下文只烧 token），确实要把图喂给视觉模型才传 `inline: true`；一串动作用 `steps` 一次交办 |
 | `ask_user` | **向用户「要一个值」**（银行卡号 / 身份证号 / 验证码 / 二选一），不截图、不抢焦点。传 `questions: [{id, question, header?, options?: [{label, description?}], multiSelect?}]`，形态与 agent 侧的 ``ask_user_question`` 一致；答复用 `submit_human_input` 的 `answers` 按 `id` 回填（多选给数组），`get_human_input` 回 `data.answers: [{id, selected[], custom?}]` |
 | `submit_human_input` | 提交人工答复：单步给 `answer`；多步/多问用 `stepId` 逐条回填，或 `answers: {"s1":"…"}` 一次回填多条（多选题的值给数组） |
 | `get_human_input` | 取答复：`data.status` 取 `pending`/`partial`/`answered`/`expired`。传 `timeoutSeconds` 时长轮询等待，到时间还没答复返回当前状态（**不算失败**） |
