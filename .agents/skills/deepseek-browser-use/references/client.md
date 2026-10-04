@@ -39,6 +39,21 @@ dsb --id 1001 run get_browser_state --grep mediaCount
 - `--grep` 的正则**带 `|`（或其它 shell 元字符）时，走 `dsb.cmd` 会被 Windows 的批处理引号处理打断**
   （报成 `'xxx' is not recognized as an internal or external command`）。这时直接调 `python client/dsb.py …`
   绕开 `.cmd` 包装，或者把模式写简单一点（例如先 `--grep mediaCount`）。
+- **落盘文件的回执里中文是乱码（`ä¾èµ–` 这种）？先怀疑你的读法，不是文件坏了。** `dsb` 一律以
+  `encoding="utf-8"` 写盘，服务端也按 UTF-8 回；但 **Windows PowerShell 5.1 的 `Get-Content` 默认按 ANSI
+  解码**，含中文的 UTF-8 回执就会被显示成 Latin-1 乱码 —— 而 `read` 工具或 `Get-Content -Encoding utf8`
+  读同一个文件是完全正常的。先看版本（`$PSVersionTable.PSVersion`：`5.1.x` 就是老的 Windows PowerShell，
+  `7.x` 才是 pwsh，7 默认 UTF-8 没有这个问题），是 5.1 就一律加 `-Encoding utf8`：
+
+  ```powershell
+  $PSVersionTable.PSVersion                                  # 5.1.x → 下面三条都必须带 -Encoding
+  .\client\dsb.cmd --id 1001 run execute_js --params '@p.json' --out state.json
+  Get-Content state.json -Encoding utf8 -TotalCount 20        # ✗ 不带 -Encoding 会看到乱码
+  Select-String -Path state.json -Pattern '中央仓库' -Encoding utf8
+  ```
+
+  **别据乱码去报「服务端/客户端编码 bug」**：先读同一份文件的留档（`logs/agent/<会话>/*.res.json` 是
+  `ensure_ascii=False` 的 UTF-8），或者干脆换成 harness 的 read 工具再判断一次。
 
 复杂请求继续使用 `--params @文件.json` / `batch 文件.json`，不为过滤输出改用裸 HTTP 请求，
 否则会丢失客户端脱敏、统一退出码和调用留档。

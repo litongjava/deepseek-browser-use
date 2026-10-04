@@ -104,6 +104,18 @@ public class BrowserInstance {
    */
   public final AtomicInteger captureFailures = new AtomicInteger();
 
+  /**
+   * 自动截图连续撞上「事件泵伪故障」的次数(与 {@link #captureFailures} 分开计)
+   *
+   * <p>
+   * <b>为什么必须分开</b>:伪故障({@code Object doesn't exist: request@…})来自 Playwright 的事件分发,
+   * 与「这个页面截不出图」是两回事 —— 实测一次任务里连续 3 次伪故障就把截图能力熔断了 120 秒,
+   * 而那段时间页面完全正常:DOM 读写、输入、提交全都成功,只有画面被关掉了。伪故障单独计数、
+   * 只给很短的冷却(见 {@code DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS}),既不轻易放弃画面,
+   * 也不至于在一次噪声风暴里每条命令都白等一次超时。
+   */
+  public final AtomicInteger captureSpuriousFailures = new AtomicInteger();
+
   /** 熔断到什么时候(毫秒时间戳);0 表示没熔断 */
   public volatile long captureCooldownUntil;
 

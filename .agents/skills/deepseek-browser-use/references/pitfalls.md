@@ -638,3 +638,9 @@
     输入与随后的上传都落到了上一个页签（`get_tabs` 里能看到新页签已存在，只是 `current` 没变）。
     所以这类「无法判断是否生效」的报错之后，先 `get_tabs` 看 `current` 或读一次 `location.href` 再往下做；
     已经填错的草稿用 `clear_text` 清掉（`[]`、引号一类的选择器一律走 `--params @文件.json`，别在命令行里拼）。
+
+    **这一条已经改了服务端行为，判据跟着变**：页签类命令的效果本来就能直接读回来，所以现在
+    `new_tab` 一旦撞上伪故障，服务端会自己核对页签数并把结论写进回执 —— 页签变多就回 `ok:true` +
+    `data.effective:true` + `data.warning`（说清「切过去」这半段不一定完成、**别重发**，
+    并把推断的 `switchedToNewTab`/`currentIndex` 一起给出）；页签数没变则回 `retryable:true` +
+    「已核对未生效，可以安全重发」。**仍然要按 `data.currentIndex` 复核一次再打字** —— 推断不是事实。

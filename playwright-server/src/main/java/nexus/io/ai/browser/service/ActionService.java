@@ -100,6 +100,15 @@ public class ActionService {
   /** 伪故障最多重发几次(含首次):3 次以内,再多就是别的问题了 */
   private static final int SPURIOUS_MAX_ATTEMPTS = 3;
 
+  /**
+   * 伪故障之后**效果可以直接读回来核对**的命令
+   *
+   * <p>
+   * 页签操作是唯一这类:它的结果就摆在 {@link PlaywrightService#getTabs} 里,读一次就有事实,
+   * 不必把结论留给调用方猜(见 {@link #verifyTabsAfterSpurious})。其余动作类命令(点击 / 输入 / 提交)
+   * 的效果只能靠页面语义判断,不属于这里。
+   */
+  static final Set<String> SPURIOUS_VERIFIABLE = Set.of("new_tab");
   /** 两次重发之间的间隔:伪故障是「消息泵里正在派发的那一条」引起的,挪开一点点就够了 */
   private static final long SPURIOUS_RETRY_DELAY_MS = 120;
 
@@ -318,6 +327,129 @@ public class ActionService {
     result.setData(merged);
   }
 
+  /**
+   * 读一份页签状态(个数 + 当前页签序号),失败就返回 {@code null}(核对不了就不硬猜)
+   *
+   * <p>
+   * 只给 {@link #SPURIOUS_VERIFIABLE} 里的命令用:它必须足够便宜 —— 页签操作一次任务的量本来就不多。
+   */
+  private Kv tabState(Long id) {
+    if (id == null) {
+      return null;
+    }
+    try {
+      RespBodyVo resp = svc.getTabs(id);
+      if (resp == null || !resp.isOk() || !(resp.getData() instanceof Kv)) {
+        return null;
+      }
+      Object tabs = ((Kv) resp.getData()).get("tabs");
+      if (!(tabs instanceof List)) {
+        return null;
+      }
+      List<?> list = (List<?>) tabs;
+      int currentIndex = -1;
+      for (int i = 0; i < list.size(); i++) {
+        Object item = list.get(i);
+        if (item instanceof Kv && Boolean.TRUE.equals(((Kv) item).getBoolean("current"))) {
+          currentIndex = i;
+        }
+      }
+      return Kv.by("tabCount", list.size()).set("currentIndex", currentIndex);
+    } catch (RuntimeException e) {
+      return null;
+    }
+  }
+
+  /**
+   * 伪故障之后,把「动作到底生效没有」从猜测变成事实(目前只有页签类命令做得到)
+   *
+   * <p>
+   * <b>为什么要有这个</b>:实测(2026-10){@code new_tab} 报伪故障时,新页签其实**已经建好**,
+   * 只是页签没有切过去 —— 而回执只说「无法判断本次是否已生效」,调用方接着就把输入打进了旧页签
+   * (真实事故,不是推测)。页签状态摆在那里,读一次就能给结论:
+   *
+   * <ul>
+   * <li>页签数变多 → 动作已生效:按成功返回,并提示「切过去」这半段不一定完成、**不要重发**
+   * (重发会多开一个页签);</li>
+   * <li>页签数没变 → 这次确实没生效:回执直接给 {@code retryable:true},重发是安全的;</li>
+   * <li>读不回来(没登录 / 实例没了)→ 返回 {@code null},调用方走原来的「不确定」分支。</li>
+   * </ul>
+   *
+   * @return 已经能下定论时的响应;下不了结论时返回 {@code null}
+   */
+  private RespBodyVo verifyTabsAfterSpurious(Long id, String method, Kv tabsBefore, String detail) {
+    if (tabsBefore == null || !SPURIOUS_VERIFIABLE.contains(method)) {
+      return null;
+    }
+    Kv tabsNow = tabState(id);
+    if (tabsNow == null) {
+      return null;
+    }
+    String effect = tabEffect(tabsBefore, tabsNow);
+    if (effect == null) {
+      return null;
+    }
+    int before = asInt(tabsBefore.get("tabCount"), -1);
+    int after = asInt(tabsNow.get("tabCount"), -1);
+    int currentIndex = asInt(tabsNow.get("currentIndex"), -1);
+    if ("effective".equals(effect)) {
+      // 新建页签通常排在最后,据此给出「有没有切过去」的判断(标明是推断,不当事实)
+      boolean switched = currentIndex == after - 1;
+      Kv data = Kv.by("spuriousDispatch", true).set("effective", true).set("tabCountBefore", before)
+          .set("tabCountAfter", after).set("currentIndex", currentIndex).set("switchedToNewTab", switched)
+          .set("retryable", false).set("warning",
+              method + " 底层抛的是事件泵伪故障(不是它自己报的错),核对后**动作已经生效**:页签数 "
+                  + before + " → " + after + "。但「切到新页签」这半段不一定完成(当前 currentIndex="
+                  + currentIndex + ",新建页签通常排在最后,据此推断 switchedToNewTab=" + switched
+                  + "):请用 get_tabs 确认,需要切换用 switch_tab_by_url。**不要重发 " + method
+                  + "** —— 重发会多开一个页签。");
+      return RespBodyVo.ok(data);
+    }
+    if ("not_effective".equals(effect)) {
+      Kv data = Kv.by("spuriousDispatch", true).set("effective", false).set("tabCount", after)
+          .set("currentIndex", currentIndex).set("retryable", true).set("retryAfterMs", 200)
+          .set("note", "已核对:页签数仍是 " + after + " 个,这次 " + method
+              + " 确实没有生效。可以直接重发,不会有重复页签。");
+      RespBodyVo resp = RespBodyVo.fail(method + " 失败：" + detail + "（[" + ActionError.SPURIOUS_DISPATCH
+          + "] 已核对页签数未变,本次未生效,可以安全重发）");
+      resp.setData(data);
+      return resp;
+    }
+    return null;
+  }
+
+  /**
+   * 纯判据:伪故障前后的页签快照说明动作生效了没有
+   *
+   * <p>
+   * 单独抽出来是为了能直接单测(与 {@code BrowserBlindnessUpgradeTest} 里那些判据同一套做法):
+   * 结论只有三种,语义必须钉死,别让它藏在私有方法的 if 里。
+   *
+   * @return {@code "effective"}(页签变多,动作已生效)/ {@code "not_effective"}(个数没变,确实没生效)
+   *         / {@code null}(核对不了,不下结论 —— 包括页签变少这种「大概是别的命令关掉的」情形)
+   */
+  static String tabEffect(Kv before, Kv after) {
+    if (before == null || after == null) {
+      return null;
+    }
+    int b = asInt(before.get("tabCount"), -1);
+    int a = asInt(after.get("tabCount"), -1);
+    if (b < 0 || a < 0) {
+      return null;
+    }
+    if (a > b) {
+      return "effective";
+    }
+    if (a == b) {
+      return "not_effective";
+    }
+    return null;
+  }
+
+  private static int asInt(Object value, int fallback) {
+    return value instanceof Number ? ((Number) value).intValue() : fallback;
+  }
+
   private RespBodyVo run(Long id, String method, JSONObject params) {
     if (method == null || method.isBlank()) {
       return RespBodyVo.fail("缺少参数 method");
@@ -345,6 +477,9 @@ public class ActionService {
     // 把 request_human_input 的 timeoutSeconds 写成 expiresInSeconds,待办按默认 300 秒建好,
     // 人还没看到请求就已经过期,而回执里一个字都没提。
     TrackedArgs args = new TrackedArgs(params);
+    // 页签类命令的效果可以直接读回来(见 verifyTabsAfterSpurious):发命令前先记一份页签状态,
+    // 万一撞上伪故障,就能把「到底生效没有」写成事实,而不是留给调用方猜。
+    Kv tabsBefore = SPURIOUS_VERIFIABLE.contains(method) ? tabState(id) : null;
     try {
       RespBodyVo result = dispatchWithSpuriousRetry(method, args, () -> executor.run(svc, id, args));
       if (!result.isOk() && result.getMsg() != null) {
@@ -376,6 +511,11 @@ public class ActionService {
       boolean spurious = ActionError.isSpuriousDispatch(detail);
       boolean retrySafe = retrySafeFor(method, args);
       if (spurious && !retrySafe) {
+        // 伪故障 + 动作类命令:能核对的就核对(页签类),核对不了才把结论留给调用方
+        RespBodyVo verified = verifyTabsAfterSpurious(id, method, tabsBefore, detail);
+        if (verified != null) {
+          return verified;
+        }
         // 伪故障 + 动作类命令:诊断说清楚,但结论仍是「不确定」——动作可能已经生效
         Kv uncertain = Kv.by("errorCode", ActionError.ACTION_UNCERTAIN).set("retryable", false)
             .set("spuriousDispatch", true)

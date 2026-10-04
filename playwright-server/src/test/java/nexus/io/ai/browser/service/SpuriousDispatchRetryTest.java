@@ -2,6 +2,7 @@ package nexus.io.ai.browser.service;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -216,5 +217,28 @@ public class SpuriousDispatchRetryTest {
         "check_element_by_index", "scroll"}) {
       assertFalse(method + " 有副作用,不该进重发名单", ActionService.SPURIOUS_RETRY_SAFE.contains(method));
     }
+  }
+
+  /**
+   * 页签类命令撞伪故障时,效果能读回来核对,结论就不该留给调用方猜
+   *
+   * <p>
+   * 起因是一次真实事故(2026-10):{@code new_tab} 报伪故障,新页签其实**已经建好**、只是没有切过去,
+   * 而回执只说「无法判断本次是否已生效」—— 调用方接着就把输入打进了旧页签。判据钉死在这里:
+   * 页签变多 = 已生效(**不能**重发,重发会多开一个页签);个数没变 = 确实没生效(重发安全);
+   * 读不回来、或页签反而变少(大概是别的命令关掉的)= 不下结论,走原来的「不确定」分支。
+   */
+  @Test
+  public void tabEffectJudgesNewTabSpuriousFailure() {
+    assertTrue("页签类命令应当在可核对名单里", ActionService.SPURIOUS_VERIFIABLE.contains("new_tab"));
+    assertFalse("点击类命令的效果没法这样核对",
+        ActionService.SPURIOUS_VERIFIABLE.contains("click_element_by_selector"));
+
+    assertEquals("页签变多 = 已生效", "effective",
+        ActionService.tabEffect(Kv.by("tabCount", 1), Kv.by("tabCount", 2)));
+    assertEquals("个数没变 = 确实没生效", "not_effective",
+        ActionService.tabEffect(Kv.by("tabCount", 1), Kv.by("tabCount", 1)));
+    assertNull("读不回来就不下结论", ActionService.tabEffect(null, Kv.by("tabCount", 2)));
+    assertNull("页签反而变少也不下结论", ActionService.tabEffect(Kv.by("tabCount", 2), Kv.by("tabCount", 1)));
   }
 }

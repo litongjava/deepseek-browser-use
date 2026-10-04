@@ -182,6 +182,16 @@ public class PlaywrightService {
   /** 熔断时长默认值(毫秒) */
   private static final long DEFAULT_CAPTURE_COOLDOWN_MS = 120_000;
 
+  /**
+   * 截图撞上事件泵伪故障时的冷却时长(毫秒)
+   *
+   * <p>
+   * 伪故障不是「这个页面截不动」:它来自 Playwright 的事件分发,页面通常完全正常。实测(2026-10)
+   * 一次任务里连续 3 次伪故障把画面按 120 秒关掉,而同期 DOM 读写、输入、提交全部成功 ——
+   * 调用方平白变成「盲操作」。所以这一类单独计数、只短暂停一会儿,不让噪声点燃为真实失败准备的熔断。
+   */
+  private static final long DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS = 15_000;
+
   /** 动作类命令的超时(毫秒),可用配置项覆盖 */
   public static final String KEY_ACTION_TIMEOUT = "browser.action.timeoutMs";
 
@@ -2679,18 +2689,33 @@ public class PlaywrightService {
       kv.set("screenshot", "/" + DATA_DIR + "/" + inst.id + "/" + seq + ".png");
       kv.set("screenshot_path", png.toAbsolutePath().toString());
       inst.captureFailures.set(0);
+      inst.captureSpuriousFailures.set(0);
       inst.captureFailureReason = null;
     } catch (PlaywrightException e) {
       String reason = briefMessage(e.getMessage());
       kv.set("screenshot_error", reason);
-      int failures = inst.captureFailures.incrementAndGet();
-      if (inst.captureFailureReason == null) {
-        inst.captureFailureReason = reason;
-      }
-      log.warn("任务 {} 第 {} 张截图失败(连续第 {} 次):{}", inst.id, seq, failures, reason);
-      if (failures >= captureFailThreshold()) {
-        inst.captureCooldownUntil = System.currentTimeMillis() + captureCooldownMs();
-        degraded(kv, inst, "连续 " + failures + " 次失败,已暂停 " + (captureCooldownMs() / 1000) + " 秒");
+      if (ActionError.isSpuriousDispatch(reason)) {
+        // 伪故障(spuriousRetry 已经重发过,仍失败说明当下噪声很大)不是「这个页面截不出图」:
+        // 它来自事件泵,页面本身通常完全正常。计入 captureFailures 会把一次噪声变成两分钟的
+        // 「盲操作」,所以单独计数、只给一段很短的冷却。
+        int spurious = inst.captureSpuriousFailures.incrementAndGet();
+        log.warn("任务 {} 第 {} 张截图撞上事件泵伪故障(连续第 {} 次,不计入截图熔断):{}", inst.id, seq, spurious, reason);
+        if (spurious >= captureFailThreshold()) {
+          inst.captureCooldownUntil = System.currentTimeMillis() + DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS;
+          inst.captureSpuriousFailures.set(0);
+          degraded(kv, inst, "连续 " + spurious + " 次撞上事件泵伪故障,已暂停 "
+              + (DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS / 1000) + " 秒");
+        }
+      } else {
+        int failures = inst.captureFailures.incrementAndGet();
+        if (inst.captureFailureReason == null) {
+          inst.captureFailureReason = reason;
+        }
+        log.warn("任务 {} 第 {} 张截图失败(连续第 {} 次):{}", inst.id, seq, failures, reason);
+        if (failures >= captureFailThreshold()) {
+          inst.captureCooldownUntil = System.currentTimeMillis() + captureCooldownMs();
+          degraded(kv, inst, "连续 " + failures + " 次失败,已暂停 " + (captureCooldownMs() / 1000) + " 秒");
+        }
       }
     } catch (IOException e) {
       kv.set("screenshot_error", e.getMessage());
