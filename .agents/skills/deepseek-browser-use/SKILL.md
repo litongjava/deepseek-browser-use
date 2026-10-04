@@ -21,6 +21,8 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 - **只有一个业务端点**：`POST http://localhost:10049/playwright/command`
 - 另有 `GET /playwright/health`（健康检查）与 `GET /data/**`（读取截图与结构化文本）
 - 共 120 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测
+- **本机是 Windows：调客户端一律写 `.\client\dsb.cmd ...`（在仓库根目录执行），不要写 `python client\dsb.py ...`。**
+  两者参数完全一致、包装内部最终也是交给 `dsb.py`，但**默认入口必须是 `dsb.cmd`**：它是这个仓库对外的客户端入口（负责找解释器、透传参数与退出码），手写 `python dsb.py` 等于跳过包装、把「客户端」降级成「随手写的一段脚本」，还会绕开文档里所有以 `dsb.cmd` 为前缀的现成示例。只有撞上 cmd.exe 会吃掉参数里的 `&`/`^`/`%`（见 `references/client.md`）这一类包装层限制时，才临时退回 `python client\dsb.py`，并在说明里点出原因。macOS/Linux 对应 `./client/dsb`。
 
 **本文只放「每次都要用的核心」；细节按需再读同目录分册（都在 `.agents/skills/deepseek-browser-use/references/`）：**
 
@@ -99,6 +101,8 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **按文本点了一下，回 `ok:true` 但页面毫无反应** | 看 `data.textMatch`：`contains` 说明点中的是"包含"这个词的**更长容器**（第 55 条）。现在按「完全相等 → 可点击 → 可见 → 文本短」打分，`data.hit.text` / `data.textClickable` 会告诉你到底点中了什么 |
 | **图表上的「文字」怎么都读不出来**（K 线的时间轴日期、刻度、地图上的标注） | 那些是画在 `canvas` 上的**像素**，不是 DOM 文字，`innerText` 必然为空——而且 canvas **不进快照**（不可交互 → 没索引），所以它读不到也不在 `data.text` 里。正确做法：① 读页面上**同时是文字**的地方（图例 / 数据面板 / 工具栏，那里是真 DOM 文字）；② 需要图上某一点的数值就用鼠标按住（见下一条）；③ 实在只能读像素才截图 + `ocr_image`。诊断时可用 `get_element_text` 传 `selector` + `canvasOnly:true`：它会回 `canvasOnly:true` 与 `hint`，直接告诉你「不是选择器错了」 |
 | **想读图表上某一根 K 线 / 某个数据点的数值** | 「按住」= `mouse_move` 到该点 → `mouse_down` → 读文本（`execute_js` 取图例 / 状态行的 `innerText`）→ `mouse_up`。**按住会把十字线钉在那一根上**，图例就变成那根自己的 `O/H/L/C/量`；松开即恢复。别忘了 `mouse_up`（漏了会一直按着，后续真实点击会变成拖拽） |
+| **要往 GitHub issue / PR 的评论里贴一张本地截图，可评论框里根本没有 `input[type=file]`** | 自建 input 三步走：`execute_js` 造隐藏 `<input type=file>` → `upload_file` 用 `selector=#tmp-file` 把本地文件放进去（Playwright 会附上真实 `File`）→ `execute_js` 用 `input.files[0]` 组 `DataTransfer` 派发 `paste` 事件。**提交评论必须用 `mouse_click_by_selector` 点主按钮**（`click_element_by_role`/`by_text` 回 ok 却不生效），也不能停在 Preview 页签上点（第 75、76 条） |
+| **`new_tab` 报 `SPURIOUS_DISPATCH` 之后，后面几条命令像是「作用在了别的页面上」** | 新页签可能已经建好但**没切过去**（`get_tabs` 里 `current` 没变），于是输入落到了旧页签。这类「无法判断是否生效」的报错之后，先 `get_tabs` 或读一次 `location.href` 再继续，填错的草稿用 `clear_text` 清掉（第 77 条） |
 | **同一个选择器、同一条命令，一会儿成功一会儿报 `[SPURIOUS_DISPATCH]`** | 这是 Playwright 事件泵的伪故障，不是选择器的问题。按三步走：① 先用只读命令（`get_browser_state` / `get_page_snapshot`）确认上一次到底生效没有；② **确认没生效**就带 `--retry-on-spurious` 重发（`dsb run` 与 `js` 都有这个开关；服务端参数名 `retryOnSpurious`），服务端会替你把这类噪声吃掉；③ 连 SPD 都过不去才退回**按坐标点**——`execute_js` 取 `getBoundingClientRect()` 拿到中心坐标，再 `mouse_click x y`（不依赖 DOM 节点句柄，实测在重度 SPA 上最稳） |
 | **`get_form_state` 说某个必填项是空的，可页面上明明填好了**；或反过来：**报出来的值看着挺对，提交却说"必填"** | 都是**自定义下拉**（`ds-select` / `ant-select` 那类）：落库前 `input.value` 里是"你打的字"（看着像值、其实没落库），落库后它被清空、真值只在显示节点里。看 `valueFrom`：`display` 就是后者（第 56 条）。**判据要三样一起看**：值 / 显示节点文本 / 容器类名后缀（`--error` = 没落库） |
 | **`wait_for_idle` 等满超时（页面有轮询），而且批量里后面的步骤全没跑** | 改用 `wait_for_stable`；批量加 `--keep-going`（= `stopOnError:false`），否则一条等待超时会把后面全吃掉（第 57 条） |
@@ -146,18 +150,36 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 手工拼 `-d '...'` 在参数带中文、引号、换行时很容易出错（PowerShell 尤其爱吃掉引号），返回体还得自己解析。仓库里的 `dsb` 客户端把这几件事都替你办了：**子命令式传参**、**批量与异步**、**每一步的请求与响应都留档**。凡是「发请求 → 读页面 → 再发请求」的任务，用它比手拼 JSON 少一大类无谓的失败。
 
 ```shell
-# macOS/Linux 用 ./client/dsb（可执行；软链进 PATH 后直接敲 dsb）；
-# Windows 用 .\client\dsb.cmd（cmd.exe 里写 client\dsb.cmd）；也可退回 python client/dsb.py，参数一致。
-./client/dsb --port 10049 health
-./client/dsb --port 10049 --id 1001 start --browser chrome --headful
-./client/dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
-./client/dsb --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
-./client/dsb --port 10049 --id 1001 js @脚本.js --var who=dsb
-./client/dsb --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
-./client/dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时先自检
+# Windows（本机首选，在仓库根目录执行）：.\client\dsb.cmd ...
+# macOS/Linux 把前缀换成 ./client/dsb（软链进 PATH 后直接敲 dsb）；
+# 只有包装层本身用不了（如参数里的 &/^/% 被 cmd.exe 吃掉）才退回 python client/dsb.py。
+.\client\dsb.cmd --port 10049 health
+.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
+.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
+.\client\dsb.cmd --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
+.\client\dsb.cmd --port 10049 --id 1001 js @脚本.js --var who=dsb
+.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
+.\client\dsb.cmd --port 10049 selftest --browser chrome       # 不确定服务端状态时先自检
 ```
 
 **退出码 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错** —— 把「服务没起」与「业务失败」分开了，写脚本时不用去解析 `msg` 猜。还有两个直接好处：`steps.log` 一行一次调用（时间、序号、任务 ID、方法、成败、耗时、摘要），第几步开始不对一眼就能看出来；每一步的请求与响应都留档。**多行脚本不要写在命令行里**（经 cmd/PowerShell 传参会只剩第一行），用 `js @脚本.js`、`--params @文件.json` 或 `batch cmds.json`。完整用法（含 `--summary` 与 `responseMode` 的区别、脱敏规则）见 `references/client.md`。
+
+> ### 别把 `dsb` 的正常输出截断成「失败」（宿主里显示成红色 exit code 1）
+>
+> **PowerShell 里不要用 `Select-Object -First N` 去截断 `dsb` 的输出**：`Select-Object` 读满 N 条就收工并**关掉上游管道**，`dsb` 还在往 stdout 写（方法清单、`state` 的文本都远超 N 行），于是吃到 `BrokenPipeError`、**以退出码 1 结束**——而它其实一条命令都没发错。宿主只看到「exit code 1」，就把这次调用标成 Failed 并显示成红色，很容易被误判成工具坏了或参数写错。
+>
+> ```powershell
+> # ✗ 假失败：dsb 正常输出 121 行方法清单，被 Select-Object 提前掐断 → exit 1
+> .\client\dsb.cmd methods | Select-Object -First 20
+>
+> # ✓ 要么不截断
+> .\client\dsb.cmd methods
+> # ✓ 要么先落盘、再截断文件（文件读取不会反向掐断上游进程）
+> .\client\dsb.cmd methods > $env:TEMP\m.txt; Get-Content $env:TEMP\m.txt -TotalCount 20
+> ```
+>
+> 判据：`dsb` 自己的退出码（`$LASTEXITCODE`，紧跟在 `.\client\dsb.cmd` 那条命令之后读）才是它的真实结果；`Get-Content` / `Select-Object` 这类 **cmdlet 不会刷新 `$LASTEXITCODE`**，你读到的 1 可能来自上一条完全无关的命令。只想筛选时用 `Select-String`，不要用 `Select-Object -First`。
+> （若这条命令真的因包装层把参数吃掉而失败，才改用 `python client\dsb.py methods`。）
 
 不确定有什么能力时先问服务自己：`list_methods`（方法名拿不准别猜）、`get_config`（生效的引擎 / profile 目录 / 超时与降级开关 / 脚本与日志目录）、`list_tasks`（活着的任务与共享浏览器）。三者也有 GET 版本：`GET /playwright/methods`、`GET /playwright/config`、`GET /playwright/tasks`。
 

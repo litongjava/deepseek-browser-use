@@ -14,43 +14,37 @@ client/
 
 ## 30 秒上手
 
+**Windows 上就敲 `.\client\dsb.cmd`(在仓库根目录);macOS/Linux 上换成 `./client/dsb`。**
+下面统一用 Windows 包装写,它和 `python client/dsb.py` 参数完全一致 —— 但**不要**为了「稳一点」去写 python 前缀,
+`dsb.cmd` / `dsb` 就是给智能体和人用的默认入口(`python client/dsb.py` 只在包装层本身用不了时才用)。
+
 ```bash
-# 服务端在哪:命令行 > 环境变量 > 默认(localhost:10049)
-python client/dsb.py --port 10049 health
+.\client\dsb.cmd --port 10049 health                # 服务端在哪:命令行 > 环境变量 > 默认(localhost:10049)
 
-# 起一个 Firefox 任务(默认无头),看回执里的 engineHonored 确认引擎真的换了
-python client/dsb.py start --browser firefox --id 1001
+.\client\dsb.cmd start --browser firefox --id 1001  # 起一个任务(默认无头),看回执 engineHonored 确认引擎真的换了
 
-# 发一条命令
-python client/dsb.py --id 1001 run go_to_url -p url=https://example.com
+.\client\dsb.cmd --id 1001 run go_to_url -p url=https://example.com   # 发一条命令
 
-# 看页面状态(标题/URL/元素数)
-python client/dsb.py --id 1001 state
+.\client\dsb.cmd --id 1001 state                    # 看页面状态(标题/URL/元素数)
 
-# 仅结构化文本；仍脱敏、留档，警告写入 stderr
-python client/dsb.py --id 1001 state --text-only --viewport-expansion -1
+.\client\dsb.cmd --id 1001 state --text-only --viewport-expansion -1  # 仅结构化文本；仍脱敏、留档，警告走 stderr
 
-# 字段投影输出 JSON，支持数字数组下标，如 data.fields.0
-python client/dsb.py --id 1001 run get_form_state --select data.fields
+.\client\dsb.cmd --id 1001 run get_form_state --select data.fields    # 字段投影输出 JSON，支持数字数组下标
 
-# 长批次:后台跑 + 轮询,不受 HTTP 超时限制
-python client/dsb.py --id 1001 batch cmds.json --async --wait
+.\client\dsb.cmd --id 1001 batch cmds.json --async --wait             # 长批次:后台跑 + 轮询,不受 HTTP 超时限制
 
-# 关掉任务
-python client/dsb.py --id 1001 close
+.\client\dsb.cmd --id 1001 close                    # 关掉任务
 ```
-
-Windows 下把 `python client/dsb.py` 换成 `client\dsb.cmd`(或先把 `client` 加进 `PATH`,直接敲 `dsb`)。
 
 三点 Windows 上的注意:
 
 - `dsb.cmd` 只做两件事:找 `python`(取不到退回 `py`)、把 `%~dp0dsb.py` 连同全部参数交出去,退出码照样透传 ——
-  所以它和 `python client/dsb.py` **完全等价**,不必为了「稳一点」去写 python 前缀。
+  所以它和 `python client/dsb.py` **完全等价**,默认写前者即可。
 - 在 **PowerShell** 里当前目录不在 `PATH`,要写 `.\client\dsb.cmd ...`;在 **cmd.exe** 里 `client\dsb.cmd ...` 就行。
 - `dsb.cmd` 中间隔着一层 cmd.exe,参数里的 `&`、`^`、`%` 可能被提前吃掉(中文与引号不受影响)。这类参数不要走
   命令行,挪进文件:`--params @文件.json`、`batch cmds.json`、`js @脚本.js`。
 
-macOS / Linux 下把 `python client/dsb.py` 换成 `./client/dsb`(或软链进 `PATH`,直接敲 `dsb`):
+macOS / Linux 下把上面的 `.\client\dsb.cmd` 换成 `./client/dsb`(或软链进 `PATH`,直接敲 `dsb`):
 
 ```bash
 # 仓库里已经带了可执行位,克隆后一般不用再 chmod;若权限被磨掉就补一下

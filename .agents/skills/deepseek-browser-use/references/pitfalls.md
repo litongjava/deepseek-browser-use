@@ -600,3 +600,41 @@
 
     顺带一条：`ERR_ABORTED` 的措辞是分开的。它通常意味着这次导航被页面自己**取消或替换**了
     （例如点到了下载、站点主动跳走），不一定是网络不通，别一看到 `NETWORK_ERROR` 就去重启代理。
+
+75. **GitHub 新版评论框没有 `input[type=file]`：要贴本地截图，得「自建 input + 派发 paste」。**
+
+    实测（2026-10）GitHub issue 的评论框是 `textarea[placeholder="Use Markdown to format your comment"]`，
+    旁边有个写着 `Paste, drop, or click to add files` 的回形针按钮：点它走的是 File System Access API
+    （页面里 `window.showOpenFilePicker` 存在），DOM 里**始终没有** `input[type=file]`（连 shadow root 里也没有，
+    点完也不会出现），所以 `upload_file` 没有选择器可指。可用的三步套路：
+
+    1. `execute_js` 造一个隐藏 input 挂到 body：`input.type='file'; input.id='tmp-file'`；
+    2. `upload_file` 传 `selector=#tmp-file` + `path=<服务端本地绝对路径>` —— Playwright 的 `setInputFiles`
+       会把**真实 File 对象**附上去，这是整条路的关键：页内 JS 因此拿得到 `input.files[0]`；
+    3. `execute_js` 用 `input.files[0]` 组 `DataTransfer`，把光标 `setSelectionRange(len,len)` 放到末尾后，
+       在 textarea 上派发 `new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })`。
+
+    回执 `defaultPrevented:true` 表示页面接住了；等几秒 textarea 里会多出
+    `<img … src="https://github.com/user-attachments/assets/<uuid>">`。多张图就重复第 2、3 步。
+    **不要**为了塞文件把 base64 拆成好几段 `execute_js` 传进去 —— 单张 150KB 的图 base64 就是 20 万字符起，
+    而这个注入法一个 token 都不用。
+
+76. **提交按钮要用「真实鼠标」点，而且不能停在 Preview 页签上点。**
+
+    实测 GitHub issue 的 `Comment` 按钮（`button[data-variant=primary]`，`type=button`、**不在 `<form>` 里**）：
+    `click_element_by_role` / `click_element_by_text` 都回 `ok:true` + `effective:true` + `changed:true`，
+    但评论根本没发出去、草稿仍在（该按钮在页面很下方，实测 `getBoundingClientRect().y≈2674`）；
+    编辑器切在 **Preview** 页签时点 `Close with comment` 同样毫无反应。
+    改用 `mouse_click_by_selector selector=button[data-variant=primary]` 一次成功（草稿清空、评论出现）。
+
+    判据别搞错：**不要用 `innerText` 里出现评论正文当作「已发布」** —— 新版编辑器带预览面板，
+    草稿会以渲染后的 DOM 文本出现在 `innerText` 里（我因此误判过一次：其实一个字都没发出去）。
+    要看 `textarea.value` 是否清空，以及时间线上是否多出 `private-user-images`/`camo` 的图片。
+
+77. **`new_tab` 报 `SPURIOUS_DISPATCH` 时，页签可能已经建好但「没切过去」。**
+
+    实测 `new_tab` 回 `Object doesn't exist: request@…（[SPURIOUS_DISPATCH] 疑似伪故障，但无法判断本次是否已生效）`，
+    紧接着的 `input_text_by_selector` 却照常回 `matched=1` —— 因为当前页签**还停在旧页面**，
+    输入与随后的上传都落到了上一个页签（`get_tabs` 里能看到新页签已存在，只是 `current` 没变）。
+    所以这类「无法判断是否生效」的报错之后，先 `get_tabs` 看 `current` 或读一次 `location.href` 再往下做；
+    已经填错的草稿用 `clear_text` 清掉（`[]`、引号一类的选择器一律走 `--params @文件.json`，别在命令行里拼）。

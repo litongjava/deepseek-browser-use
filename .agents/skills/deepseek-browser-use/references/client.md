@@ -2,6 +2,11 @@
 
 > 本文是 [SKILL.md](../SKILL.md) 的分册，按需阅读。
 
+> **Windows 上默认入口是 `.\client\dsb.cmd`（在仓库根目录执行），本文所有示例都按它写。**
+> **不要写 `python client/dsb.py …`**：`dsb.cmd` 就是这个仓库的客户端入口，它负责找解释器、
+> 把 `client/dsb.py` 连同参数交出去、并原样透传退出码；手写 `python dsb.py` 只是在包装层用不了时
+> 的退路（例如 `--grep` 的正则带 `|` 被 cmd.exe 吃掉，见下文）。macOS/Linux 把前缀换成 `./client/dsb`。
+
 ## 也可以不手拼 JSON：用现成客户端（**首选**）
 
 阅读页面首选 `dsb state --text-only`，只输出脱敏的结构化文本，不重复列出元素清单。
@@ -59,9 +64,9 @@ client\dsb.cmd --port 10049 --id 1001 js "@脚本.js" --retry-on-spurious   # �
 
 | 客户端 | 位置 | 适合 | 例子 |
 | --- | --- | --- | --- |
-| `dsb.py`（Python 3，只用标准库，跨平台，也可当库 import） | 仓库根 `client/dsb.py` | 写进脚本、批量、异步、跨平台 | `python client/dsb.py --port 10049 start --browser chrome` |
+| `dsb.py`（Python 3，只用标准库，跨平台，也可当库 import） | 仓库根 `client/dsb.py` | 写进脚本、yaml/CI、批量、异步；**交互使用时的退路**（包装层吃参数时才直接调它） | `python client/dsb.py --port 10049 start --browser chrome` |
 | `dsb`（macOS/Linux 薄包装，可执行，透传参数与退出码） | 仓库根 `client/dsb` | macOS/Linux 上少打一截前缀，直接敲就行 | `./client/dsb --port 10049 health` |
-| `dsb.cmd`（Windows 薄包装，透传参数与退出码） | 仓库根 `client/dsb.cmd` | Windows 上少打一截前缀，直接敲就行 | `client\dsb.cmd --port 10049 health` |
+| `dsb.cmd`（Windows 薄包装，透传参数与退出码） | 仓库根 `client/dsb.cmd` | **Windows 上的默认入口**（在仓库根目录写 `.\client\dsb.cmd`） | `.\client\dsb.cmd --port 10049 health` |
 | `browse.ps1` | `scripts/trace/browse.ps1` | 已有的 PowerShell 排查习惯 | `browse.ps1 -PayloadFile req.json -Session t1` |
 
 **macOS / Linux 上用 `./client/dsb`，不必写 `python dsb.py`**：它只做两件事 —— 挑一个 Python 3（顺序 `DSB_PYTHON` > `python3` > `python`），再把同目录的 `dsb.py` 连同全部参数交出去；用 `exec` 交棒，退出码原样透传。它会解析符号链接，所以 `ln -s "$(pwd)/client/dsb" ~/.local/bin/dsb` 之后在任何目录直接敲 `dsb` 即可。Unix shell 不像 cmd/PowerShell 那样额外吃 `&`、方括号、逗号（只有自己没加引号时才会被 shell 解释）。包装自身找不到解释器或 `dsb.py` 时退出 `127`。
@@ -84,20 +89,22 @@ client\dsb.cmd --port 10049 --id 1001 js "@脚本.js" --retry-on-spurious   # �
 
 ```shell
 # 通用选项放子命令前后都行；退出码 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错
-python client/dsb.py --port 10049 health
-python client/dsb.py --port 10049 --id 1001 start --browser chrome --headful
-python client/dsb.py --port 10049 --id 1001 run go_to_url -p url=https://example.com
-python client/dsb.py --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
-python client/dsb.py --port 10049 --id 1001 js @脚本.js --var who=dsb   # 支持 {{变量}} 注入
-python client/dsb.py --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
-python client/dsb.py --port 10049 --id 1001 recipes --run close-all-modals
-python client/dsb.py --port 10049 upload 图样.jpg                 # 送文件到服务端暂存区
-python client/dsb.py --port 10049 last                            # 重放最近一次响应
+# Windows（本机首选）：.\client\dsb.cmd ...    macOS/Linux：把前缀换成 ./client/dsb
+.\client\dsb.cmd --port 10049 health
+.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
+.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
+.\client\dsb.cmd --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
+.\client\dsb.cmd --port 10049 --id 1001 js @脚本.js --var who=dsb   # 支持 {{变量}} 注入
+.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
+.\client\dsb.cmd --port 10049 --id 1001 recipes --run close-all-modals
+.\client\dsb.cmd --port 10049 upload 图样.jpg                 # 送文件到服务端暂存区
+.\client\dsb.cmd --port 10049 last                            # 重放最近一次响应
 ```
 
 用它还有两个直接好处：**`steps.log` 一行一次调用**（时间、序号、任务 ID、方法、成败、耗时、摘要），第几步开始
 不对一眼就能看出来；**退出码把「服务没起」与「业务失败」分开**（`1` 与 `2`），写脚本时不用去解析 `msg` 猜。
-Windows 下把上面例子里的 `python client/dsb.py` 换成 `.\client\dsb.cmd`，macOS/Linux 下换成 `./client/dsb` 即可，其余参数完全一致。
+只有包装层本身用不了时（cmd.exe 吃掉 `&`/`^`/`%`、`|` 等参数）才临时退回 `python client/dsb.py`，
+其余参数与用法完全一致 —— 这是例外，不是默认写法。
 
 三个容易用错的地方：
 
@@ -122,5 +129,5 @@ Windows 下把上面例子里的 `python client/dsb.py` 换成 `.\client\dsb.cmd
 不确定服务端现在是什么状态（引擎、profile 目录、命令数、配方数）时，先跑一次自检：
 
 ```shell
-python client/dsb.py --port 10049 selftest --browser chrome
+.\client\dsb.cmd --port 10049 selftest --browser chrome    # macOS/Linux 换成 ./client/dsb
 ```
