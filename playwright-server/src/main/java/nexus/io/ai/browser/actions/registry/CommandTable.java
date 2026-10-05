@@ -224,9 +224,9 @@ public class CommandTable {
     put("screenshot",
         (svc, id, a) -> svc.screenshot(id, optStr(a, "path"), a.getBoolean("fullPage"), a.getInteger("index"),
             optStr(a, "selector"), a.getDouble("clipX"), a.getDouble("clipY"), a.getDouble("clipWidth"),
-            a.getDouble("clipHeight"), a.getBoolean("inline")));
+            a.getDouble("clipHeight"), a.getBoolean("inline"), a.getInteger("timeoutMs"), a.getBoolean("force"), a.getBoolean("fallbackToViewport")));
     put("get_element_screenshot", (svc, id, a) -> svc.getElementScreenshot(id, a.getInteger("index"),
-        optStr(a, "selector"), optStr(a, "path"), a.getBoolean("inline"), optStr(a, "frame")));
+        optStr(a, "selector"), optStr(a, "path"), a.getBoolean("inline"), optStr(a, "frame"), a.getInteger("timeoutMs"), a.getBoolean("force")));
     put("pdf", (svc, id, a) -> svc.pdf(id, optStr(a, "path")));
 
     // ---------- Cookie 与本地存储 ----------

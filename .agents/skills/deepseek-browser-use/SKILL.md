@@ -6,13 +6,17 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 
 # DeepSeek Browser Use（HTTP 浏览器自动化）
 
-> ## ⚠️ 开工第一条：所有调用一律走 `dsb`
+测试验收、截图超时或留证时，读取 [testing-evidence.md](references/testing-evidence.md)：前置条件、业务断言、截图完整性分别记录。自动/手动截图共用熔断，``force:true``仅探测一次；全页回退图必须标注为视口证据。``state --text-only``仍通过stderr提示证据缺失。
+
+本文CLI约束针对命令行方式；Harness已加载本仓库原生插件时使用其 ``dsb_*`` 工具，参阅仓库 ``plugins/deepseek-browser-use/README.md``，不需要另起CLI会话。
+
+> ## ⚠️ CLI方式第一条：调用统一走 `dsb`
 >
-> **本机（Windows）驱动浏览器的唯一入口是 `dsb`**：`D:\code\java\project-litongjava\deepseek-browser-use\client\dsb.cmd`，
+> **本机（Windows）的CLI入口是 `dsb`**：仓库根目录下的 `.\client\dsb.cmd`，
 > 在仓库根目录执行就是 `.\client\dsb.cmd ...`。**不要手写 `curl`/`Invoke-WebRequest` 往 `POST /playwright/command` 拼 JSON，
 > 也不要写 `python client\dsb.py ...`**（只有 cmd.exe 会吃掉参数里的 `&`/`^`/`%`/`|` 时才退回，且要点明原因）。
 >
-> | 要干的事 | 正确写法（在 `D:\code\java\project-litongjava\deepseek-browser-use` 下执行） |
+> | 要干的事 | 正确写法（在仓库根目录下执行） |
 > | --- | --- |
 > | 看服务活没活 | `.\client\dsb.cmd --port 10049 health`（**别用 curl 探 `/playwright/health`**） |
 > | 服务没起 | `scripts\run\start-server.cmd`（或 `pwsh -File scripts/run/start-server.ps1`），停：`scripts\run\stop-server.cmd` |
@@ -48,6 +52,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 
 | 分册 | 什么时候读它 |
 | --- | --- |
+| `references/testing-evidence.md` | 测试判定、截图熔断/探测/视口回退、诊断字段与证据登记 |
 | `references/client.md` | 不想手拼 JSON：`dsb` 客户端、批量与异步、退出码、`selftest` |
 | `references/protocol.md` | 请求/响应格式、响应精简模式、`mode` 降级、网络证据、截图落盘、`logs/trace/` 追踪日志 |
 | `references/reading-pages.md` | `get_browser_state` 全部返回字段、`data.text` 逐行含义、跨域 iframe、主站套第三方控制台 |

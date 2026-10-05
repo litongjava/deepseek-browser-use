@@ -644,3 +644,8 @@
     `data.effective:true` + `data.warning`（说清「切过去」这半段不一定完成、**别重发**，
     并把推断的 `switchedToNewTab`/`currentIndex` 一起给出）；页签数没变则回 `retryable:true` +
     「已核对未生效，可以安全重发」。**仍然要按 `data.currentIndex` 复核一次再打字** —— 推断不是事实。
+
+
+## 截图与重试补充（2026-10-05）
+
+自动截图与显式截图已共用熔断及截图预算。熔断期间显式截图快速失败；``force:true``只探测一次。命令层与内部截图共用两次事件泵额外重试，不再按外层3次×内部2次叠加。全页失败可显式请求``fallbackToViewport:true``，返回的``fullPageCaptured:false``必须登记为部分证据。使用纯文本客户端时仍检查stderr告警。完整字段及测试判定模板见 [testing-evidence.md](testing-evidence.md)。

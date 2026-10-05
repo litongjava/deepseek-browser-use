@@ -210,7 +210,7 @@ test('config validates defaults and plugin registers native tools with disposal'
   assert.throws(() => Config({ timeoutMs: -1 }));
   const registered = []; const effects = [];
   apply({ effect(fn) { effects.push(fn()); }, tools: { register(tool) { registered.push(tool); } } });
-  assert.equal(registered.length, 14);
+  assert.equal(registered.length, 15);
   assert.equal(effects.length, 1);
   assert(registered.every(t => t.name.startsWith('dsb_') && t.output.schema && t.parameters));
 });
@@ -232,5 +232,22 @@ test('real Harness ToolRuntime registers and dispatches the plugin tools', async
   assert.equal(invalid.isError, true);
   disposers.forEach(dispose => dispose());
   assert.equal(runtime.schemas().length, 0);
+  await f.sessions.dispose();
+});
+
+
+test('screenshot forwards capture policy and preserves partial evidence diagnostics', async t => {
+  const { client, calls } = await server(t, body => ({ ok: true, data: body.method === 'screenshot'
+    ? { fallbackUsed: true, fullPageCaptured: false, warning: 'viewport only', capture: { actualMode: 'viewport', attempts: 2 } } : {} }));
+  const f = fixture(client);
+  const result = await f.call('screenshot', { fullPage: true, fallbackToViewport: true, timeoutMs: 8000, force: false });
+  assert.equal(result.data.fullPageCaptured, false);
+  assert.equal(result.data.capture.actualMode, 'viewport');
+  const shot = calls.find(call => call.body.method === 'screenshot').body.params;
+  assert.deepEqual(shot, { fullPage: true, fallbackToViewport: true, timeoutMs: 8000, force: false, inline: false });
+  const before = calls.length;
+  await assert.rejects(f.call('screenshot', { timeoutMs: 0 }));
+  await assert.rejects(f.call('screenshot', { timeoutMs: 120001 }));
+  assert.equal(calls.length, before);
   await f.sessions.dispose();
 });

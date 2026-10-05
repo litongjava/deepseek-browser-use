@@ -16,6 +16,8 @@
 
 默认直接用**本机安装的 Google Chrome**（没有才退回内嵌 Chromium），所以 Google 登录之类的站点不会因为「这是个自动化浏览器」而拒绝；profile 是所有任务共用的，agent 第一次登录之后，后续任务不用再登。
 
+截图失败时，自动与手动截图共用熔断及预算；支持一次强制探测和明确标记的全页→视口回退。CLI纯文本模式仍通过stderr报告证据缺失，`start/state/health`等支持`--out`留档。参数、诊断字段和测试判定模板见[截图与测试取证](.agents/skills/deepseek-browser-use/references/testing-evidence.md)；Harness原生入口见[插件文档](plugins/deepseek-browser-use/README.md)。
+
 ---
 
 ## 一、为什么需要它

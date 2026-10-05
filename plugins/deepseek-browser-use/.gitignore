@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.tgz
 !package-lock.json
+!scripts/
+!scripts/backend.ps1

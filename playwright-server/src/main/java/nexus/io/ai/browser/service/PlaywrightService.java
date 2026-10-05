@@ -182,16 +182,6 @@ public class PlaywrightService {
   /** 熔断时长默认值(毫秒) */
   private static final long DEFAULT_CAPTURE_COOLDOWN_MS = 120_000;
 
-  /**
-   * 截图撞上事件泵伪故障时的冷却时长(毫秒)
-   *
-   * <p>
-   * 伪故障不是「这个页面截不动」:它来自 Playwright 的事件分发,页面通常完全正常。实测(2026-10)
-   * 一次任务里连续 3 次伪故障把画面按 120 秒关掉,而同期 DOM 读写、输入、提交全部成功 ——
-   * 调用方平白变成「盲操作」。所以这一类单独计数、只短暂停一会儿,不让噪声点燃为真实失败准备的熔断。
-   */
-  private static final long DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS = 15_000;
-
   /** 动作类命令的超时(毫秒),可用配置项覆盖 */
   public static final String KEY_ACTION_TIMEOUT = "browser.action.timeoutMs";
 
@@ -2655,91 +2645,53 @@ public class PlaywrightService {
    *
    * <p>
    * 文件落在 {@code data/&lt;id&gt;/&lt;seq&gt;.png},返回值里的 screenshot 是可以直接 GET 的
-   * URL({@code /data/&lt;id&gt;/&lt;seq&gt;.png})。截图前会尽力等页面进入 DOMCONTENTLOADED,
-   * 等不到(超时)也照常截图,不会因为等待失败而丢掉这一张。
+   * URL({@code /data/&lt;id&gt;/&lt;seq&gt;.png})。截图使用与手动截图相同的超时及熔断策略，不额外等待页面加载。
    *
    * @return 含 seq / screenshot / screenshot_path 的 Kv;截图失败时含 screenshot_error
    */
   public Kv capture(BrowserInstance inst) {
     int seq = inst.captureSeq.incrementAndGet();
-    Kv kv = Kv.by("seq", seq);
-    Path dir = dataDir(inst.id);
-    Path png = dir.resolve(seq + ".png");
-    // 截图策略:每次页面变化都自动截一张,长时间跑下来 data/ 会涨得很快。关掉之后动作照常执行,
-    // 只是不再落图(需要时仍可显式调 screenshot 命令,那条不受这个开关影响)
-    if (!captureEnabled()) {
-      kv.set("screenshot_skipped", "browser.capture.enabled=false");
-      return kv;
-    }
-    long now = System.currentTimeMillis();
-    if (inst.captureCooldownUntil > now) {
-      // 熔断中:不再白等一次超时,但**必须说清**——调用方此刻是完全看不到画面的
-      return degraded(kv, inst, "熔断中,还有 " + ((inst.captureCooldownUntil - now) / 1000) + " 秒");
-    }
-    if (inst.captureCooldownUntil != 0 && inst.captureCooldownUntil <= now) {
-      // 冷却结束:放开一次,成败由这次决定(失败就再熔断)
-      inst.captureCooldownUntil = 0;
+    Kv data = Kv.by("seq", seq);
+    if (!captureEnabled()) return data.set("screenshot_skipped", "browser.capture.enabled=false");
+    Path png = dataDir(inst.id).resolve(seq + ".png");
+    CapturePolicy.Result result = CapturePolicy.run(inst, "viewport", false, false, null,
+        (mode, timeout) -> withHighlightHidden(inst, () -> inst.page.screenshot(new Page.ScreenshotOptions().setTimeout(timeout))));
+    data.set(result.data());
+    // Automatic evidence failure must not replace the parent action's business error code.
+    data.remove("errorCode");
+    describeCapture(inst, data);
+    // Retain the historical distinction: an open circuit is skipped, not a new screenshot error.
+    if (!result.ok()) {
+      if ("circuit-open".equals(((Kv) data.get("capture")).get("stage"))) data.remove("screenshot_error");
+      return data;
     }
     try {
-      Files.createDirectories(dir);
-      settle(inst);
-      // 高亮层必须挡在镜头外(见 withHighlightHidden):否则人工看到的二维码/验证码是被彩色框压住的
-      spuriousRetry(() -> withHighlightHidden(inst, () -> inst.page
-          .screenshot(new Page.ScreenshotOptions().setPath(png).setTimeout(captureTimeoutMs()))));
-      kv.set("screenshot", "/" + DATA_DIR + "/" + inst.id + "/" + seq + ".png");
-      kv.set("screenshot_path", png.toAbsolutePath().toString());
-      inst.captureFailures.set(0);
-      inst.captureSpuriousFailures.set(0);
-      inst.captureFailureReason = null;
-    } catch (PlaywrightException e) {
-      String reason = briefMessage(e.getMessage());
-      kv.set("screenshot_error", reason);
-      if (ActionError.isSpuriousDispatch(reason)) {
-        // 伪故障(spuriousRetry 已经重发过,仍失败说明当下噪声很大)不是「这个页面截不出图」:
-        // 它来自事件泵,页面本身通常完全正常。计入 captureFailures 会把一次噪声变成两分钟的
-        // 「盲操作」,所以单独计数、只给一段很短的冷却。
-        int spurious = inst.captureSpuriousFailures.incrementAndGet();
-        log.warn("任务 {} 第 {} 张截图撞上事件泵伪故障(连续第 {} 次,不计入截图熔断):{}", inst.id, seq, spurious, reason);
-        if (spurious >= captureFailThreshold()) {
-          inst.captureCooldownUntil = System.currentTimeMillis() + DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS;
-          inst.captureSpuriousFailures.set(0);
-          degraded(kv, inst, "连续 " + spurious + " 次撞上事件泵伪故障,已暂停 "
-              + (DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS / 1000) + " 秒");
-        }
-      } else {
-        int failures = inst.captureFailures.incrementAndGet();
-        if (inst.captureFailureReason == null) {
-          inst.captureFailureReason = reason;
-        }
-        log.warn("任务 {} 第 {} 张截图失败(连续第 {} 次):{}", inst.id, seq, failures, reason);
-        if (failures >= captureFailThreshold()) {
-          inst.captureCooldownUntil = System.currentTimeMillis() + captureCooldownMs();
-          degraded(kv, inst, "连续 " + failures + " 次失败,已暂停 " + (captureCooldownMs() / 1000) + " 秒");
-        }
-      }
-    } catch (IOException e) {
-      kv.set("screenshot_error", e.getMessage());
-      log.warn("任务 {} 第 {} 张截图写文件失败:{}", inst.id, seq, e.getMessage());
+      Files.createDirectories(png.getParent());
+      Files.write(png, result.bytes());
+      data.set("screenshot", "/" + DATA_DIR + "/" + inst.id + "/" + seq + ".png")
+          .set("screenshot_path", png.toAbsolutePath().toString());
+    } catch (IOException error) {
+      data.set("screenshot_error", "截图写文件失败: " + error.getMessage());
+      ((Kv) data.get("capture")).set("stage", "write-file");
     }
-    return kv;
+    return data;
   }
 
-  /**
-   * 截图能力已经退化:把「你现在看不到画面」这件事写进回执
-   *
-   * <p>
-   * 起因是实测的一次任务:B 站投稿页全程截不出图,而页面上出现过整页白屏,只读文本完全看不出来 ——
-   * 调用方直到人来说「屏幕都白了」才知道自己一直在盲操作。回执里明说之后,调用方至少能做三件事:
-   * 改用 {@code diff_dom_text} 之类的文本取证、不要只凭文本断言「页面正常」、关键步骤请人看一眼。
-   */
-  private static Kv degraded(Kv kv, BrowserInstance inst, String why) {
-    kv.set("capture_degraded", true)
-        .set("capture_note", "自动截图不可用(" + why + (inst.captureFailureReason == null ? ""
-            : ",首次失败原因:" + inst.captureFailureReason) + ")。"
-            + "这期间**没有任何画面留档**,别只凭 data.text 断言「页面正常」:"
-            + "整页白屏、样式错乱、弹窗遮罩这类问题在文本里看不出来。"
-            + "需要确认画面请让人类看一眼浏览器窗口(request_human_input),或用 execute_js 读 DOM 自证。");
-    return kv;
+  private static void describeCapture(BrowserInstance inst, Kv data) {
+    Kv capture = (Kv) data.get("capture");
+    if (capture == null) return;
+    try {
+      capture.set("pageClosed", inst.page.isClosed());
+      var viewport = inst.page.viewportSize();
+      if (viewport != null) capture.set("viewport", Kv.by("width", viewport.width).set("height", viewport.height));
+      if (inst.context != null && inst.context.browser() != null) capture.set("browserConnected", inst.context.browser().isConnected());
+    } catch (RuntimeException ignored) { capture.set("connectionState", "unknown"); }
+  }
+
+  private static RespBodyVo captureFailure(Kv data) {
+    RespBodyVo result = RespBodyVo.fail("screenshot 失败：" + (data.get("screenshot_error") == null ? "截图熔断中" : data.get("screenshot_error")));
+    result.setData(data);
+    return result;
   }
 
   /**
@@ -2831,19 +2783,13 @@ public class PlaywrightService {
    * {@code ActionService#dispatchWithSpuriousRetry},那里按命令名分级。
    */
   static <T> T spuriousRetry(java.util.function.Supplier<T> call) {
-    for (int attempt = 1;; attempt++) {
-      try {
-        return call.get();
-      } catch (PlaywrightException e) {
-        if (attempt >= 2 || !ActionError.isSpuriousDispatch(e.getMessage())) {
-          throw e;
-        }
-        try {
-          Thread.sleep(120);
-        } catch (InterruptedException interrupted) {
-          // 中断时把原异常抛出去,别把「被中断」伪装成「伪故障重发失败」
-          Thread.currentThread().interrupt();
-          throw e;
+    try (RetryBudget budget = RetryBudget.open(30000)) {
+      for (int attempt = 1;; attempt++) {
+        try { return call.get(); }
+        catch (PlaywrightException error) {
+          if (attempt >= 2 || !ActionError.isSpuriousDispatch(error.getMessage()) || !budget.retry()) throw error;
+          try { Thread.sleep(120); }
+          catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw error; }
         }
       }
     }
@@ -7902,43 +7848,42 @@ public class PlaywrightService {
    */
   public RespBodyVo screenshot(Long browserId, String path, Boolean fullPage, Integer index, String selector,
       Double clipX, Double clipY, Double clipWidth, Double clipHeight, Boolean inline) {
+    return screenshot(browserId, path, fullPage, index, selector, clipX, clipY, clipWidth, clipHeight, inline, null, false, false);
+  }
+
+  public RespBodyVo screenshot(Long browserId, String path, Boolean fullPage, Integer index, String selector,
+      Double clipX, Double clipY, Double clipWidth, Double clipHeight, Boolean inline,
+      Integer timeoutMs, Boolean force, Boolean fallbackToViewport) {
     BrowserInstance inst = INSTANCES.get(browserId);
-    if (inst == null) {
-      return notFound(browserId);
-    }
-    if (index != null || (selector != null && !selector.isEmpty())) {
-      return elementScreenshot(inst, index, selector, path, inline);
-    }
-    boolean wantInline = inline != null && inline;
+    if (inst == null) return notFound(browserId);
+    boolean probe = Boolean.TRUE.equals(force);
+    if (index != null || (selector != null && !selector.isEmpty()))
+      return elementScreenshot(inst, index, selector, path, inline, null, timeoutMs, probe);
+    boolean wantInline = Boolean.TRUE.equals(inline);
     String target = path;
-    if ((target == null || target.isEmpty()) && !wantInline) {
-      target = defaultShotPath(inst);
-    }
-    Page.ScreenshotOptions options = new Page.ScreenshotOptions().setFullPage(fullPage != null && fullPage);
-    if (clipX != null && clipY != null && clipWidth != null && clipHeight != null) {
-      options.setClip(clipX, clipY, clipWidth, clipHeight);
-    }
-    if (target != null && !target.isEmpty()) {
-      ensureParent(target);
-      options.setPath(Paths.get(target));
-    }
+    if ((target == null || target.isEmpty()) && !wantInline) target = defaultShotPath(inst);
+    boolean clip = clipX != null && clipY != null && clipWidth != null && clipHeight != null;
+    String mode = clip ? "clip" : Boolean.TRUE.equals(fullPage) ? "fullPage" : "viewport";
+    CapturePolicy.Result shot = CapturePolicy.run(inst, mode, probe, Boolean.TRUE.equals(fallbackToViewport), timeoutMs,
+        (actual, timeout) -> {
+          Page.ScreenshotOptions options = new Page.ScreenshotOptions().setFullPage(actual.equals("fullPage")).setTimeout(timeout);
+          if (clip) options.setClip(clipX, clipY, clipWidth, clipHeight);
+          return withHighlightHidden(inst, () -> inst.page.screenshot(options));
+        });
+    Kv data = shot.data(); describeCapture(inst, data);
+    if (!shot.ok()) return captureFailure(data);
+    data.set("size", shot.bytes().length);
     try {
-      byte[] bytes = spuriousRetry(() -> withHighlightHidden(inst, () -> inst.page.screenshot(options)));
-      Kv data = Kv.by("size", bytes.length);
       if (target != null && !target.isEmpty()) {
-        data.set("path", target);
-        data.set("url", shotUrl(inst, target));
+        ensureParent(target); Files.write(Paths.get(target), shot.bytes());
+        data.set("path", target).set("url", shotUrl(inst, target));
       }
-      if (wantInline) {
-        data.set("base64", Base64.getEncoder().encodeToString(bytes));
-        data.set("inline", true);
-      } else {
-        data.set("inline", false).set("base64Omitted", true).set("note",
-            "默认不返回 base64(会把整张图塞进上下文):要看图请 GET data.url,确实需要内联再传 inline=true");
-      }
+      if (wantInline) data.set("base64", Base64.getEncoder().encodeToString(shot.bytes())).set("inline", true);
+      else data.set("inline", false).set("base64Omitted", true).set("note", "默认不返回 base64；需要内联图片时传 inline=true。");
       return RespBodyVo.ok(data);
-    } catch (PlaywrightException e) {
-      return RespBodyVo.fail("screenshot 失败：" + briefMessage(e.getMessage()));
+    } catch (IOException error) {
+      ((Kv) data.get("capture")).set("stage", "write-file");
+      return captureFailure(data.set("screenshot_error", error.getMessage()));
     }
   }
 
@@ -7988,6 +7933,13 @@ public class PlaywrightService {
     return elementScreenshot(inst, index, selector, path, inline, frame);
   }
 
+  public RespBodyVo getElementScreenshot(Long browserId, Integer index, String selector, String path,
+      Boolean inline, String frame, Integer timeoutMs, Boolean force) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) return notFound(browserId);
+    return elementScreenshot(inst, index, selector, path, inline, frame, timeoutMs, Boolean.TRUE.equals(force));
+  }
+
   private RespBodyVo elementScreenshot(BrowserInstance inst, Integer index, String selector, String path,
       Boolean inline) {
     return elementScreenshot(inst, index, selector, path, inline, null);
@@ -7996,6 +7948,17 @@ public class PlaywrightService {
   /** 同上,{@code frame} 非空时把选择器限定在指定 frame 里(验证码在跨域 iframe 里时要传) */
   private RespBodyVo elementScreenshot(BrowserInstance inst, Integer index, String selector, String path,
       Boolean inline, String frame) {
+    return elementScreenshot(inst, index, selector, path, inline, frame, null, false);
+  }
+
+  private RespBodyVo elementScreenshot(BrowserInstance inst, Integer index, String selector, String path,
+      Boolean inline, String frame, Integer timeoutMs, boolean force) {
+    if (!force && inst.captureCooldownUntil > System.currentTimeMillis()) {
+      Kv data = CapturePolicy.blocked(inst).set("capture", Kv.by("requestedMode", "element")
+          .set("actualMode", "element").set("stage", "circuit-open").set("attempts", 0).set("elapsedMs", 0L));
+      describeCapture(inst, data);
+      return captureFailure(data);
+    }
     Locator locator;
     ActionTarget resolved = null;
     String target;
@@ -8028,9 +7991,12 @@ public class PlaywrightService {
     }
     try {
       // 元素截图是高亮层污染的重灾区:二维码/验证码正好是「必须看图」的元素,被彩色框压住就废了
-      byte[] bytes = spuriousRetry(() -> withHighlightHidden(inst,
-          () -> locator.screenshot(new Locator.ScreenshotOptions().setTimeout(actionTimeoutMs()))));
-      Kv data = Kv.by("size", bytes.length).set("target", target);
+      CapturePolicy.Result shot = CapturePolicy.run(inst, "element", force, false, timeoutMs,
+          (mode, timeout) -> withHighlightHidden(inst, () -> locator.screenshot(new Locator.ScreenshotOptions().setTimeout(timeout))));
+      Kv data = shot.data(); describeCapture(inst, data);
+      if (!shot.ok()) return captureFailure(data);
+      byte[] bytes = shot.bytes();
+      data.set("size", bytes.length).set("target", target);
       if (resolved != null) {
         data.set(resolved.describe());
       }

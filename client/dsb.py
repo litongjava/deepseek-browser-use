@@ -746,12 +746,19 @@ def pick_index(envelope: dict, index: int | None):
 
 def cmd_health(client: Client, args, out: Printer) -> int:
     response = client.health()
+    if emit_side_output(out, args, pick_index(response.envelope, args.index)):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     out.json(pick_index(response.envelope, args.index))
     return EXIT_OK if response.ok else EXIT_BUSINESS
 
 
 def cmd_methods(client: Client, args, out: Printer) -> int:
     response = client.methods()
+    if emit_side_output(out, args, pick_index(response.envelope, args.index)):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
+    if out.select is not None:
+        out.json(pick_index(response.envelope, args.index))
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     if not response.ok:
         out.json(response.envelope)
         return EXIT_BUSINESS
@@ -771,12 +778,16 @@ def cmd_methods(client: Client, args, out: Printer) -> int:
 
 def cmd_config(client: Client, args, out: Printer) -> int:
     response = client.config()
+    if emit_side_output(out, args, pick_index(response.envelope, args.index)):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     out.json(pick_index(response.envelope, args.index))
     return EXIT_OK if response.ok else EXIT_BUSINESS
 
 
 def cmd_tasks(client: Client, args, out: Printer) -> int:
     response = client.tasks()
+    if emit_side_output(out, args, pick_index(response.envelope, args.index)):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     out.json(pick_index(response.envelope, args.index))
     return EXIT_OK if response.ok else EXIT_BUSINESS
 
@@ -803,11 +814,13 @@ def cmd_recipes(client: Client, args, out: Printer) -> int:
 
 def cmd_start(client: Client, args, out: Printer) -> int:
     response = client.start(browser=args.browser, headless=not args.headful)
+    if response.ok and isinstance(response.data, dict) and response.data.get("engineHonored") is False:
+        out.warn("注意:engineHonored=false —— 这个服务实例没有按 browser 参数切浏览器(常见于旧发布包)")
+    if emit_side_output(out, args, pick_index(response.envelope, args.index)):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     out.response(response, label="start")
-    if response.ok and isinstance(response.data, dict):
+    if response.ok and isinstance(response.data, dict) and out.select is None and not args.json:
         browser = response.data.get("browser") or {}
-        if response.data.get("engineHonored") is False:
-            out.warn("注意:engineHonored=false —— 这个服务实例没有按 browser 参数切浏览器(常见于旧发布包)")
         if browser:
             out.line(f"  引擎={browser.get('engine')} 类型={browser.get('type')} "
                      f"profile={browser.get('profileDir')}")
@@ -816,6 +829,8 @@ def cmd_start(client: Client, args, out: Printer) -> int:
 
 def cmd_close(client: Client, args, out: Printer) -> int:
     response = client.close()
+    if emit_side_output(out, args, pick_index(response.envelope, args.index)):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     out.response(response, label="close")
     return EXIT_OK if response.ok else EXIT_BUSINESS
 
@@ -827,7 +842,7 @@ def cmd_shutdown(client: Client, args, out: Printer) -> int:
 
 
 def add_output_switches(parser) -> None:
-    """给 run / js 挂上两个输出开关(--out 落盘、--grep 只看命中行)
+    """给命令挂上两个输出开关(--out 落盘、--grep 只看命中行)
 
     为什么需要:读页面常常**只关心其中一行** —— 某个文号在不在、某张表里有没有那个数字。
     而一条命令的完整回执动辄几万字符(实测一次整页文本 3.7 万),直接打出来又长又贵;
@@ -989,6 +1004,19 @@ def cmd_uploads(client: Client, args, out: Printer) -> int:
     return EXIT_OK if response.ok else EXIT_BUSINESS
 
 
+def warn_observation(out: Printer, data: dict) -> None:
+    """Keep evidence warnings on stderr even when stdout is text-only or projected JSON."""
+    if data.get("capture_degraded") or data.get("screenshot_error"):
+        out.warn("截图取证不完整:" + str(data.get("capture_note") or data.get("screenshot_error")))
+    if data.get("snapshotConsistent") is False:
+        out.warn("快照不可靠:" + str(data.get("snapshotIssues") or data.get("snapshotHint")))
+    for field in ("observationComplete", "probeTrustworthy", "indicesUsable"):
+        if data.get(field) is False:
+            out.warn(field + "=false，不能据此确认操作结果或继续使用旧索引")
+    if data.get("actionStatus") == "unknown":
+        out.warn("动作结果未知，请先读取业务结果，勿自动重试")
+
+
 def cmd_state(client: Client, args, out: Printer) -> int:
     """页面状态摘要:标题、URL、元素数,以及可选的元素清单/正文"""
     params: dict = {"includeElements": not args.text_only}
@@ -999,12 +1027,13 @@ def cmd_state(client: Client, args, out: Printer) -> int:
     if args.max_elements is not None:
         params["maxElements"] = args.max_elements
     response = client.command("get_browser_state", params)
+    data = response.data if isinstance(response.data, dict) else {}
+    warn_observation(out, data)
+    if emit_side_output(out, args, pick_index(response.envelope, args.index)):
+        return EXIT_OK if response.ok else EXIT_BUSINESS
     if args.json or out.select is not None or not response.ok:
         out.json(pick_index(response.envelope, args.index))
         return EXIT_OK if response.ok else EXIT_BUSINESS
-    data = response.data if isinstance(response.data, dict) else {}
-    if data.get("snapshotConsistent") is False:
-        out.warn("快照不可靠:" + str(data.get("snapshotIssues") or data.get("snapshotHint")))
     if args.text_only:
         out.line(str(data.get("text") or ""))
         return EXIT_OK
@@ -1354,6 +1383,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = subs.add_parser("selftest", parents=[common], help="对当前服务跑一遍端到端自检")
     p.add_argument("--browser", help="自检时用哪个浏览器(默认服务配置)")
 
+    for name in ("health", "methods", "config", "tasks", "start", "close", "state"):
+        add_output_switches(subs.choices[name])
     return parser
 
 

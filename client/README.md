@@ -180,3 +180,10 @@ python client/dsb.py --port 10049 selftest --browser firefox
 `start` 的 `engineHonored`、打开本地自检页、`wait_for_count`、`get_modals`/`close_modal`、点击降级到真实鼠标、
 `expect` 断言能报出不一致、异步批次与 `get_job`、任务清单/配置/配方可读、`cleanup` 默认只预演。
 自检页面是本地生成的 HTML,**不依赖外网**。
+
+
+### 截图降级与统一留档
+
+`start/close/state/health/methods/config/tasks` 与 `run/js` 均支持 `--out`、`--grep`；`--out`保存完整脱敏JSON，保留原业务退出码。`state --text-only`在stdout只输出页面文本，在stderr保留截图降级及观测不完整告警。
+
+截图预算、强制恢复探测和全页回退的使用规则见 [取证说明](../.agents/skills/deepseek-browser-use/references/testing-evidence.md)。

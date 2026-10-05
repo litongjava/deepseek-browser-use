@@ -5,6 +5,7 @@ export interface ClientOptions {
   baseUrl: string;
   timeoutMs: number;
   maxResponseBytes: number;
+  ensureBackend?: (signal: AbortSignal) => Promise<void>;
 }
 
 /** No automatic retries: a lost HTTP response does not undo browser input. */
@@ -28,6 +29,10 @@ export class BrowserClient {
 
   async request(path: string, signal: AbortSignal, body?: Params): Promise<Envelope> {
     signal.throwIfAborted();
+    // Cleanup and existing job observation must not resurrect a stopped backend.
+    if (!body || !['close', 'cancel_job', 'get_job'].includes(String(body.method))) {
+      await this.options.ensureBackend?.(signal);
+    }
     const combined = AbortSignal.any([signal, AbortSignal.timeout(this.options.timeoutMs)]);
     try {
       const response = await fetch(this.baseUrl + path, {

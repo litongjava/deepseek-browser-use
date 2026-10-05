@@ -8,3 +8,7 @@
         timeoutMs: 60000
         maxTextChars: 24000
         maxResponseBytes: 16777216
+        backendAutoStart: true
+        backendAutoUpdate: true
+        backendInstallDependencies: true
+        backendRepository: gitee

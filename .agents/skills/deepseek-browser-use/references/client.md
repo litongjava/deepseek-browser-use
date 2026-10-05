@@ -23,7 +23,7 @@
 
 ### 回执太大：`--out` 落盘、`--grep` 只看命中行
 
-`run` 与 `js` 上有两个输出开关（只影响**怎么打印**，不改变发出去的请求，也不会多一次往返）：
+`run`、`js`、`start`、`close`、`state`、`health`、`methods`、`config`、`tasks` 统一提供两个输出开关（只影响**怎么打印**，不改变发出去的请求，也不会多一次往返）：
 
 ```bash
 # 完整 JSON 写进文件，stdout 只留一行「已写入 …（N 字符，M 行）」
@@ -146,3 +146,16 @@ client\dsb.cmd --port 10049 --id 1001 js "@脚本.js" --retry-on-spurious   # �
 ```shell
 .\client\dsb.cmd --port 10049 selftest --browser chrome    # macOS/Linux 换成 ./client/dsb
 ```
+
+
+### 取证告警与输出兼容
+
+``state --text-only``的stdout仍是纯页面文本；截图失败/熔断、观测不完整、索引不可用的提示输出到stderr。``state --select data.text``保留同样告警且stdout仍是合法JSON。``start --select data.browser.engine``不会再混入profile说明行。
+
+```powershell
+.\client\dsb.cmd start --browser chrome --headful --out start.json
+.\client\dsb.cmd health --out health.json
+.\client\dsb.cmd state --out state.json
+```
+
+``--out``保存完整脱敏响应，不受``--select``投影影响；业务失败退出码仍为2。截图降级与业务断言分开登记，详见 [testing-evidence.md](testing-evidence.md)。

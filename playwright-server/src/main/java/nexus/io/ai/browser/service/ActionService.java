@@ -203,30 +203,34 @@ public class ActionService {
   static RespBodyVo dispatchWithSpuriousRetry(String method, JSONObject params,
       java.util.function.Supplier<RespBodyVo> call) {
     int maxAttempts = retrySafeFor(method, params) ? SPURIOUS_MAX_ATTEMPTS : 1;
-    for (int attempt = 1;; attempt++) {
-      RespBodyVo result;
-      try {
-        result = call.get();
-      } catch (RuntimeException e) {
-        if (attempt >= maxAttempts || !ActionError.isSpuriousDispatch(e.getMessage())) {
-          throw e;
+    if ((method.equals("screenshot") || method.equals("get_element_screenshot"))
+        && params != null && Boolean.TRUE.equals(params.getBoolean("force"))) maxAttempts = 1;
+    // A single monotonic deadline and retry allowance includes nested screenshot helpers.
+    try (RetryBudget budget = RetryBudget.open(30000)) {
+      for (int attempt = 1;; attempt++) {
+        RespBodyVo result;
+        try { result = call.get(); }
+        catch (RuntimeException error) {
+          if (attempt >= maxAttempts || !ActionError.isSpuriousDispatch(error.getMessage()) || !budget.retry()) throw error;
+          sleepBeforeSpuriousRetry();
+          continue;
         }
-        sleepBeforeSpuriousRetry();
-        continue;
+        if (result != null && !result.isOk() && attempt < maxAttempts
+            && ActionError.isSpuriousDispatch(result.getMsg()) && budget.retry()) {
+          sleepBeforeSpuriousRetry();
+          continue;
+        }
+        if (result != null) {
+          Kv data = result.getData() instanceof Kv ? (Kv) result.getData() : new Kv();
+          data.set("retryBudget", Kv.by("attempts", budget.retries() + 1).set("retries", budget.retries())
+              .set("commandAttempts", attempt).set("elapsedMs", budget.elapsedMs()).set("remainingMs", budget.remainingMs()));
+          if (budget.retries() > 0) data.set("spuriousRetry", Kv.by("attempts", budget.retries() + 1)
+              .set("errorCode", ActionError.SPURIOUS_DISPATCH).set("note", "命令与内部截图共用重试额度，含首次最多3次；详见 retryBudget。"));
+          // Preserve non-Kv successful payloads; commands returning Kv receive additive diagnostics.
+          if (result.getData() == null || result.getData() instanceof Kv) result.setData(data);
+        }
+        return result;
       }
-      if (result != null && !result.isOk() && attempt < maxAttempts
-          && ActionError.isSpuriousDispatch(result.getMsg())) {
-        sleepBeforeSpuriousRetry();
-        continue;
-      }
-      if (result != null && attempt > 1) {
-        Kv data = result.getData() instanceof Kv ? (Kv) result.getData() : new Kv();
-        data.set("spuriousRetry", Kv.by("attempts", attempt).set("errorCode", ActionError.SPURIOUS_DISPATCH)
-            .set("note", "前 " + (attempt - 1) + " 次失败是 Playwright 事件分发的伪故障（对象已释放，与本次命令无关）："
-                + "服务端已自动重发，这次是重发后的结果"));
-        result.setData(data);
-      }
-      return result;
     }
   }
 
@@ -480,22 +484,29 @@ public class ActionService {
     // 页签类命令的效果可以直接读回来(见 verifyTabsAfterSpurious):发命令前先记一份页签状态,
     // 万一撞上伪故障,就能把「到底生效没有」写成事实,而不是留给调用方猜。
     Kv tabsBefore = SPURIOUS_VERIFIABLE.contains(method) ? tabState(id) : null;
-    try {
+    try (RetryBudget commandBudget = RetryBudget.open(30000)) {
       RespBodyVo result = dispatchWithSpuriousRetry(method, args, () -> executor.run(svc, id, args));
       if (!result.isOk() && result.getMsg() != null) {
         java.util.regex.Matcher match = java.util.regex.Pattern.compile("\\[([A-Z_]+)\\]").matcher(result.getMsg());
         String errorCode = match.find() ? match.group(1) : ActionError.code(result.getMsg());
         Kv detail = result.getData() instanceof Kv ? (Kv) result.getData() : new Kv();
+        if (detail.get("errorCode") != null) errorCode = detail.getStr("errorCode");
         detail.set("errorCode", errorCode);
         // 可重试性与建议退避:调用方据此自动重试,不必去猜中文提示
         boolean retryable = ActionError.retryable(errorCode);
         detail.set("retryable", retryable);
-        if (retryable) {
+        if (retryable && detail.get("retryAfterMs") == null) {
           detail.set("retryAfterMs", ActionError.retryAfterMs(errorCode));
         }
         result.setData(detail);
       }
       attachCapture(result, id, method);
+      if (result.getData() instanceof Kv data) {
+        Kv metrics = data.get("retryBudget") instanceof Kv existing ? existing : new Kv();
+        metrics.set("attempts", commandBudget.retries() + 1).set("retries", commandBudget.retries())
+            .set("elapsedMs", commandBudget.elapsedMs()).set("remainingMs", commandBudget.remainingMs());
+        data.set("retryBudget", metrics);
+      }
       attachUnknownParams(result, args, method);
       return result;
     } catch (IllegalArgumentException e) {
@@ -538,9 +549,9 @@ public class ActionService {
         Kv detailKv = Kv.by("errorCode", ActionError.SPURIOUS_DISPATCH).set("retryable", true)
             .set("retryAfterMs", 200).set("spuriousDispatch", true)
             .set("note", "这是 Playwright 事件分发投递过来的伪故障（底层对象已释放，与本次命令无关）："
-                + "服务端已自动重发 " + SPURIOUS_MAX_ATTEMPTS + " 次仍未成功。重发没有副作用，可以再发一次。");
+                + "本次有限重试未恢复；重试次数可能因共享额度或截止时间而减少，请先检查原结果。");
         if (declared) {
-          detailKv.set("retriedByCallerRequest", SPURIOUS_MAX_ATTEMPTS);
+          detailKv.set("retryAllowedByCaller", true);
         }
         RespBodyVo resp = RespBodyVo.fail(method + " 失败：" + detail
             + "（[" + ActionError.SPURIOUS_DISPATCH + "] 疑似 Playwright 事件分发的伪故障，可以再发一次）");

@@ -102,7 +102,9 @@ export function createTools(ctx: Context, client: BrowserClient, sessions: Brows
       return command(e, 'upload_file', { ...locator, filename: basename(localPath), contentBase64: bytes.toString('base64') });
     });
   add('screenshot', 'Capture the page or a selector. Set view=true to attach image for a verified vision-capable model; otherwise return a saved screenshot URL.',
-    z.strictObject({ fullPage: z.boolean().optional(), selector: z.string().optional(), view: z.boolean().optional() }), async (a, e) => {
+    z.strictObject({ fullPage: z.boolean().optional(), selector: z.string().optional(), view: z.boolean().optional(),
+      timeoutMs: z.number().int().min(1).max(120000).optional(), force: z.boolean().optional(), fallbackToViewport: z.boolean().optional(),
+    }), async (a, e) => {
       const attachments = ctx.get('attachments');
       if (a.view) {
         if (!attachments) throw new Error('view=true requires the Harness attachment service');
