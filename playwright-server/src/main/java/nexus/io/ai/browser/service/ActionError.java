@@ -45,6 +45,36 @@ public final class ActionError {
   public static final String SPURIOUS_DISPATCH = "SPURIOUS_DISPATCH";
 
   /**
+   * {@code execute_js} 的脚本在自己的时间预算内没有结束
+   *
+   * <p>
+   * <b>为什么要单独一个码</b>:实测(2026-10-05)在活服务上量到,{@code page.evaluate} 连 Playwright
+   * 名义上的 30 秒默认超时都**不生效** —— 一个 40 秒后才 resolve 的 Promise 正常返回,
+   * 一个永不 resolve 的 Promise 挂过 120 秒仍无响应。也就是说这条命令原本**没有上限**,
+   * 调用方只能靠 HTTP 超时放弃,而放弃不会取消服务端的执行。
+   *
+   * <p>
+   * 现在服务端在页内包一层 {@code Promise.race} 兜底(见 {@code PlaywrightService#withEvalTimeout})。
+   * 它超时后**不能**归成 {@link #ACTION_TIMEOUT}:那个码是可重试的语义(元素在,只是暂时不可点),
+   * 而这里脚本**可能已经在页面里跑了一半副作用**,重发等于再执行一次。
+   * 所以它是「结果未知、不要自动重试」。
+   */
+  public static final String EVAL_TIMEOUT = "EVAL_TIMEOUT";
+
+  /**
+   * 命令级兜底超时:命令在 wall-clock 预算内没有返回
+   *
+   * <p>
+   * <b>和 {@link #EVAL_TIMEOUT} 的分工</b>:前者是「页内定时器还能跑」时的正常收口;后者是页内
+   * 定时器也跑不了(渲染进程卡死、CDP 半死)时的最后一道闸 —— 由服务端在工作线程上
+   * {@code join(timeout)} 得到结论,而不是让调用方无限等。
+   *
+   * <p>
+   * 它同样**不可重试**:超时只能说明「不知道跑到哪了」,不能说明没生效。
+   */
+  public static final String COMMAND_TIMEOUT = "COMMAND_TIMEOUT";
+
+  /**
    * 选择器在页面里**一个都没匹配到**
    *
    * <p>
@@ -180,6 +210,15 @@ public final class ActionError {
     if (isPageNavigating(text)) {
       return PAGE_NAVIGATING;
     }
+    // 这两个也是服务端自己掷出来的哨兵,而且必须排在**通用 timeout 分支之前**:
+    // 它们的文本里都带 "timeout",落到后面就会被归成可重试的 ACTION_TIMEOUT ——
+    // 而「脚本超时」和「命令超时」都代表**结果未知**,重发可能重复执行副作用。
+    if (text.contains(EVAL_TIMEOUT.toLowerCase())) {
+      return EVAL_TIMEOUT;
+    }
+    if (text.contains(COMMAND_TIMEOUT.toLowerCase())) {
+      return COMMAND_TIMEOUT;
+    }
     // 网络层的失败必须排在 timeout 之前:URL 打不开时 Playwright 常常只抛一句
     // 「Timeout 30000ms exceeded」,而真相在 net::ERR_xxx 里(或者由调用方补上 NETWORK_ERROR 哨兵)
     if (netErrorFromMessage(text) != null || text.contains("network_error")) {
@@ -304,6 +343,19 @@ public final class ActionError {
       break;
     case "ACTION_TIMEOUT":
       reason = "等待元素可操作超时；不能据此确定元素不存在或快照过期";
+      break;
+    case EVAL_TIMEOUT:
+      reason = "脚本在它的时间预算内没有结束（页内 Promise.race 兜底已生效）："
+          + "**结果未知** —— 脚本可能仍在页面里继续执行、也可能已经改了一半状态，"
+          + "所以不要直接重发（重发等于再执行一次）。"
+          + "下一步：先用只读命令（get_browser_state / diff_dom_text）确认页面状态；"
+          + "确实需要长时间运行时，调大 browser.eval.timeoutMs 或把脚本拆小";
+      break;
+    case COMMAND_TIMEOUT:
+      reason = "命令在服务端的兜底预算内没有返回（通常是渲染进程卡死或 CDP 半死，页内定时器也跑不了）："
+          + "**本次结果未知**，不要直接重发。"
+          + "下一步：先 get_page_snapshot / get_browser_state 看这个任务还活着没有，"
+          + "必要时 close + start 重建任务；服务端日志里有超时时的线程与命令名";
       break;
     case ELEMENT_NOT_FOUND:
       reason = "选择器在页面里**一个都没匹配到**（不是超时、也不是被遮挡）："

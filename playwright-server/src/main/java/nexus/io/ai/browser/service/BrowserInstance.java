@@ -149,6 +149,22 @@ public class BrowserInstance {
   /** 请求记录是从什么时候开始记的(毫秒时间戳):get_requests 用它解释「为什么这里没有你要的请求」 */
   public volatile long recorderAttachedAt;
 
+  /**
+   * 网络记录器是否已经挂上(见 {@code PlaywrightService.KEY_NETWORK_RECORD})
+   *
+   * <p>
+   * 默认 {@code lazy}:第一次有命令要读网络数据时才挂。挂上之后新认领的页签也要跟着挂,
+   * 所以这个标记同时也是「新页签该不该补挂」的判据。
+   */
+  public volatile boolean recorderAttached;
+
+  /**
+   * 这个任务的网络记录模式覆盖({@code start} 的 {@code networkRecording} 参数):{@code on} / {@code off}
+   *
+   * <p>{@code null} = 按全局配置 {@code browser.network.record} 走(默认 {@code lazy})。
+   */
+  public volatile String recorderMode;
+
   /** 最近收到的响应(最多 100 条,带时间戳),get_response_body 与 wait_for_response 回看用 */
   public final Deque<RecordedResponse> recentResponses = new ArrayDeque<>();
 

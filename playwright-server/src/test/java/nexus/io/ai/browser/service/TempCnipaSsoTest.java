@@ -24,6 +24,9 @@ public class TempCnipaSsoTest {
 
   @Test
   public void ssoChallengeDiagnosis() throws Exception {
+    // 同上:联网的临时实测(登录 sso.cnipa.gov.cn),默认不跑。
+    // 要复现时: mvn test -Dtest=TempCnipaSsoTest -Dsmoke.cnipa=true
+    org.junit.Assume.assumeTrue("默认不跑,加 -Dsmoke.cnipa=true 才跑", Boolean.getBoolean("smoke.cnipa"));
     out = new PrintStream(new FileOutputStream("target/cnipa-sso.txt", false), true, "UTF-8");
     try {
       scenario("zh-CN locale", "--lang=zh-CN", 1, false);

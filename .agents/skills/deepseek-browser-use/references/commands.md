@@ -8,7 +8,7 @@
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `start` | `id`(可选), `headless`(bool，默认 `true`), `browser`(可选，见下) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签 |
+| `start` | `id`(可选), `headless`(bool，默认 `true`), `browser`(可选，见下), `networkRecording`(bool，可选) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法 |
 | `close` | `id` | 关掉**这个任务自己的页签**，别的任务不受影响；**最后一个任务关闭时**浏览器才一起退出（登录态留在 profile 里，下次还在） |
 
 ### 导航与页面信息
@@ -411,7 +411,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 | `find_text` | `id`, `text`(必填), `regex`(bool，可选), `contextChars`(可选，默认 80), `maxMatches`(可选，默认 20), `selector`(可选), `frame`(可选) | 在页面文本里找词（或正则），只回**命中与前后文**：`data.matchCount`、`data.returned`、`data.truncated`、`data.matches[]`（每项 `index`/`line`/`match`/`before`/`after`）、`data.source`、`data.textLength`。**想找一行就用它**，别把整页拉进上下文。取文本的规则与 `extract_structured_data` 一致（`innerText`，读前隐藏高亮层），所以**图里的字它同样找不到**。正则非法会当场失败（不会悄悄退化成字面量搜索）；不重叠匹配 |
 | `list_tables` | `id`, `frame`(可选) | 列出页面上所有 `<table>`：`data.count`、`data.tables[]`（`index`、**`selector`**（形如 `table >> nth=1`，可直接填进 `extract_markdown`）、`rows`、`cols`、`className`、`id`、`textLength`、`imageCount`、`preview`）、`data.url`、`data.title`。`imageCount > 0` 值得看一眼：表格内容是图片时 `extract_markdown` 转出来是空的，该走 `download_image` + `ocr_image` |
 | `download_image` | `id`, `index` 或 `selector`(二选一), `frame`(可选), `filename`(可选) | 把页面上的图片**原始文件**存到服务端 `data/<id>/`：`data.path`、`data.url`（可直接 GET）、`data.filename`、`data.size`、`data.sha256`、`data.contentType`、`data.srcUrl`、`data.via`、`data.naturalWidth`/`Height`。**要的是原件，不是屏幕截图**（扫描件截屏再 OCR 会明显掉字）。取值先走浏览器上下文（带 cookie），失败退回页面内 `fetch`；两条都不行才失败并说明原因。`data.path` 可直接交给 `ocr_image` |
-| `execute_js` | `id`, `body` 或 `bodyFile`, `vars`(可选), `frame`(可选), `retryOnSpurious`(可选) | 返回 `data.result`，见 `batch-and-js.md`。**会 await Promise**；在跨域 iframe 里执行要传 `frame`；脚本**重发无害**（读页面这类）时传 `retryOnSpurious: true`，服务端会替它吃掉「事件泵伪故障」 |
+| `execute_js` | `id`, `body` 或 `bodyFile`, `vars`(可选), `frame`(可选), `retryOnSpurious`(可选), `timeoutMs`(可选) | 返回 `data.result`，见 `batch-and-js.md`。**会 await Promise**；在跨域 iframe 里执行要传 `frame`；脚本**重发无害**（读页面这类）时传 `retryOnSpurious: true`，服务端会替它吃掉「事件泵伪故障」。`timeoutMs` 是这一次的时间预算（毫秒，`0` = 不限制），不传用 `browser.eval.timeoutMs`（默认 60000）——服务端在页内用 `Promise.race` 兜底，**永不 settle 的 Promise 也会在预算内结束**并回 `errorCode=EVAL_TIMEOUT`（`data.outcomeUnknown:true`、`retryable:false`：脚本可能已经改了一半状态，**不要直接重发**，先用只读命令确认页面） |
 | `commands` | `id`, `params.stopOnError`, `params.commands`, `params.async`(可选) | 批量指令，是 `method` 的一个取值，见 `batch-and-js.md` |
 
 ### 服务自省（不知道有什么能力时先问它）
@@ -483,6 +483,34 @@ browser.ocr.timeoutMs=120000
 ```
 
 - `{input}` = 图片路径，`{output}` = 结果文本路径，`{language}` = 语言（默认 `zh-Hans-CN`）。**带空格或中文的路径一定要加双引号**。
+
+### 四个「出问题时要看」的服务端旋钮
+
+它们的**生效值**都能从 `get_config` 读到（`data.capture.*` / `data.eval.*` / `data.command.*` / `data.network.*`），不必去翻服务器上的配置文件：
+
+```properties
+# 自动截图与熔断：连续失败 failThreshold 次后冷却；伪故障单独计数、只短冷却；
+# 冷却到期会半开（清零计数），手动 screenshot 传 force=true 可探测一次且失败不延长冷却
+browser.capture.enabled=true
+browser.capture.timeoutMs=8000
+browser.capture.failThreshold=3
+browser.capture.cooldownMs=120000
+browser.capture.spuriousCooldownMs=15000
+
+# execute_js 的时间预算（页内 Promise.race 兜底）；单次可用 params.timeoutMs 覆盖，0 = 不限制
+browser.eval.timeoutMs=60000
+
+# 命令级 wall-clock 兜底：普通命令 / 「要等」的命令（批次、wait_for_*、人机协同、pdf、ocr…）
+browser.command.timeoutMs=90000
+browser.command.hardTimeoutMs=900000
+browser.command.maxStuck=24
+
+# 请求/响应记录：on(默认) 认领页签就挂；lazy 第一次读网络数据才挂（此前的请求不会出现）；
+# off 永不挂 —— 踩到 response@/request@ 噪声风暴又不需要网络数据时用它，回执会明说「没在记」
+browser.network.record=on
+```
+
+> 截图一直不出图时先看 `data.capture_degraded` 与 `data.retryAfterMs`：那是**服务端在告诉你现在是盲操作**，别继续等图，改用文本取证；要视觉确认就用 `screenshot` + `force:true` 探一次，或请人看一眼窗口。
 - 回执里的 `data.engine` 会写明这次是谁读的；`get_config` 的 `ocr` 段给出**生效值**（含 `describe`，配了 `engine=command` 却没给命令时会如实说明退回了系统 OCR）。
 - 外部命令失败**不会静默退回系统 OCR**：调用方明确要的是文档级识别，悄悄换个差一截的后端只会让人以为"这张图读不出来"。
 

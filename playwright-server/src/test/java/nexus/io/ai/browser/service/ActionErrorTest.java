@@ -60,4 +60,39 @@ public class ActionErrorTest {
     assertTrue("ERR_ABORTED 是另一回事(被页面取消,例如点到了下载),措辞要分开,实际:" + aborted,
         aborted.contains("取消"));
   }
+
+  // ==================== 脚本超时 / 命令超时 ====================
+
+  /**
+   * 两种新超时都必须**排在通用 timeout 分支之前**,而且**不可重试**
+   *
+   * <p>它们的文本里都带 "timeout",落到后面就会被归成 {@code ACTION_TIMEOUT} —— 那个码的语义是
+   * 「元素在,只是暂时不可点,可以重发」,而这两者代表**结果未知**:脚本可能已经跑了一半副作用,
+   * 命令可能已经改了页面。重发等于再执行一次。
+   */
+  @Test public void evalAndCommandTimeoutAreNotOrdinaryActionTimeouts() {
+    // 页内定时器抛上来的原文(哨兵在异常文本里)
+    assertEquals(ActionError.EVAL_TIMEOUT,
+        ActionError.code("执行 JavaScript 失败：Error: __DSB_EVAL_TIMEOUT__"));
+    // 服务端自己拼的回执文案(带 [码] 标记)
+    assertEquals(ActionError.EVAL_TIMEOUT,
+        ActionError.code("execute_js 超时：1500 毫秒内脚本没有结束（[EVAL_TIMEOUT] 结果未知）"));
+    assertEquals(ActionError.COMMAND_TIMEOUT,
+        ActionError.code("click_element_by_index 超时：90000 毫秒内没有返回（[COMMAND_TIMEOUT] 结果未知）"));
+    // 普通的可操作性超时不能被这两个码抢走
+    assertEquals("ACTION_TIMEOUT", ActionError.code("Timeout 30000ms exceeded.\nCall log:\nwaiting for locator"));
+
+    assertFalse("脚本超时不能重试(可能已经执行了一半)", ActionError.retryable(ActionError.EVAL_TIMEOUT));
+    assertFalse("命令超时不能重试(不知道跑到哪了)", ActionError.retryable(ActionError.COMMAND_TIMEOUT));
+    assertEquals(0, ActionError.retryAfterMs(ActionError.EVAL_TIMEOUT));
+    assertEquals(0, ActionError.retryAfterMs(ActionError.COMMAND_TIMEOUT));
+
+    // 提示里必须说清「结果未知」和「先读状态,别直接重发」
+    String eval = ActionError.describe("execute_js", ActionError.EVAL_TIMEOUT);
+    assertTrue(eval, eval.contains("结果未知"));
+    assertTrue(eval, eval.contains("不要直接重发"));
+    String command = ActionError.describe("click_element_by_index", ActionError.COMMAND_TIMEOUT);
+    assertTrue(command, command.contains("结果未知"));
+    assertTrue(command, command.contains("close + start"));
+  }
 }

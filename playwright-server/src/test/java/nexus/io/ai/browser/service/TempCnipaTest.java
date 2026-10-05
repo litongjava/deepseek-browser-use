@@ -24,6 +24,10 @@ public class TempCnipaTest {
 
   @Test
   public void cnipaLoginPageIsNotBlank() throws Exception {
+    // 这是一次**对着真实站点**的临时实测(联网访问 sbj.cnipa.gov.cn,且只有打印、没有断言):
+    // 让它默认不跑 —— 否则每次 `mvn test` 都要为它花 ~85 秒,还要看外网脸色,CI 上必然不稳。
+    // 要复现时: mvn test -Dtest=TempCnipaTest -Dsmoke.cnipa=true
+    org.junit.Assume.assumeTrue("默认不跑,加 -Dsmoke.cnipa=true 才跑", Boolean.getBoolean("smoke.cnipa"));
     Files.createDirectories(OUT_DIR);
     out = new PrintStream(new FileOutputStream("target/cnipa-report.txt", false), true, "UTF-8");
     try {

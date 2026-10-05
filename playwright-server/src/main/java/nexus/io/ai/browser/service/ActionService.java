@@ -3,6 +3,14 @@ package nexus.io.ai.browser.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
@@ -46,10 +54,16 @@ public class ActionService {
       "upload_file", "drag_element_by_index",
       // 滚动与鼠标
       "scroll", "scroll_to_text", "mouse_move", "mouse_down", "mouse_up", "mouse_wheel",
+      // 按坐标点击:技能手册把它当兜底方案推荐,而它**一定会改变页面** ——
+      // 漏掉的代价是「退到兜底路径之后自动留证完全消失」,排查时最需要图的时候偏偏没有
+      "mouse_click", "mouse_click_by_selector",
       // 页签
       "new_tab", "switch_tab", "switch_tab_by_url", "close_tab", "close_other_tabs", "bring_to_front",
       // 等待(等到了页面往往就变了)
       "wait", "wait_for_element", "wait_for_text", "wait_for_url", "wait_for_load", "wait_for_function",
+      "wait_for_idle", "wait_for_stable",
+      // 弹窗与存储:关掉一个遮挡弹窗、写一条 cookie/localStorage,页面都可能因此变化
+      "close_modal", "set_cookie", "set_local_storage",
       // 脚本与设置
       "execute_js", "set_viewport", "set_media", "set_credentials");
 
@@ -81,13 +95,17 @@ public class ActionService {
       // 只读:元素
       "get_element_text", "get_element_html", "get_element_value", "get_element_attribute",
       "get_element_listeners", "get_element_count", "get_element_box", "is_visible", "is_enabled", "is_checked",
+      // 只读:下拉选项(读 el.options,不改页面)
+      "get_dropdown_options",
       // 只读:弹窗、日志、网络、存储
-      "get_modals", "get_console_logs", "get_dialog", "get_requests", "get_response_body",
+      "get_modals", "get_console_logs", "get_dialog", "get_js_dialog", "get_requests", "get_response_body",
       "get_cookies", "get_local_storage",
       // 只读:服务自省
       "list_methods", "get_config", "list_tasks", "list_recipes", "get_job", "list_jobs",
       // 覆盖式落盘:重发只是把同一个文件再写一遍
       "screenshot", "get_element_screenshot", "pdf",
+      // 覆盖式读取:ocr_image 只读一张图/一屏,重发读的还是同一个画面
+      "ocr_image",
       // 幂等导航
       "go_to_url", "navigate", "reload", "go_back", "go_forward", "bring_to_front",
       // 等待:再等一次没有副作用
@@ -290,11 +308,152 @@ public class ActionService {
    * @param params 命令参数,可以为空
    */
   public RespBodyVo execute(Long id, String method, JSONObject params) {
-    RespBodyVo result = run(id, method, params);
+    RespBodyVo result = runBounded(id, method, params);
     if (result != null && !result.isOk()) {
-      attachPageContext(result, id);
+      // 超时回执**不要再补页面上下文**:补它要再发一次 Playwright 调用,而此刻正是「底层调不动」
+      // 的时候 —— 那一下会把刚拿到结论的 HTTP 线程重新挂死,把兜底的意义全抹掉。
+      if (!ActionError.COMMAND_TIMEOUT.equals(errorCodeOf(result))) {
+        attachPageContext(result, id);
+      }
     }
     return result;
+  }
+
+  /** 失败回执里已写的错误码(用于少数需要按码分支的公共装饰) */
+  private static String errorCodeOf(RespBodyVo result) {
+    Object data = result.getData();
+    if (data instanceof Kv kv) {
+      String code = kv.getStr("errorCode");
+      if (code != null && !code.isBlank()) {
+        return code;
+      }
+    }
+    return ActionError.code(result.getMsg());
+  }
+
+  /**
+   * 命令级 wall-clock 兜底:给每条命令一个「一定会回来」的期限
+   *
+   * <p>
+   * <b>为什么还需要它</b>:{@code execute_js} 已经有页内超时兜底,但那只在页面 JS 还能跑时有效 ——
+   * 渲染进程卡死、CDP 半死时连页内定时器都不跑(实测:一个永不 resolve 的 Promise 让请求挂过 120 秒
+   * 仍无响应)。这一层在工作线程上 {@code get(timeout)},拿不到就如实回一句「结果未知」,
+   * 而不是让调用方无限等。
+   *
+   * <p>
+   * <b>为什么用有界线程池而不是「每条命令一个新线程」</b>:超时的命令**取消不掉**(Playwright 的调用
+   * 可能不响应中断),线程会一直留到它自己返回。有界池把这种「卡住的命令」限制在
+   * {@code browser.command.maxStuck} 条以内:池子被卡满之后,后面的命令会在队列里等到自己的期限,
+   * 然后明确回一句「服务端繁忙、本次没有开始执行」—— 那是**可以安全重试**的结论,
+   * 与「结果未知」区分开,不会误导调用方。
+   */
+  /**
+   * 本来就设计成要等的命令:它们的时间由**自己的参数**决定,不能用默认兜底一刀切
+   *
+   * <p>
+   * 例:{@code wait_for_idle(timeoutSeconds=300)} 会被 90 秒的默认预算判死;异步批次最多 200 步、
+   * OCR 自己的超时就是 120 秒。这些命令改用一个宽松得多的天花板
+   * ({@code browser.command.hardTimeoutMs},默认 15 分钟)—— 目的是「不永远挂死」,不是「快」。
+   */
+  private static final Set<String> LONG_RUNNING = Set.of(
+      // 批次与配方：一次调用里包含很多步
+      "commands", "run_recipe",
+      // 等待类：时间由 timeoutSeconds 决定
+      "wait", "wait_for_element", "wait_for_text", "wait_for_url", "wait_for_load",
+      "wait_for_function", "wait_for_idle", "wait_for_stable", "wait_for_count", "wait_for_response",
+      // 人机协同：等人答复本来就可能很久
+      "request_human_input", "ask_user", "submit_human_input", "get_human_input",
+      // 单次就可能很慢的取证/导出
+      "pdf", "download_image", "ocr_image");
+
+  private RespBodyVo runBounded(Long id, String method, JSONObject params) {
+    long limit = LONG_RUNNING.contains(method)
+        ? PlaywrightService.commandHardTimeoutMs()
+        : PlaywrightService.commandTimeoutMs();
+    return awaitWithLimit(limit, method, () -> run(id, method, params));
+  }
+
+  /**
+   * 「有界等待」的机制本身
+   *
+   * <p>从 {@link #runBounded} 里抽出来是为了能直接单测这个机制(见 {@code CommandTimeoutTest}):
+   * 要验证「超时会回来」「返回体字段对不对」,不必真的让一个浏览器卡住 90 秒。
+   */
+  static RespBodyVo awaitWithLimit(long limitMs, String method,
+      java.util.function.Supplier<RespBodyVo> body) {
+    if (limitMs <= 0) {
+      return body.get();
+    }
+    AtomicBoolean started = new AtomicBoolean(false);
+    Future<RespBodyVo> future;
+    try {
+      future = commandPool().submit(() -> {
+        started.set(true);
+        return body.get();
+      });
+    } catch (RuntimeException rejected) {
+      // 池已关闭等极端情况:退回同步执行,宁可没有兜底也不要让命令发不出去
+      return body.get();
+    }
+    try {
+      return future.get(limitMs, TimeUnit.MILLISECONDS);
+    } catch (TimeoutException timeout) {
+      future.cancel(true);
+      return commandTimeoutFailure(method, limitMs, started.get());
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      return commandTimeoutFailure(method, limitMs, started.get());
+    } catch (java.util.concurrent.ExecutionException failed) {
+      Throwable cause = failed.getCause();
+      if (cause instanceof RuntimeException runtime) {
+        throw runtime;
+      }
+      throw new IllegalStateException(cause == null ? failed.getMessage() : cause.getMessage(), cause);
+    }
+  }
+
+  static RespBodyVo commandTimeoutFailure(String method, long limit, boolean started) {
+    if (!started) {
+      // 队列里等到过期 = 这条命令**根本没开始跑**,重发是安全的 —— 必须与「结果未知」区分开
+      RespBodyVo busy = RespBodyVo.fail(method + " 未执行：服务端正在处理其它卡住的命令，等满 "
+          + limit + " 毫秒仍未轮到它（[" + ActionError.COMMAND_TIMEOUT + "] 本次没有开始执行）");
+      busy.setData(Kv.by("errorCode", ActionError.COMMAND_TIMEOUT).set("retryable", true)
+          .set("started", false).set("retryAfterMs", 2000).set("commandTimeoutMs", limit)
+          .set("note", "这条命令没有开始执行，重发是安全的；持续出现说明有命令卡住了浏览器会话，"
+              + "先用 get_page_snapshot 看看这个任务还活着没有，必要时 close + start 重建任务"));
+      return busy;
+    }
+    RespBodyVo timeout = RespBodyVo.fail(method + " 超时：" + limit + " 毫秒内没有返回"
+        + "（[" + ActionError.COMMAND_TIMEOUT + "] 本次结果未知：命令已经开始执行）");
+    timeout.setData(Kv.by("errorCode", ActionError.COMMAND_TIMEOUT).set("retryable", false)
+        .set("started", true).set("outcomeUnknown", true).set("commandTimeoutMs", limit)
+        .set("note", "不要直接重发（命令可能已经生效）。先确认页面状态；若这个任务连续超时，"
+            + "说明底层浏览器会话已经卡住，close + start 重建任务比继续等更快。"
+            + "可用 browser.command.timeoutMs 调整这个兜底期限（0 = 关闭）"));
+    return timeout;
+  }
+
+  /** 有界命令池:大小即「允许多少条命令同时卡住」,线程是守护线程,服务退出不需要额外收尾 */
+  private static volatile ExecutorService COMMAND_POOL;
+
+  private static ExecutorService commandPool() {
+    ExecutorService pool = COMMAND_POOL;
+    if (pool != null) {
+      return pool;
+    }
+    synchronized (ActionService.class) {
+      if (COMMAND_POOL == null) {
+        int size = Math.max(2, PlaywrightService.commandMaxStuck());
+        ThreadFactory factory = runnable -> {
+          Thread thread = new Thread(runnable, "dsb-command");
+          // 守护线程:卡死的命令不该拦住进程退出
+          thread.setDaemon(true);
+          return thread;
+        };
+        COMMAND_POOL = Executors.newFixedThreadPool(size, factory);
+      }
+      return COMMAND_POOL;
+    }
   }
 
   /**
@@ -518,8 +677,13 @@ public class ActionService {
       // object-does-not-exist(artifact@/response@),文件其实已经落盘。老写法只说「失败」,
       // 调用方就会重试,而重试可能造成**重复下载 / 重复提交**。所以这里明确标成「不确定」,
       // 并把「先读状态、别直接重试」写进 data.note 与 msg。
-      String detail = PlaywrightService.briefMessage(e.getMessage());
-      boolean spurious = ActionError.isSpuriousDispatch(detail);
+      String rawMessage = e.getMessage();
+      String detail = PlaywrightService.briefMessage(rawMessage);
+      // 判伪故障用**原始文本**,不用 briefMessage 的结果:后者只保留 message=' 之后的第一行,
+      // 而「Object doesn't exist: response@…」可能出现在别的位置,截断后就认不出来了 ——
+      // 同一件事在 dispatchWithSpuriousRetry(:214)与 CapturePolicy(:52)里判的是原文,
+      // 这里也必须同口径,否则「重试层认为是伪故障、分类层认为不是」。
+      boolean spurious = ActionError.isSpuriousDispatch(rawMessage);
       boolean retrySafe = retrySafeFor(method, args);
       if (spurious && !retrySafe) {
         // 伪故障 + 动作类命令:能核对的就核对(页签类),核对不了才把结论留给调用方

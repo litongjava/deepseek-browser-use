@@ -41,8 +41,14 @@ public class CommandTable {
       // 不传 browser 时按配置里的默认类型(browser.type / browser.engine)处理,行为与以前一致;
       // 传了不认识的值会在 svc.start 里被拒掉,错误信息里带上可选值(见 BrowserType)
       String requested = a.getString("browser");
-      long newId = svc.start(id, headless == null || headless, requested);
+      // 网络记录模式可选:true = 从一开始就记请求/响应;false = 这个任务不记;不传 = 按全局配置
+      // (browser.network.record,默认 lazy:第一次要读网络数据时才挂监听器)
+      Boolean networkRecording = a.getBoolean("networkRecording");
+      long newId = svc.start(id, headless == null || headless, requested, networkRecording);
       Kv data = Kv.by("id", newId);
+      data.set("networkRecording", networkRecording == null
+          ? PlaywrightService.networkRecordMode() + "(按全局配置)"
+          : (networkRecording ? "on" : "off"));
       // 这次任务实际用的浏览器与 profile:用的哪个浏览器、是不是本机 Chrome、有没有用上用户自己的 profile
       Kv browser = svc.browserInfo(newId);
       if (browser != null) {
@@ -307,7 +313,7 @@ public class CommandTable {
         throw new IllegalArgumentException("缺少参数 body");
       }
       return svc.executeJs(id, a.getString("body"), optStr(a, "bodyFile"), a.getJSONObject("vars"),
-          optStr(a, "frame"));
+          optStr(a, "frame"), a.getInteger("timeoutMs"));
     });
 
     // ---------- 服务自省与配方 ----------

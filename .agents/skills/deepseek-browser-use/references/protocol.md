@@ -84,6 +84,13 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
 
 动作错误的 `data.errorCode` 区分 ELEMENT_READ_ONLY、ELEMENT_DISABLED、ELEMENT_HIDDEN、ELEMENT_OBSCURED、ELEMENT_NOT_EDITABLE、STALE_ELEMENT、ACTION_TIMEOUT 和 ACTION_FAILED；另有一个 SPURIOUS_DISPATCH 专门标「异常来自 Playwright 的事件分发、与本次命令无关」（见 `pitfalls.md` 第 47 条）。错误原因来自完整调用日志；没有充分证据的超时只报 ACTION_TIMEOUT。
 
+**另外两个超时码要单独认**（它们**不可重试**，与 `ACTION_TIMEOUT` 的「元素在、只是暂时不可点」是两回事）：
+
+- `EVAL_TIMEOUT`：`execute_js` 的脚本在自己的预算内没有结束（页内 `Promise.race` 兜底生效，见 `commands.md` 的 `execute_js`）。`data.outcomeUnknown:true`、`data.evalTimeoutMs` 给出生效的预算。脚本可能仍在页面里跑、也可能只改了一半状态 —— 先用 `get_browser_state` / `diff_dom_text` 确认，别直接重发。
+- `COMMAND_TIMEOUT`：命令在服务端的 wall-clock 兜底内没有返回（渲染进程卡死 / CDP 半死，页内定时器也跑不了）。`data.started` 区分两种情形：`true` = 已经开始执行（**结果未知，别重发**，必要时 `close` + `start` 重建任务）；`false` = 池子被卡满、**这次没有开始执行**，此时 `retryable:true`，重发是安全的。旋钮：`browser.command.timeoutMs`（普通命令，默认 90000）、`browser.command.hardTimeoutMs`（批次/等待类，默认 900000）、`browser.command.maxStuck`（默认 24）。
+
+四个「出问题时最该看」的旋钮现在都能从 `get_config` 直接读到：`data.capture.*`（`enabled`/`timeoutMs`/`failThreshold`/`cooldownMs`/`spuriousCooldownMs`）、`data.eval.timeoutMs`、`data.command.*`、`data.network.record`（`on`/`lazy`/`off`）。
+
 点击回执会短暂等待异步变化（观察循环上限约 500ms，具体浏览器调用耗时另计）。`data.changeStatus` 为 observed 或 not_observed，`data.observationComplete` 指示探针是否成功，`data.observationWindowMs` 为观察窗口配置。`changed=false` 不表示点击失败，`changed=true` 也不表示查询、缴款等业务成功；应使用目标元素、文本或网络响应确认，禁止仅据此重复提交。
 
 ### 动作的三种执行方式（`mode`）与降级

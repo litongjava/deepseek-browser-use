@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { BackendManager, runBackend, validateBackendOptions } from '../dist/backend.js';
+import { BackendManager, keepReleases, pruneReleases, runBackend, validateBackendOptions } from '../dist/backend.js';
 import { BrowserClient } from '../dist/client.js';
 
 const execute = promisify(execFile);
@@ -119,4 +119,69 @@ test('Windows prepare refuses a dirty checkout before fetching or compiling', { 
   assert.equal(await readFile(join(directory, 'keep.txt'), 'utf8'), 'local work');
   assert(!log.includes(' fetch origin'));
   assert(!log.includes('clean package'));
+});
+
+// ---------- P2-2:release 目录保留策略 ----------
+
+/** 伪造一个 releases 目录:每个 commit 一个子目录,里面一份 backend.jar,mtime 依次递增 */
+async function fakeReleases(t, names) {
+  const repo = await mkdtemp(join(tmpdir(), 'dsb-releases-'));
+  t.after(async () => {
+    const absolute = resolve(repo);
+    assert(absolute.startsWith(resolve(tmpdir()) + '\\'), '只删临时目录');
+    await rm(absolute, { recursive: true, force: true });
+  });
+  const dir = join(repo, '.dsb-backend', 'releases');
+  await mkdir(dir, { recursive: true });
+  for (const [position, name] of names.entries()) {
+    await mkdir(join(dir, name), { recursive: true });
+    const artifact = join(dir, name, 'backend.jar');
+    await writeFile(artifact, `jar-${name}`);
+    // mtime 必须是可控的:保留策略按「最近」排序,不能靠写入顺序碰运气
+    const when = new Date(Date.UTC(2026, 0, 1 + position));
+    await utimes(artifact, when, when);
+    await utimes(join(dir, name), when, when);
+  }
+  return { repo, dir };
+}
+test('release retention keeps the most recent commits and drops older ones', async t => {
+  const names = ['aaaaaaaaaaaa', 'bbbbbbbbbbbb', 'cccccccccccc', 'dddddddddddd', 'eeeeeeeeeeee'];
+  const { repo, dir } = await fakeReleases(t, names);
+  const result = await pruneReleases(repo, 3);
+  assert.equal(result.keep, 3);
+  assert.equal(result.scanned, 5);
+  // 最近三个(按 mtime 递增写入的是 c/d/e)留下,a/b 删掉
+  assert.deepEqual(result.deleted.sort(), ['aaaaaaaaaaaa', 'bbbbbbbbbbbb']);
+  assert.deepEqual((await readdir(dir)).sort(), ['cccccccccccc', 'dddddddddddd', 'eeeeeeeeeeee']);
+  assert.equal(await readFile(join(dir, 'eeeeeeeeeeee', 'backend.jar'), 'utf8'), 'jar-eeeeeeeeeeee');
+});
+test('release retention never deletes the release the running backend uses', async t => {
+  const names = ['aaaaaaaaaaaa', 'bbbbbbbbbbbb', 'cccccccccccc', 'dddddddddddd', 'eeeeeeeeeeee'];
+  const { repo, dir } = await fakeReleases(t, names);
+  // a 最旧但正是运行中那一份:必须留,并且要从剩下的里补足 keep 个
+  const result = await pruneReleases(repo, 3, 'aaaaaaaaaaaa');
+  assert.equal(result.active, 'aaaaaaaaaaaa');
+  assert(!result.deleted.includes('aaaaaaaaaaaa'));
+  assert.deepEqual(result.deleted.sort(), ['bbbbbbbbbbbb', 'cccccccccccc']);
+  assert.deepEqual((await readdir(dir)).sort(), ['aaaaaaaaaaaa', 'dddddddddddd', 'eeeeeeeeeeee']);
+});
+test('release retention is a no-op before the first build and honours the env override', async t => {
+  const repo = await mkdtemp(join(tmpdir(), 'dsb-releases-empty-'));
+  t.after(async () => {
+    const absolute = resolve(repo); assert(absolute.startsWith(resolve(tmpdir()) + '\\'));
+    await rm(absolute, { recursive: true, force: true });
+  });
+  const empty = await pruneReleases(repo, 3);
+  assert.equal(empty.scanned, 0);
+  assert.deepEqual(empty.deleted, []);
+  assert.equal(keepReleases({}), 3);
+  assert.equal(keepReleases({ DSB_BACKEND_RELEASES: '5' }), 5);
+  assert.equal(keepReleases({ DSB_BACKEND_RELEASES: '0' }), 3, '非法值回退到默认,不能退化成删光');
+  assert.equal(keepReleases({ DSB_BACKEND_RELEASES: 'nonsense' }), 3);
+});
+test('release retention also drops the jar file left inside an old release directory', async t => {
+  const { repo, dir } = await fakeReleases(t, ['oldoldoldold', 'newnewnewnew']);
+  await writeFile(join(dir, 'oldoldoldold', 'extra.log'), 'stale');
+  await pruneReleases(repo, 1);
+  assert.deepEqual(await readdir(dir), ['newnewnewnew']);
 });

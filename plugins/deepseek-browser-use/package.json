@@ -1,6 +1,6 @@
 {
   "name": "@litongjava/dsh-plugin-deepseek-browser-use",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Native DeepSeek Harness tools for the deepseek-browser-use HTTP service",
   "type": "module",
   "license": "MIT",

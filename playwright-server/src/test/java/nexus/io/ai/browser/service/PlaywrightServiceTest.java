@@ -46,6 +46,41 @@ public class PlaywrightServiceTest {
         PlaywrightService.normalizeScript("document.querySelector('[data-return]').value"));
   }
 
+  /**
+   * 包超时用的形状归一化:三种脚本都要变成「能被 then(...) 调用的函数」
+   *
+   * <p>与 {@link #expressionIsEvaluatedAsIs} 那组是**两套用途**:{@code normalizeScript} 尽量保持表达式
+   * 原样(Playwright 自己能求值),而包超时需要先把它变成函数,否则 {@code Promise.resolve().then(表达式)}
+   * 会把非函数参数**静默忽略**掉 —— 那样脚本根本没跑,evaluate 却返回 undefined。
+   */
+  @Test
+  public void normalizeToFunctionAlwaysProducesCallable() {
+    assertEquals("() => (document.title)", PlaywrightService.normalizeToFunction(" document.title "));
+    // 表达式结尾的分号要吃掉,否则 () => (expr;) 是语法错
+    assertEquals("() => (document.title)", PlaywrightService.normalizeToFunction("document.title;"));
+    assertEquals("() => (1 + 1)", PlaywrightService.normalizeToFunction("1 + 1"));
+    // 函数式原样保留
+    assertEquals("() => 1", PlaywrightService.normalizeToFunction("() => 1"));
+    assertEquals("async () => await fetch('/ping')", PlaywrightService.normalizeToFunction("async () => await fetch('/ping')"));
+    // 含 return 的语句片段包成函数体
+    assertEquals("() => {const a = 1; return a;}", PlaywrightService.normalizeToFunction("const a = 1; return a;"));
+  }
+
+  /** 超时兜底:必须带上哨兵、预算,并且**不限制**时原样返回(0 = 关掉这一层) */
+  @Test
+  public void evalTimeoutWrapperCarriesSentinelAndBudget() {
+    String wrapped = PlaywrightService.withEvalTimeout("() => 1", 60_000);
+    assertTrue(wrapped.contains(PlaywrightService.EVAL_TIMEOUT_SENTINEL));
+    assertTrue(wrapped.contains("60000"));
+    // 用 Promise.race 赛跑,并在 finally 里清掉定时器(否则每次调用都在页面上留一个待触发 timer)
+    assertTrue(wrapped.contains("Promise.race"));
+    assertTrue(wrapped.contains("clearTimeout"));
+    assertTrue(wrapped.contains("() => 1"));
+
+    assertEquals("() => 1", PlaywrightService.withEvalTimeout("() => 1", 0));
+    assertEquals("() => 1", PlaywrightService.withEvalTimeout("() => 1", -5));
+  }
+
   @Test
   public void briefMessageKeepsFirstLineOfScriptError() {
     String message = "Error {\n  message='TypeError: Cannot read properties of null (reading 'click')\n"

@@ -548,6 +548,20 @@ current tab is: 1               		[12]<a name='tj_login'>登录/>
 
 序号从 1 开始递增，`data/<id>/1.png`、`2.png`、`3.png`…… 一对 `.png`/`.txt` 序号相同就代表是同一时刻的页面。两个文件都能直接 GET，视觉模型按 URL 取图即可。一次 `commands` 批量请求里，每一步的截图都在它自己那一步的 `data.screenshot` 里 —— 一个批次就是一段页面变化历史。
 
+截图**截不出来**时不会拖着命令白等：默认单次 8 秒、连续失败 3 次就熔断（真失败 120 秒、伪故障只 15 秒），熔断期间命令不再为截图付时间，回执里写明 `data.capture_degraded: true` 与 `data.retryAfterMs` —— 那是服务端在告诉你「现在是盲操作」，改用文本取证，或用 `screenshot` + `force:true` 探一次（探测失败不延长冷却）。冷却到期会**半开**：计数清零，重新累计到阈值才再熔断（旧实现只在成功时清零，熔断过一次之后一次偶发超时就又把画面关两分钟）。
+
+### 三个「一定会回来」的期限
+
+| 旋钮 | 默认 | 什么时候用它 |
+| --- | --- | --- |
+| `browser.eval.timeoutMs` | 60000 | `execute_js` 的单次预算（单次可用 `params.timeoutMs` 覆盖，`0` = 不限制）。实测 `page.evaluate` 连它名义上的 30 秒默认超时都**不生效**：永不 resolve 的 Promise 曾挂过 120 秒以上。现在页内用 `Promise.race` 兜底，超时回 `errorCode: EVAL_TIMEOUT`（**结果未知、不要直接重发**） |
+| `browser.command.timeoutMs` / `hardTimeoutMs` | 90000 / 900000 | 命令级 wall-clock 兜底。普通命令用前者；批次、`wait_for_*`、人机协同、`pdf`/`ocr_image` 这些**本来就设计成要等**的用后者。超时回 `errorCode: COMMAND_TIMEOUT`，`data.started` 区分「已开始（结果未知）」与「池满未执行（可以安全重发）」 |
+| `browser.network.record` | on | 请求/响应记录。`on` 认领页签就挂（`get_requests` 一族能回看整个任务）；`lazy` 第一次要读网络数据才挂（此前的请求不会出现）；`off` 永不挂 —— 这一族监听器是实测里最贵的伪故障来源（`response@`/`request@` 对象已释放，会砸在后续任意一次 API 调用上），踩到噪声风暴又不需要网络数据时用 `off`。也可在 `start` 时用 `networkRecording:false` 按任务关掉 |
+
+这些旋钮的**生效值**都能从 `GET /playwright/config`（或命令 `get_config`）直接读到：`data.capture.*`、`data.eval.*`、`data.command.*`、`data.network.*`。
+
+另外：`data/` 下的截图与结构化文本默认**不自动清理**（它们是排查证据）。要控制体积就设 `browser.data.retentionDays=<天数>`，`start` 时会顺带清掉超过保留期的产物（每小时最多一次，且**只删本服务生成的那几种文件名**，用户自己放进 `data/<id>/` 的文件不碰）。
+
 ### 批量指令（PTC）
 
 把「动作 + 读取」打包成一次请求，一次模型推理拿到全部观察结果：

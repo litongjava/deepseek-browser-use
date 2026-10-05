@@ -60,14 +60,14 @@ npm pack
 
 | 工具 | 用途 |
 | --- | --- |
-| `dsb_health` | 健康检查，不创建浏览器任务 |
+| `dsb_health` | 只读健康检查 + 服务摘要;不创建任务、不触发安装器 |
 | `dsb_backend` | `status/inspect/prepare/start/update/restart`，后台管理与进度查询 |
 | `dsb_methods` | 查询本插件已适配的通用命令名称，可按 `filter` 过滤 |
-| `dsb_start` / `dsb_close` | 显式创建/复用或关闭本会话任务 |
+| `dsb_start` / `dsb_close` | 显式创建/复用或关闭本会话任务；复用前先做活性校验 |
 | `dsb_navigate` | 打开 URL，首次使用自动创建任务 |
 | `dsb_state` | 最新结构化页面文本，默认不返回重复的元素元数据 |
 | `dsb_click` / `dsb_input` | 索引或 CSS 选择器二选一；选择器支持 frame/nth |
-| `dsb_evaluate` | 执行页面 JavaScript，参数为 `body` |
+| `dsb_evaluate` | 执行页面 JavaScript，默认开启结果回捞 |
 | `dsb_command` | 通用任务命令，`method` 与 `params` |
 | `dsb_batch` | 顺序执行命令，返回后台 `jobId` |
 | `dsb_job` | 查询自己创建的作业，或 `cancel:true` 请求协作式取消 |
@@ -88,27 +88,64 @@ console.log(state);
 
 工具业务返回以 `ok` 为准。传输、参数校验和生命周期错误会成为 Harness 工具错误；`ok:false` 的服务业务响应保留完整 JSON，便于读取部分结果。
 
+### 模型看到的回执不再是信封原文（0.2.1）
+
+`render` 从「`JSON.stringify(result)` 再切前 N 个字符」改成**字段感知投影**：以前的写法下，信封里 `data` 排在前面、`get_browser_state` 的 `data.text` 又最大，于是 `ok`、`code`、`msg`、`state_file`、`capture_degraded`、`retryAfterMs`、`indicesUsable` 这些**决定下一步怎么做**的字段全被切掉，模型只看到半截 JSON。现在：
+
+- `ok/code/msg/errorCode/retryable/retryAfterMs/warning/state_file/screenshot/screenshot_path/url/urlAfter/title/spuriousDispatch/retryExhausted/capture_degraded/capture_note/indicesUsable/snapshotConsistent/snapshotIssues/elementsTruncated/pageAppearsBlank/recoveredFromSpurious/outcomeUnknown` **永远完整输出**；
+- `data.text` / `data.browser_state` / `data.results[].data.text` **各自独立预算**（`maxTextChars`），被截断时在同层加 `textTruncated:true` 与 `textChars:N`；
+- 其余超长字段只列名字进 `omitted:[…]`，省略说明写在 `notes` 字段里；
+- **产出始终是合法 JSON**，不再把「Display truncated」这类标记拼在 JSON 尾巴上；
+- 规范工具值（PTC / 程序化访问）仍然完整，截断只影响给模型看的文本。
+
+新增 `select?: string`（`dsb_state`/`dsb_command`/`dsb_job`/`dsb_screenshot`/`dsb_evaluate`）：给简化路径就只投影这些字段，同时仍带 `ok`。取值取不到时写 `null`；显式点名的字段不再被截断。
+
+```javascript
+const state = await tools.dsb_state({ select: "data.text" });
+const inner = await tools.dsb_command({ method: "list_frames", select: "data.frames.0.url" });
+```
+
+`dsb_job` 默认**不再内联**大结果：作业结果序列化后超过 4000 字符时只回 `{steps, hasResult:true, resultChars:N}`；需要全量就显式给 `includeResult:true`。以前默认 `includeResult:true`，一个 200 步的批体会把全量 data 拉回上下文。
+
 ## 状态与边界
 
 - 自动依赖安装目前支持 Windows x64，使用系统的 Windows PowerShell 与 winget。Git 为 `Git.Git`，JDK 为 `Microsoft.OpenJDK.21`；已存在的 Java 21+ JDK、Git、Maven优先复用。Maven 缺失时下载 Apache `3.9.16` 并验证 SHA-512，放入仓库父目录的 `.dsb-tools`，不修改全局 PATH。需要系统提权但无法静默安装时，返回错误和日志，用户可手工安装后重试。
 - 源码更新只接受已知 HTTPS origin、干净工作区和没有本地领先提交的分支，不 reset、不 stash。默认启动前更新；运行中的服务不自动中断。`update` 可预先拉取并编译，`restart` 仅在进程身份和端口归属均匹配、活动任务为零时切换。没有设置周期轮询更新。
 - 源码生产构建为 `mvn -B -ntp -Pproduction -pl playwright-server -am clean package -DskipTests -Ddriver.platform=win32_x64`，默认跳过 Java 测试。JAR 按 commit 保存到 `.dsb-backend/releases/`，旧进程使用的文件不会被覆盖。代码更新不自动更新插件 npm 包本身。
+- release 目录有**保留策略**：每次成功的 prepare/start/update/restart 之后只保留最近 3 个 commit 的产物（按 `backend.jar` 的 mtime 排序），更旧的整目录删掉；正在运行的那一份（`.dsb-backend/state.json` 里的 `commit`）永不删，也**不占保留名额**。用 `DSB_BACKEND_RELEASES` 覆盖数量（非正整数回退到默认 3）。删不掉的文件（多半被运行中的后端占用）会记进操作结果的 `releases.skipped`，不会让一次成功的构建失败。
 - 后端为长驻独立进程，关闭会话或卸载插件只清理浏览器任务，不结束后端 Java 进程。管理操作日志在 `~/.deepseek-browser-use/operations/`，Java 日志、PID/随机实例标识和 profile 在克隆目录的 `.dsb-backend/`。下载/编译操作独立于单次工具等待，取消等待不会中止共享安装；准备失败需显式重试，普通动作不会循环安装。
 - 目前源码编译不下载内嵌 Chromium；默认使用本机 Chrome。首次运行需有可用的 Chrome，其他引擎按浏览器服务文档安装配置。
 
 - 按活跃 Agent 对象持有随机安全整数 task ID，跨轮次复用；重新加载/恢复会话会建立新的任务，不从日志重建浏览器页面。显式 close 后可以再次自动 start。
+- `dsb_start` 的**复用分支先做活性校验**（一条只读 `get_url`）：服务端换过进程后 `没有找到对应的浏览器实例`，插件会把 `started` 复位并真正 start 一次，回执里带 `recoveredFromMissingInstance:true`。以前直接回 `reused:true`，模型要等后续每条命令各失败一次才会发现任务其实已经没了。
 - 同一会话的 HTTP 操作串行执行。异步批次期间，仅允许查询/取消本会话的作业；读到终态后才接受下一条普通操作。关闭会话时先取消并等待已知批次结束，再关闭自己任务。
+- `cancel_job` 成功后立刻清掉会话的 `activeJob`，普通命令马上可用；以前必须再 `dsb_job` 观察一次终态才解得开，那是一条实打实的死锁路径。
 - 超时、断线或取消不会自动重试。页面操作可能已经执行；先回读结果。取消 HTTP 等待不能撤销服务端已接收的动作。
-- 批次提交响应丢失、无法取得 `jobId` 时冻结该会话的浏览器操作；清理也不会关闭可能正在工作的任务。管理员按错误中的 task ID，在服务端 `list_jobs` 查到 `browserId` 对应作业，查询/取消并等待结束，最后关闭任务；之后新建 Harness 会话使用插件。
+- 截图熔断（`capture_degraded:true` + `retryAfterMs`）会被插件记住：熔断期内 `dsb_screenshot` **不发 HTTP**，直接回 `ok:false, errorCode:'CAPTURE_CIRCUIT_OPEN', retryAfterMs, hint`。要画面用 `force:true`（一次探测，未显式指定预算时压到 5000 ms，失败会被罚时），或 `dsb_close`+`dsb_start` 换任务。同一会话连续 ≥3 次降级/短路才会在回执里加 `recovery:['dsb_close','dsb_start']`，避免噪音。`dsb_health` 也会透出 `config.capture` 摘要。
+- 批次提交响应丢失、无法取得 `jobId` 时冻结该会话的浏览器动作。此时仍有**一条插件内可走的路**：`dsb_job({browserId:<taskId>})` 只读列本任务的作业（别的任务的不认），`dsb_job({jobId, cancel:true})` 取消；确认本任务所有作业都到终态后用 `dsb_job({browserId:<taskId>, clearUnknown:true})` 显式解冻。清理时仍然不会关闭可能正在工作的任务（会以 `cleanup failed` 报出来）。
 - 不暴露全局 `shutdown`、清理、跨会话作业管理、嵌套批次和配方运行。通用命令的实际集合在 `src/commands.ts`，与 Java 命令表有一致性测试。它是显式适配快照，不是在线发现；服务增加命令后应更新插件。
 - `view:true` 需要附件服务、可验证的模型路由和声明支持 image 的模型；默认截图 URL 不表示模型已经看到了图片。通用 screenshot 命令不会自动转换附件，视觉读取请用专用工具。
 - Java 服务仍记录原有 trace；Harness 记录工具调用。插件不额外写 `logs/agent`，也不复刻 Python 客户端的脱敏规则；页面文本和工具参数会进入 Harness 日志，应使用宿主已有的访问控制与脱敏配置。
 - 第一版采用独立 `dsb_*` 工具，不占用 Harness 的独占 `browserUse` provider 槽，不替换已有 Playwright MCP 工具。使用时明确选用 `dsb_*`，避免一项任务混用多个浏览器后端。
 - `execute_js`、Cookie、上传等能力仍是可信本地自动化能力；任务绑定不是多租户安全边界。远程服务的鉴权和 TLS 由部署层负责，本包没有新增服务端认证协议。
 
+### `execute_js` 的伪故障与结果回捞（0.2.1）
+
+Playwright 事件泵的伪故障（`Object doesn't exist: response@…`）会让服务端**只发一次**回执、脚本返回值直接丢失，实测一个下午丢过 5 次。现在：
+
+- `classify(result)` 把 `data.spuriousDispatch:true` 或 `errorCode==='SPURIOUS_DISPATCH'` 翻译成结构化结论：`spurious:true, outcomeUnknown:true, executedLikely:true`，并给出 `recovery`（先看 `urlAfter`、再读状态；确认无副作用后带 `retryOnSpurious:true` 重发）。若 `data.retryBudget.commandAttempts>=3`，再加 `retryExhausted:true` 并说明「不是瞬时抖动，别原地连点」。
+- **默认开启结果回捞**（`raw:true` 跳过）：插件在发送前把 `body` 按**语法形状**包一层，先把结果写进页内副本（`globalThis.__dsbRecovery`）再返回；判定为伪故障时，插件再发一条**自己生成的、按构造幂等**的只读探针把副本读回来，命中就回 `{ok:true, data:{result:…}, recoveredFromSpurious:true, originalError:…}`。三种形状（函数式 body、含 `return` 的语句片段、纯表达式）都有单测，并且断言包装后的脚本在 Node 里 `new Function` 求值行为正确，以及 `${VAR}` / `{{VAR}}` 语义不被破坏。
+- 参数：`{body?, bodyFile?, vars?, frame?, retryOnSpurious?, raw?, asJob?, select?}`，`body` 与 `bodyFile` 用 `.refine` 强制二选一；`vars`/`bodyFile`/`retryOnSpurious` 原样透传给服务端。**`retryOnSpurious` 只给无副作用脚本加**。
+- `asJob:true` 改走 `commands(async:true)`，返回 `jobId`，用 `dsb_job` 读结果；失败时提示的也只是只读的 `get_job`，不会重跑脚本。
+
+### 文件上传改为两步暂存（0.2.1）
+
+`dsb_upload` 默认先把字节 `POST /playwright/upload?filename=…`（裸字节，`application/octet-stream`）拿服务端 `path`，再带 `path` 调 `upload_file`：内联 base64 会把 8 MiB 放大成约 11 MiB 请求体。回执里带 `staged:true` 与 `stagedPath`。服务端没有该端点（老服务，404）时自动退回内联 base64，并在回执里写 `staged:false` 与 `stagingError`，不静默改变行为。
+
+
 ## 验证
 
-`npm test` 验证 HTTP 错误、取消、会话队列、作业归属、文件传输、附件适配、输出截断与真实 Harness ToolRuntime 注册/派发。
+`npm test` 验证 HTTP 错误、取消、会话队列、作业归属、文件传输、附件适配、字段感知输出投影、`select` 投影、作业结果阈值、`execute_js` 三种语法形状的包装与结果回捞、伪故障分类、截图熔断短路、`dsb_start` 自愈、`dsb_health` 不触发安装器、批次结果不明的受限出路、release 保留策略，以及真实 Harness ToolRuntime 注册/派发。
 
 对运行中的浏览器服务进行联调（只关闭测试自己的任务）：
 

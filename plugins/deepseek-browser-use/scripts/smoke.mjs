@@ -47,11 +47,16 @@ try {
   const uploaded = await call('evaluate', { body: 'return document.querySelector("#file").files[0].name;' });
   assert.match(JSON.stringify(uploaded), /smoke.txt/);
   const screenshot = await call('screenshot'); assert.match(JSON.stringify(screenshot), /\.png/);
+  // 字段感知投影:select 接受简化路径,规范值不受影响(投影文本由 render 基于同一份值产出,有单测钉住)
+  const projected = await call('state', { select: 'data.text' });
+  assert.equal(typeof projected.data.text, 'string');
+  assert.match(projected.data.text, /Submit/);
   const submitted = await call('batch', { commands: [{ method: 'get_title' }, { method: 'get_url' }] });
   let job;
   const deadline = Date.now() + 30000;
   do {
-    job = await call('job', { jobId: submitted.data.jobId });
+    // includeResult:true 才内联作业结果;默认只回 {steps, hasResult}
+    job = await call('job', { jobId: submitted.data.jobId, includeResult: true });
     if (job.data.status !== 'running') break;
     if (Date.now() > deadline) throw new Error('Smoke batch did not finish within 30s');
     await new Promise(resolve => setTimeout(resolve, 150));

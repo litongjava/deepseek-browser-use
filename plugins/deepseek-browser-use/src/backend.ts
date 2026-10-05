@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, open, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,10 +66,85 @@ export async function runBackend(action: BackendAction, options: BackendOptions,
   try { result = JSON.parse((await readFile(resultPath, 'utf8')).replace(/^\uFEFF/, '')) as Params; }
   catch { throw new Error(`Backend ${action} exited ${code} without a result; inspect ${directory}`); }
   if (code !== 0 || result.ok !== true) throw new Error(`${String(result.error ?? `Backend exited ${code}`)} (logs: ${directory})`);
-  return { ...result, operationDir: directory };
+  // 成功过一次 prepare/start/update/restart 之后顺手清理旧产物;status 是只读操作,不碰磁盘。
+  // 清理失败不影响操作结果(见 pruneReleases 里的 skipped)。
+  let releases: Params | undefined;
+  if (action !== 'status') {
+    try { releases = await pruneReleases(options.repoDir, keepReleases(), await activeRelease(options.repoDir)); }
+    catch (error) { releases = { error: error instanceof Error ? error.message : String(error) }; }
+    progress(`release 保留策略: ${JSON.stringify(releases)}\n`);
+  }
+  return { ...result, operationDir: directory, ...(releases ? { releases } : {}) };
 }
 
 type Runner = typeof runBackend;
+
+/** 默认保留多少个 commit 的产物;可以用 DSB_BACKEND_RELEASES 覆盖 */
+export const DEFAULT_KEEP_RELEASES = 3;
+const RELEASES_ENV = 'DSB_BACKEND_RELEASES';
+
+/** 保留几个 release:环境变量显式给出的正整数优先,否则用默认值 */
+export function keepReleases(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = Number.parseInt(String(env[RELEASES_ENV] ?? ''), 10);
+  return Number.isInteger(configured) && configured >= 1 ? configured : DEFAULT_KEEP_RELEASES;
+}
+
+/**
+ * release 目录保留策略:只留最近 N 个 commit 的 jar
+ *
+ * <p>
+ * <b>为什么需要它</b>:每次源码更新都会在 `.dsb-backend/releases/&lt;commit&gt;/backend.jar` 下留一份
+ * 几十 MB 的产物,长期跑下来这个目录只涨不消。但也不能无脑全删 —— 正在运行的后端可能还占着某一份
+ * jar(Windows 上还会锁文件),所以策略是「按 mtime 留最近的 N 个」,并且**从不删 `active` 里那一个**,
+ * 即使它的 mtime 因为某种原因最旧。
+ *
+ * <p>
+ * 返回删掉了哪些(以及为什么没删),让调用方能把它写进操作日志 —— 静默删文件是不可接受的。
+ */
+export async function pruneReleases(repoDir: string, keep: number, active?: string): Promise<Params> {
+  const releases = join(repoDir, '.dsb-backend', 'releases');
+  let names: string[];
+  try {
+    const entries = await readdir(releases, { withFileTypes: true });
+    names = entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
+  } catch {
+    // 还没构建过任何 release:不是错误
+    return { dir: releases, keep, scanned: 0, deleted: [], skipped: [] };
+  }
+  const described = await Promise.all(names.map(async name => {
+    const directory = join(releases, name);
+    try { return { name, directory, mtime: (await stat(join(directory, 'backend.jar'))).mtimeMs }; }
+    catch { return { name, directory, mtime: (await stat(directory)).mtimeMs }; }
+  }));
+  // 新的在前;同 mtime 时按名字定序,避免同一次操作的结果不稳定
+  described.sort((left, right) => right.mtime - left.mtime || right.name.localeCompare(left.name));
+  const deleted: string[] = [];
+  // 运行中那一份**不占保留名额**:它必须活,而且不能因为「占了一个位置」把另一个本来该留的挤掉。
+  // 阈值只算一次 —— 两个循环里都去读 skipped.length 的话,第一个循环会把自己的结果算进去(踩过)。
+  const activeName = described.some(entry => entry.name === active) ? active : undefined;
+  const keepCandidates = Math.max(keep - (activeName ? 1 : 0), 0);
+  const skipped: string[] = activeName ? [activeName] : [];
+  const candidates = described.filter(entry => entry.name !== activeName);
+  for (const entry of candidates.slice(0, keepCandidates)) skipped.push(entry.name);
+  for (const entry of candidates.slice(keepCandidates)) {    try {
+      await rm(entry.directory, { recursive: true, force: true });
+      deleted.push(entry.name);
+    } catch (error) {
+      // 删不掉多半是正在被运行中的后端占用:记下来,下次操作再试,不能让清理失败毁掉一次成功的构建
+      skipped.push(`${entry.name}(${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  return { dir: releases, keep, scanned: described.length, active: active ?? null, deleted, skipped };
+}
+
+/** 从后端写出的状态文件里读出当前 release(commit 名),用于把「正在跑的那份」排除在清理之外 */
+async function activeRelease(repoDir: string): Promise<string | undefined> {
+  try {
+    const state = JSON.parse(await readFile(join(repoDir, '.dsb-backend', 'state.json'), 'utf8')) as { commit?: string };
+    return typeof state.commit === 'string' ? state.commit : undefined;
+  } catch { return undefined; }
+}
+
 export class BackendManager {
   private pending?: Promise<Params>;
   private operation: Params = { status: 'idle' };

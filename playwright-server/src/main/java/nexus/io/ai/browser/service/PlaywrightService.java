@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -200,6 +201,106 @@ public class PlaywrightService {
   /** execute_js 的脚本目录(bodyFile 只允许读这个目录下的文件) */
   public static final String KEY_JS_DIR = "browser.js.dir";
 
+  /**
+   * {@code execute_js} 的单次时间预算(毫秒,默认 60000;0 = 不限制)
+   *
+   * <p>
+   * <b>为什么必须有这个</b>:实测(2026-10-05,在真服务上)发现 {@code page.evaluate} 连 Playwright
+   * 名义上的 30 秒默认超时都**不生效** —— 40 秒后才 resolve 的 Promise 正常返回;永不 resolve 的
+   * Promise 挂过 120 秒仍无响应。也就是说这条命令原本完全没有上限,调用方只能靠 HTTP 超时放弃,
+   * 而放弃**不会**取消服务端已经在跑的脚本。
+   *
+   * <p>
+   * 现在服务端在页内包一层 {@code Promise.race} 兜底(见 {@link #withEvalTimeout}),即使脚本里的
+   * Promise 永不 settle,evaluate 也一定会结束。默认值给到 60 秒:足够跑「等一个慢接口」这类正常长脚本,
+   * 又不至于让一次调用把会话拖死。确实需要更久时调大,或者用 {@code 0} 彻底关掉。
+   */
+  public static final String KEY_EVAL_TIMEOUT = "browser.eval.timeoutMs";
+
+  /** execute_js 单次预算默认值(毫秒) */
+  private static final double DEFAULT_EVAL_TIMEOUT_MS = 60_000;
+
+  /**
+   * 命令级兜底超时(毫秒,默认 90000;0 = 关闭)
+   *
+   * <p>
+   * 它是**最后一道闸**:页内定时器只在页面 JS 还能跑时有效,渲染进程卡死或 CDP 半死时
+   * 连 {@link #KEY_EVAL_TIMEOUT} 都救不了(定时器本身也跑不了)。这一层由服务端在工作线程上
+   * {@code join(timeout)} 得到结论 —— 与其让调用方无限等,不如明确回一句「本次结果未知」。
+   *
+   * <p>
+   * 默认比 {@code browser.eval.timeoutMs}(60s)大,是为了让更精确的内层超时先收口,
+   * 这一层只在真的卡住时才说话。
+   */
+  public static final String KEY_COMMAND_TIMEOUT = "browser.command.timeoutMs";
+
+  /** 命令级兜底默认值(毫秒) */
+  private static final double DEFAULT_COMMAND_TIMEOUT_MS = 90_000;
+
+  /**
+   * 「本来就设计成要等」的命令的绝对上限(毫秒,默认 15 分钟;0 = 不限制)
+   *
+   * <p>
+   * 这些命令的时间由它们**自己的参数**决定({@code wait_for_idle} 的 {@code timeoutSeconds=300}、
+   * OCR 的 {@code browser.ocr.timeoutMs=120000}、批次最多 200 步……),用 90 秒的默认兜底一刀切会把
+   * 本来正常的调用判死。但它们同样不该**永远**不回来,所以另给一个宽松的天花板。
+   */
+  public static final String KEY_COMMAND_HARD_TIMEOUT = "browser.command.hardTimeoutMs";
+
+  /** 「要等」的命令的默认天花板(毫秒) */
+  private static final double DEFAULT_COMMAND_HARD_TIMEOUT_MS = 900_000;
+
+  /**
+   * 允许同时有多少条「已经判定超时、但底层调用还在跑」的命令(默认 24)
+   *
+   * <p>
+   * 超时的命令**没法真的被取消**(Playwright 的调用可能不响应中断),所以那条线程会一直留到
+   * 底层返回为止。给个上限:超过就直接回 BUSY,而不是让卡死的会话把线程吃光。
+   */
+  public static final String KEY_COMMAND_MAX_STUCK = "browser.command.maxStuck";
+
+  /** 同时允许的「卡住命令」默认条数 */
+  private static final int DEFAULT_COMMAND_MAX_STUCK = 24;
+
+  /**
+   * 网络事件记录模式({@code browser.network.record}):{@code on}(默认) / {@code lazy} / {@code off}
+   *
+   * <p>
+   * <b>为什么默认仍是 on</b>:请求/响应监听器确实是实测里最贵的一类噪声源(见下),但它们同时也是
+   * {@code get_requests} / {@code get_response_body} / {@code wait_for_response} 的数据来源,
+   * 而这三个命令都是**回看**语义 —— 挂晚了就等于「什么都没有」。实测把默认改成 lazy 之后,
+   * 两条既有用例立刻挂了:{@code BrowserFrictionUpgradeTest.responseBodySurvivesNavigation}
+   * (「这条 XHR 应当被记下来」)与
+   * {@code BrowserResponseIntegrationTest.concurrentSameUrlResponsesKeepTheirIdsBodiesAndCallbackThread}
+   * (等 12 条并发响应进入 recentResponses)。它们钉住的正是「任务一开始就在记」这个产品语义:
+   * 导航 → 页面自己发 XHR → 再读,是最常见的用法,挂晚了这一整套就废了。
+   *
+   * <p>
+   * 所以这里给的是**能不能关、能不能延后**的开关,而不是替所有人改变语义:
+   *
+   * <ul>
+   * <li>{@code off}:永不挂。踩到 {@code response@/request@} 噪声风暴、又不需要网络数据时用它,
+   * 这是唯一能**彻底**消掉那一族伪故障的设置(不订阅就不会有那个分发面)。</li>
+   * <li>{@code lazy}:第一次要读网络数据时才挂。适合「只在明确要查接口时才需要流量」的用法;
+   * 代价是**挂上之前发生的请求不会出现**(回执里的 {@code recordedSince} 会说明从什么时候开始记)。</li>
+   * <li>{@code on}(默认):认领页签就挂,行为与历史一致。</li>
+   * </ul>
+   *
+   * <p>
+   * 每个任务都可以用 {@code start} 的 {@code networkRecording} 覆盖(见
+   * {@link #start(Long, boolean, String, Boolean)}),所以「这次只是改个配置页、不需要看流量」
+   * 可以按任务关掉,不必改全局配置。
+   */
+  public static final String KEY_NETWORK_RECORD = "browser.network.record";
+
+  /**
+   * 网络记录模式默认值:{@code on}
+   *
+   * <p>理由见 {@link #KEY_NETWORK_RECORD}:监听器是噪声源,但也是 {@code get_requests} 一族的数据来源,
+   * 而后者是回看语义 —— 默认关掉会把功能一起关掉。噪声由「可关 + 可延后 + 伪故障按命令分级重试」处理。
+   */
+  private static final String DEFAULT_NETWORK_RECORD = "on";
+
   /** JS 设值模式返回给调用方的提醒:它只改 DOM,不保证进入框架(React/Vue)的模型 */
   private static final String JS_MODE_NOTE = "js 模式只改了 DOM 的值并派发了 input/change 事件,"
       + "不保证进入框架(React/Vue)的模型:提交或预览时可能仍然是空的。"
@@ -293,6 +394,22 @@ public class PlaywrightService {
    * @throws IllegalArgumentException 传了不认识的值
    */
   public long start(Long id, boolean headless, String browser) {
+    return start(id, headless, browser, null);
+  }
+
+  /**
+   * 同上,外加按任务指定网络记录模式({@code networkRecording})
+   *
+   * <p>
+   * 传 {@code true} = 从认领页签起就记录请求/响应(老行为);{@code false} = 这个任务永不记录;
+   * 不传 = 按全局配置 {@code browser.network.record}(默认 {@code lazy},第一次要读网络数据时才挂)。
+   *
+   * <p>
+   * 之所以做成**每个任务**都能指定:记录网络会让这个任务背上四个上下文级监听器,而它们的异常
+   * (对象已释放)会砸在**后续任意一次 API 调用**上。多数任务从不读网络数据,只有排查接口的任务才需要 ——
+   * 让最清楚这一次要不要看流量的调用方决定,比全局一刀切合适。
+   */
+  public long start(Long id, boolean headless, String browser, Boolean networkRecording) {
     BrowserChoice requested = null;
     if (browser != null && !browser.isBlank()) {
       requested = BrowserChoice.parse(browser);
@@ -309,12 +426,40 @@ public class PlaywrightService {
     java.util.Set<String> existedBefore = profileDirsExistingBeforeLaunch(requested);
     SharedBrowser shared = sharedBrowser(headless, requested);
     applyProfileHistory(shared, existedBefore);
-    BrowserInstance instance = newTaskInstance(taskId, shared);
+    if (networkRecording != null) {
+      // claimPage 会读这个字段决定「认领页签时挂不挂监听器」,所以必须在它之前写好
+      pendingRecorderMode.set(networkRecording ? "on" : "off");
+    } else {
+      pendingRecorderMode.remove();
+    }
+    BrowserInstance instance;
+    try {
+      instance = newTaskInstance(taskId, shared);
+    } finally {
+      pendingRecorderMode.remove();
+    }
     INSTANCES.put(taskId, instance);
+    // 顺带做一次运行期产物的过期清理(browser.data.retentionDays>0 才生效,且每小时最多一次)。
+    // 放在 start 里是因为它是唯一「一定会发生、又不在关键路径上」的时机:清理失败不影响任务。
+    try {
+      pruneExpiredArtifacts();
+    } catch (RuntimeException ignored) {
+      // 清理是尽力而为,绝不因为它让 start 失败
+    }
     log.info("task {} 浏览器就绪(browser={}),耗时 {}ms", taskId, shared.resolvedType.id(),
         System.currentTimeMillis() - startedAt);
     return taskId;
   }
+
+  /**
+   * 只用于把 {@code start} 的 networkRecording 参数传进 {@link #newTaskInstance} 的短途信道
+   *
+   * <p>
+   * 新实例是在 {@code newTaskInstance} 里创建、并在那里立刻 {@code claimPage} 的,而「要不要挂网络
+   * 监听器」正是 claimPage 要判断的事。比起把参数一路加进四层调用,这里用一个线程局部的信箱:
+   * 它在同一次 start 调用内写读、读完即清,不会跨请求串味。
+   */
+  private static final ThreadLocal<String> pendingRecorderMode = new ThreadLocal<>();
 
   // ==================== profile 的登录态来历 ====================
 
@@ -942,6 +1087,10 @@ public class PlaywrightService {
       page = context.newPage();
     }
     BrowserInstance instance = new BrowserInstance(taskId, context, page, browser.profileDir, browser.opts);
+    String pending = pendingRecorderMode.get();
+    if (pending != null) {
+      instance.recorderMode = pending;
+    }
     claimPage(instance, page);
     return instance;
   }
@@ -984,7 +1133,14 @@ public class PlaywrightService {
       log.debug("挂载 webdriver 屏蔽脚本失败:{}", briefMessage(e.getMessage()));
     }
     attachListeners(instance, page);
-    attachRequestRecorder(instance, page);
+    // 网络记录默认仍是「认领就挂」(见 KEY_NETWORK_RECORD 里为什么没有把默认改成 lazy):
+    // get_requests 一族是回看语义,挂晚了就等于没有。想彻底躲开那一族伪故障就把
+    // browser.network.record 设成 off(或 start 时 networkRecording=false);
+    // 设成 lazy 时,只要这个任务已经挂过监听器,新页签也要补挂,否则多页签任务只有第一个页签有记录。
+    String mode = networkRecordModeFor(instance);
+    if ("on".equals(mode) || (instance.recorderAttached && !"off".equals(mode))) {
+      attachRequestRecorder(instance, page);
+    }
     applyRoutes(instance, page);
     if (instance.page == null || instance.page.isClosed()) {
       instance.page = page;
@@ -1160,6 +1316,37 @@ public class PlaywrightService {
             + "(shared-<端口>)"));
     data.set("action", Kv.by("timeoutMs", actionTimeoutMs()).set("jsFallback", jsFallbackEnabled())
         .set("mouseFallback", mouseFallbackEnabled()));
+    // 截图熔断与脚本/命令超时:这些是「出问题时最该看的四个数」,以前只在源码里,调用方完全看不到 ——
+    // 实测出现过「截图一直没图,却不知道为什么、也不知道还能不能用 force 探一次」。
+    int openCircuits = countOpenCaptureCircuits();
+    data.set("capture", Kv.by("enabled", captureEnabled())
+        .set("timeoutMs", captureTimeoutMs())
+        .set("failThreshold", captureFailThreshold())
+        .set("cooldownMs", captureCooldownMs())
+        .set("spuriousCooldownMs", captureSpuriousCooldownMs())
+        // 熔断是**每个任务**的状态,这里聚合成一个「现在有没有谁正瞎着」的信号:
+        // 调用方(插件/CLI)拿它做健康检查时,不必再逐个任务去翻回执
+        .set("circuitsOpen", openCircuits)
+        .set("degraded", openCircuits > 0)
+        .set("note", "自动截图连续失败 failThreshold 次后冷却 cooldownMs;伪故障单独计数、只冷却 "
+            + "spuriousCooldownMs。冷却到期后会半开重试并清零计数。"
+            + "circuitsOpen/degraded 是**此刻**有多少个任务的截图正被熔断。"
+            + "手动 screenshot 传 force=true 可绕过冷却探测一次(失败不延长冷却)。"));
+    data.set("eval", Kv.by("timeoutMs", evalTimeoutMs(null)).set("key", KEY_EVAL_TIMEOUT)
+        .set("note", "execute_js 的单次预算,页内 Promise.race 兜底;单次调用可用 params.timeoutMs 覆盖,0 = 不限制。"
+            + "page.evaluate 自身的 30 秒默认超时在 awaitPromise 上不生效,所以必须有这一层。"));
+    data.set("command", Kv.by("timeoutMs", commandTimeoutMs()).set("hardTimeoutMs", commandHardTimeoutMs())
+        .set("maxStuck", commandMaxStuck())
+        .set("key", KEY_COMMAND_TIMEOUT)
+        .set("note", "命令级 wall-clock 兜底:普通命令用 timeoutMs,\"本来就设计成要等\"的命令"
+            + "(批次/等待/OCR/人机协同)用 hardTimeoutMs;同时最多允许 maxStuck 条命令卡住。0 = 关闭。"));
+    data.set("network", Kv.by("record", networkRecordMode()).set("key", KEY_NETWORK_RECORD)
+        .set("modes", new ArrayList<>(java.util.List.of("on", "lazy", "off")))
+        .set("note", "on(默认)= 认领页签就挂请求/响应监听器,get_requests 一族能回看整个任务;"
+            + "lazy = 第一次要读网络数据时才挂(挂之前的请求不会出现,见回执 recordedSince);"
+            + "off = 永不挂,回执会明说「没在记」。这一族监听器是实测里最贵的伪故障来源"
+            + "(response@/request@ 对象已释放),踩到时用 off 能彻底消掉它;"
+            + "start 时可用 networkRecording 按任务覆盖(true=on / false=off)。"));
     data.set("launchTimeoutMs", launchTimeoutMs());
     data.set("trace", Kv.by("dir", CommandTraceLog.currentDir().toString())
         .set("enabled", Boolean.parseBoolean(String.valueOf(ChromeBrowser.config(CommandTraceLog.KEY_ENABLED) == null
@@ -1797,10 +1984,54 @@ public class PlaywrightService {
    * <p>
    * 挂在**页签**上而不是上下文上:上下文是所有任务共用的,挂上下文会把别人的流量也记进这个任务的
    * {@code get_requests}。
+   *
+   * <p>
+   * <b>默认不再是「认领页签就挂」</b>:见 {@link #KEY_NETWORK_RECORD} —— 这四个监听器是实测里最贵的
+   * 伪故障来源(上下文级事件分发碰到已释放对象就抛,砸在后续任意一次 API 调用上)。
+   * 现在只有 {@code browser.network.record=on}、或有命令真的要读网络数据时才走到这里。
    */
+  /**
+   * 按需把网络记录器挂上(默认 {@code lazy} 模式的入口)
+   *
+   * <p>
+   * 每个要读网络数据的命令进来先调它一次:第一次调用会把监听器挂到当前页签上,之后一直是
+   * 「本来就挂着」的快速路径。之所以不在 {@code start}/{@code claimPage} 时就挂:那会让**每一次**
+   * 任务都背上四个上下文级监听器,而绝大多数任务从不读网络数据 —— 代价却是最贵的那类伪故障。
+   *
+   * @return {@code true} = 现在开始记了;{@code false} = 被 {@code browser.network.record=off} 关掉了,
+   *         调用方应当如实说明「没在记」,而不是把空结果当成「没有请求」
+   */
+  private boolean ensureRequestRecorder(BrowserInstance inst) {
+    if ("off".equals(networkRecordModeFor(inst))) {
+      return false;
+    }
+    if (!inst.recorderAttached) {
+      Page page = inst.page;
+      if (page == null) {
+        return false;
+      }
+      attachRequestRecorder(inst, page);
+    }
+    return true;
+  }
+
+  /** 网络记录模式:**任务级覆盖**优先,否则用全局配置 */
+  private static String networkRecordModeFor(BrowserInstance inst) {
+    String override = inst == null ? null : inst.recorderMode;
+    return override == null ? networkRecordMode() : override;
+  }
+
+  /** 网络记录被配置关掉时的统一说明:空结果必须能自证是「没在记」而不是「没有请求」 */
+  private static Kv networkRecordingOffNote() {
+    return Kv.by("networkRecorded", false).set("networkNote",
+        "网络记录被 browser.network.record=off 关掉了：这个任务不记录请求/响应，"
+            + "所以这里的空结果是「没在记」而不是「没有请求」。"
+            + "需要读网络数据时把它改成 lazy 或 on，然后重新 start 一个任务。");
+  }
+
   private void attachRequestRecorder(BrowserInstance inst, Page page) {
     inst.recorderAttachedAt = System.currentTimeMillis();
-    page.onRequest(request -> safely("onRequest", () -> {
+    inst.recorderAttached = true;    page.onRequest(request -> safely("onRequest", () -> {
       Kv entry = requestInfo(request);
       addBoundedRequest(inst.requests, entry);
       if (request != null) {
@@ -2641,6 +2872,92 @@ public class PlaywrightService {
   }
 
   /**
+   * 运行期产物的保留天数(0 = 不清理,默认 0)
+   *
+   * <p>
+   * <b>为什么要有个清理开关</b>:每次「可能改变页面」的命令都会落一张截图,实测一台机器上很快就是
+   * {@code data/} 下 66 个任务目录 / 3167 张 PNG / 约 393 MB,而且**没有任何自动回收** ——
+   * 平台的 {@code cleanup} 命令默认还是 dryRun,没人会记得去点。
+   *
+   * <p>
+   * 默认仍然是 <b>0(不清理)</b>:截图与同名结构化文本是排查证据,自动删别人的证据比占点磁盘更糟。
+   * 需要时把它设成天数(例如 7),{@code start} 时会顺带清理一次(每小时最多一次)。
+   *
+   * <p>
+   * 只在本服务<b>自己生成的文件名</b>上生效(见 {@link #ARTIFACT_NAME}),用户手动放进
+   * {@code data/<id>/} 的任何文件都不会被碰。
+   */
+  public static final String KEY_DATA_RETENTION_DAYS = "browser.data.retentionDays";
+
+  /** 本服务在 data/&lt;id&gt;/ 下生成的文件名:&lt;seq&gt;.png（截图）、&lt;seq&gt;.txt（同刻结构化文本）、shot-&lt;n&gt;.png（手动截图） */
+  private static final Pattern ARTIFACT_NAME = Pattern.compile("^(\\d+\\.(png|txt)|shot-\\d+\\.png)$");
+
+  /** 运行期产物清理的节流:每小时最多扫一次 */
+  private static final long PRUNE_INTERVAL_MS = 3_600_000L;
+  private static final AtomicLong LAST_PRUNE_AT = new AtomicLong();
+
+  static int dataRetentionDays() {
+    Double configured = positiveDouble(ChromeBrowser.config(KEY_DATA_RETENTION_DAYS), 0);
+    return configured <= 0 ? 0 : configured.intValue();
+  }
+
+  /**
+   * 清掉超过保留期的截图与结构化文本
+   *
+   * <p>
+   * 判据只有两条:①文件名是本服务生成的那三种;②最后修改时间早于保留期。**不递归删目录里别的文件**,
+   * 也不删非空目录 —— 这一条是有意的:data/&lt;id&gt;/ 里可能有用户自己放进去的产物(pdf 导出、
+   * 手工保存的图),按目录整删会把它们一起带走。
+   *
+   * @return 删掉的文件数;未开启或没到节流窗口时返回 0
+   */
+  static int pruneExpiredArtifacts() {
+    int days = dataRetentionDays();
+    if (days <= 0) {
+      return 0;
+    }
+    long now = System.currentTimeMillis();
+    long last = LAST_PRUNE_AT.get();
+    if (now - last < PRUNE_INTERVAL_MS || !LAST_PRUNE_AT.compareAndSet(last, now)) {
+      return 0;
+    }
+    long cutoff = now - days * 86_400_000L;
+    int removed = 0;
+    Path root = Paths.get(DATA_DIR);
+    if (!Files.isDirectory(root)) {
+      return 0;
+    }
+    try (java.util.stream.Stream<Path> dirs = Files.list(root)) {
+      for (Path dir : dirs.filter(Files::isDirectory).toList()) {
+        try (java.util.stream.Stream<Path> files = Files.list(dir)) {
+          for (Path file : files.toList()) {
+            String name = file.getFileName().toString();
+            if (!ARTIFACT_NAME.matcher(name).matches()) {
+              continue;
+            }
+            try {
+              if (Files.getLastModifiedTime(file).toMillis() < cutoff) {
+                Files.deleteIfExists(file);
+                removed++;
+              }
+            } catch (IOException ignored) {
+              // 删不掉(占用/权限)就跳过:清理失败不该让 start 出问题
+            }
+          }
+        } catch (IOException ignored) {
+          // 同上
+        }
+      }
+    } catch (IOException ignored) {
+      return removed;
+    }
+    if (removed > 0) {
+      log.info("已清理 {} 个超过 {} 天的运行期产物(截图/结构化文本)", removed, days);
+    }
+    return removed;
+  }
+
+  /**
    * 给当前页面截图,序号自增
    *
    * <p>
@@ -2755,6 +3072,93 @@ public class PlaywrightService {
   static long captureCooldownMs() {
     Double configured = positiveDouble(ChromeBrowser.config(KEY_CAPTURE_COOLDOWN), 0);
     return configured <= 0 ? DEFAULT_CAPTURE_COOLDOWN_MS : configured.longValue();
+  }
+
+  /**
+   * 伪故障导致的截图冷却(毫秒,{@code browser.capture.spuriousCooldownMs},默认 15000)
+   *
+   * <p>
+   * 伪故障与「这个页面截不出图」是两回事:前者一次噪声风暴里会连撞几次,给 120 秒会把画面白关两分钟;
+   * 所以单独一个更短的冷却。这个值原本硬编码在 {@code CapturePolicy} 里,提到配置是为了让运维
+   * 能在噪声特别多的站点上自己调(调大到接近 captureCooldownMs 就等于不再区分两类失败)。
+   */
+  public static final String KEY_CAPTURE_SPURIOUS_COOLDOWN = "browser.capture.spuriousCooldownMs";
+
+  /** 伪故障冷却默认值(毫秒) */
+  private static final long DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS = 15_000;
+
+  /** 伪故障导致的截图冷却(毫秒) */
+  static long captureSpuriousCooldownMs() {
+    Double configured = positiveDouble(ChromeBrowser.config(KEY_CAPTURE_SPURIOUS_COOLDOWN), 0);
+    return configured <= 0 ? DEFAULT_CAPTURE_SPURIOUS_COOLDOWN_MS : configured.longValue();
+  }
+
+  /**
+   * execute_js 的单次时间预算(毫秒)
+   *
+   * <p>
+   * 与 {@link #captureTimeoutMs()} 那组不同,这个键**允许配成 0**(= 不限制):有些脚本就是要在页面里
+   * 等一个很慢的接口,把上限焊死会把本来能成的用例判死。所以这里不用 {@code positiveDouble}(它会把 0
+   * 当成「没配」),而是显式区分「没配」与「配成 0」。
+   */
+  static double evalTimeoutMs(Integer override) {
+    if (override != null) {
+      return override; // 调用点显式指定,含 0 = 这一次不限制
+    }
+    String configured = ChromeBrowser.config(KEY_EVAL_TIMEOUT);
+    if (configured == null || configured.isBlank()) {
+      return DEFAULT_EVAL_TIMEOUT_MS;
+    }
+    try {
+      double parsed = Double.parseDouble(configured.trim());
+      return parsed < 0 ? DEFAULT_EVAL_TIMEOUT_MS : parsed;
+    } catch (NumberFormatException e) {
+      return DEFAULT_EVAL_TIMEOUT_MS;
+    }
+  }
+
+  /** 命令级兜底超时(毫秒,0 = 关闭),见 {@link #KEY_COMMAND_TIMEOUT} */
+  static long commandTimeoutMs() {
+    String configured = ChromeBrowser.config(KEY_COMMAND_TIMEOUT);
+    if (configured == null || configured.isBlank()) {
+      return (long) DEFAULT_COMMAND_TIMEOUT_MS;
+    }
+    try {
+      double parsed = Double.parseDouble(configured.trim());
+      return parsed < 0 ? (long) DEFAULT_COMMAND_TIMEOUT_MS : (long) parsed;
+    } catch (NumberFormatException e) {
+      return (long) DEFAULT_COMMAND_TIMEOUT_MS;
+    }
+  }
+
+  /** 允许同时有多少条「已判定超时、底层仍在跑」的命令 */
+  static int commandMaxStuck() {
+    Double configured = positiveDouble(ChromeBrowser.config(KEY_COMMAND_MAX_STUCK), 0);
+    return configured <= 0 ? DEFAULT_COMMAND_MAX_STUCK : configured.intValue();
+  }
+
+  /** 「要等」的命令的绝对上限(毫秒,0 = 不限制),见 {@link #KEY_COMMAND_HARD_TIMEOUT} */
+  static long commandHardTimeoutMs() {
+    String configured = ChromeBrowser.config(KEY_COMMAND_HARD_TIMEOUT);
+    if (configured == null || configured.isBlank()) {
+      return (long) DEFAULT_COMMAND_HARD_TIMEOUT_MS;
+    }
+    try {
+      double parsed = Double.parseDouble(configured.trim());
+      return parsed < 0 ? (long) DEFAULT_COMMAND_HARD_TIMEOUT_MS : (long) parsed;
+    } catch (NumberFormatException e) {
+      return (long) DEFAULT_COMMAND_HARD_TIMEOUT_MS;
+    }
+  }
+
+  /** 网络事件记录模式:{@code lazy}(默认)/ {@code off} / {@code on},见 {@link #KEY_NETWORK_RECORD} */
+  public static String networkRecordMode() {
+    String configured = ChromeBrowser.config(KEY_NETWORK_RECORD);
+    if (configured == null || configured.isBlank()) {
+      return DEFAULT_NETWORK_RECORD;
+    }
+    String mode = configured.trim().toLowerCase(java.util.Locale.ROOT);
+    return (mode.equals("on") || mode.equals("off") || mode.equals("lazy")) ? mode : DEFAULT_NETWORK_RECORD;
   }
 
   /** 读一个正整数配置:没配/配错/非正数都退回默认值 */
@@ -6033,9 +6437,22 @@ public class PlaywrightService {
    * @param frame frame 序号或 URL/name 子串;为空表示主 frame
    */
   public RespBodyVo executeJs(Long browserId, String body, String bodyFile, JSONObject vars, String frame) {
+    return executeJs(browserId, body, bodyFile, vars, frame, null);
+  }
+
+  /**
+   * 同上,外加按次覆盖的时间预算({@code timeoutMs},见 {@link #KEY_EVAL_TIMEOUT})
+   *
+   * <p>
+   * 页内兜底超时({@link #withEvalTimeout})靠它取值:没传用配置,传 {@code 0} 表示这一次不限制。
+   * 之所以要能按次覆盖:确实存在「就是要等一个很慢的接口」的脚本,把上限焊死在配置里会把它判死;
+   * 而把默认值放大又会让卡死的脚本拖更久 —— 交给最清楚这一次要跑多久的调用方。
+   */
+  public RespBodyVo executeJs(Long browserId, String body, String bodyFile, JSONObject vars, String frame,
+      Integer timeoutMs) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
-      return RespBodyVo.fail("没有找到对应的浏览器实例：" + browserId);
+      return notFound(browserId);
     }
     Frame target;
     try {
@@ -6055,9 +6472,14 @@ public class PlaywrightService {
     if (raw == null || raw.isBlank()) {
       return RespBodyVo.fail("execute_js 需要 body 或 bodyFile");
     }
-    String script = normalizeScript(applyVars(raw, vars));
+    long evalBudget = (long) evalTimeoutMs(timeoutMs);
+    String script = normalizeToFunction(applyVars(raw, vars));
+    // 「脚本长什么样」与「怎么执行」分开报:scriptPreview 给的是包装前的用户脚本,
+    // 否则排查时看到的是 Promise.race 那层壳,反而认不出自己写的东西。
+    String scriptPreview = truncate(script, 400);
+    String executable = withEvalTimeout(script, evalBudget);
     try {
-      Object result = target.evaluate(script);
+      Object result = target.evaluate(executable);
       Kv data = Kv.by("result", result);
       if (vars != null && !vars.isEmpty()) {
         data.set("varsApplied", new ArrayList<>(vars.keySet()));
@@ -6067,12 +6489,26 @@ public class PlaywrightService {
       }
       // 「到底等没等 Promise」以前只能靠猜,于是有人退回同步 XHR 来规避。这里如实回报
       data.set("awaited", true);
+      // 生效的时间预算一并报出来:排查「为什么这次 60 秒就断了」时不用再去翻配置
+      data.set("evalTimeoutMs", evalBudget);
       return RespBodyVo.ok(data);
     } catch (PlaywrightException e) {
       String message = briefMessage(e.getMessage());
-      log.error("execute_js 执行失败,id:{},script:{},error:{}", browserId, script, message, e);
+      // 页内兜底超时:脚本可能只跑了一半,严格来说「结果未知」,不能当成可以随手重发的普通失败
+      if (message.contains(EVAL_TIMEOUT_SENTINEL)) {
+        String text = "execute_js 超时：" + evalBudget + " 毫秒内脚本没有结束"
+            + "（[" + ActionError.EVAL_TIMEOUT + "] 结果未知：脚本可能仍在页面里继续执行，也可能只改了一半状态）";
+        RespBodyVo failure = RespBodyVo.fail(text);
+        failure.setData(Kv.by("errorCode", ActionError.EVAL_TIMEOUT).set("retryable", false)
+            .set("outcomeUnknown", true).set("evalTimeoutMs", evalBudget)
+            .set("scriptPreview", scriptPreview).set("scriptLength", script.length())
+            .set("hint", "不要直接重发（等于再执行一次）。先用 get_browser_state / diff_dom_text 确认页面状态；"
+                + "确实要跑更久就把这次调用的 timeoutMs 调大，或改 browser.eval.timeoutMs（0 = 不限制）"));
+        return failure;
+      }
+      log.error("execute_js 执行失败,id:{},script:{},error:{}", browserId, scriptPreview, message, e);
       RespBodyVo failure = RespBodyVo.fail("执行 JavaScript 失败：" + message);
-      Kv detail = Kv.by("error", scriptError(e)).set("scriptPreview", truncate(script, 400))
+      Kv detail = Kv.by("error", scriptError(e)).set("scriptPreview", scriptPreview)
           .set("scriptLength", script.length());
       // 「脚本被截断」是 Windows 上最常见的一类假故障:多行脚本经 cmd/PowerShell 传参时被吃掉,
       // 到服务端的只剩第一行,报错却是语法级的 "Unexpected end of input" —— 只说语法,人根本想不到
@@ -6187,6 +6623,83 @@ public class PlaywrightService {
       return script;
     }
     return "() => {" + script + "}";
+  }
+
+  /**
+   * 页内兜底超时的哨兵
+   *
+   * <p>它必须是个**不可能与用户脚本撞车**的字符串:{@link ActionError#code} 用文本包含来判断错误码,
+   * 用户脚本自己抛出的异常不该被误判成「脚本超时」。同时它要出现在 Playwright 的异常文本里,
+   * 这样即使异常经过了驱动层,也能被认出来。
+   */
+  static final String EVAL_TIMEOUT_SENTINEL = "__DSB_EVAL_TIMEOUT__";
+
+  /**
+   * 把三种形状的脚本统一成**函数**,便于外面再包一层超时
+   *
+   * <p>和 {@link #normalizeScript} 的区别:{@code normalizeScript} 保持表达式的原样(Playwright 自己能
+   * 求值表达式),而包超时需要「一定能被 then(...) 调用」,所以表达式也要变成 {@code () => (表达式)}。
+   * 三者对应关系(与 normalizeScript 的判据一致,不另立一套):
+   *
+   * <ul>
+   * <li>函数式({@code () => …} / {@code function …}):原样;</li>
+   * <li>含 {@code return} 的语句片段:{@code () => { … }};</li>
+   * <li>表达式:{@code () => ( 表达式 )},只去掉结尾多余的分号。</li>
+   * </ul>
+   */
+  static String normalizeToFunction(String body) {
+    String script = body.trim();
+    if (FUNCTION_LIKE.matcher(script).find()) {
+      return script;
+    }
+    if (RETURN_STATEMENT.matcher(script).find()) {
+      return "() => {" + script + "}";
+    }
+    String expression = script.endsWith(";") ? script.substring(0, script.length() - 1).trim() : script;
+    return "() => (" + expression + ")";
+  }
+
+  /**
+   * 给脚本包一层**页内**超时兜底
+   *
+   * <p>
+   * <b>为什么不能只靠 Playwright 的超时</b>:实测 2026-10-05 在真服务上,一个 40 秒后才 resolve 的
+   * Promise 能正常返回(名义上的 30 秒默认超时没生效),一个永不 resolve 的 Promise 挂过 120 秒
+   * 仍无响应 —— 也就是说 {@code page.evaluate} 在 {@code awaitPromise} 上是**没有上限**的。
+   * 所以这里在页面里放一个定时器,用 {@code Promise.race} 跟脚本赛跑:只要页面的 JS 还能跑,
+   * evaluate 就一定会 settle,不会把命令和调用方一起挂死。
+   *
+   * <p>
+   * 定时器在 finally 里清掉,免得每次调用都在页面上留一个待触发的 timer。
+   *
+   * @param fn        已经由 {@link #normalizeToFunction} 统一成函数的脚本
+   * @param timeoutMs 毫秒;{@code <= 0} 表示不限制,原样返回
+   */
+  static String withEvalTimeout(String fn, long timeoutMs) {
+    if (timeoutMs <= 0) {
+      return fn;
+    }
+    // 先求值再判断「是不是函数」,而不是直接 .then(fn):
+    //   fn 是函数字面量   → 取到的就是函数,调用它;
+    //   fn 是**已调用的表达式**(如 (() => 42)() 或 ({a:1}).a) → 取到的是值,直接用它。
+    // 直接写 .then(fn) 会在后一种情况下踩坑:then 收到非函数参数会**静默忽略**,脚本的返回值变成
+    // undefined(脚本的副作用照跑,结果是空的 —— 实测在插件的包装层上就踩过这个坑,
+    // 「函数字面量优先」的判据同样会把 (() => {...})() 判成函数)。
+    return "async () => {\n"
+        + "  let __dsbTimer = 0;\n"
+        + "  const __dsbTimeout = new Promise((_, __dsbReject) => {\n"
+        + "    __dsbTimer = setTimeout(() => __dsbReject(new Error('" + EVAL_TIMEOUT_SENTINEL
+        + "')), " + timeoutMs + ");\n"
+        + "  });\n"
+        + "  try {\n"
+        + "    const __dsbTarget = (" + fn + ");\n"
+        + "    const __dsbWork = Promise.resolve().then(() =>\n"
+        + "      (typeof __dsbTarget === 'function' ? __dsbTarget() : __dsbTarget));\n"
+        + "    return await Promise.race([__dsbWork, __dsbTimeout]);\n"
+        + "  } finally {\n"
+        + "    clearTimeout(__dsbTimer);\n"
+        + "  }\n"
+        + "}";
   }
 
   /**
@@ -7341,10 +7854,14 @@ public class PlaywrightService {
     int mutations = -1;
     long stableSince = startedAt;
     int inflight = 0;
+    // 网络记录默认按需:不在这里挂上就永远读不到在途请求数,而「inflight==0」是本方法的核心判据 ——
+    // 那会让 wait_for_idle 在任何页面上都立刻「安静了」,比不判更糟。配置成 off 时如实降级:
+    // 只看 DOM 变更,并在回执里说明「这次没有网络维度」。
+    boolean networkTracked = ensureRequestRecorder(inst);
     while (true) {
       long now = System.currentTimeMillis();
       int current = readMutationCount(inst);
-      inflight = inst.inflight.get();
+      inflight = networkTracked ? inst.inflight.get() : 0;
       boolean extra = (selector == null || selector.isBlank() || countOf(inst, selector) > 0)
           && (text == null || text.isBlank() || bodyContains(inst, text));
       if (current != mutations) {
@@ -7352,17 +7869,23 @@ public class PlaywrightService {
         stableSince = now;
       }
       if (extra && inflight == 0 && now - stableSince >= quiet) {
-        return RespBodyVo.ok(Kv.by("idle", true).set("waitedMs", now - startedAt).set("mutations", mutations)
+        Kv idle = Kv.by("idle", true).set("waitedMs", now - startedAt).set("mutations", mutations)
             .set("inflight", 0).set("quietMs", quiet).set("timeoutSeconds", timeout / 1000.0)
-            .set("url", safeUrl(inst.page)));
+            .set("url", safeUrl(inst.page)).set("networkTracked", networkTracked);
+        if (!networkTracked) {
+          idle.set(networkRecordingOffNote());
+        }
+        return RespBodyVo.ok(idle);
       }
       if (now >= deadline) {
         Kv data = Kv.by("idle", false).set("waitedMs", now - startedAt).set("mutations", mutations)
             .set("inflight", inflight).set("quietMs", quiet).set("url", safeUrl(inst.page))
+            .set("networkTracked", networkTracked)
             .set("selectorMatched", selector == null || selector.isBlank() || countOf(inst, selector) > 0)
             .set("textMatched", text == null || text.isBlank() || bodyContains(inst, text));
         RespBodyVo failure = RespBodyVo.fail("wait_for_idle 失败：" + (timeout / 1000.0) + " 秒内页面没有安静下来"
-            + "（在途请求 " + inflight + " 个，DOM 变更累计 " + mutations + " 次）");
+            + (networkTracked ? "（在途请求 " + inflight + " 个" : "（网络维度未启用")
+            + "，DOM 变更累计 " + mutations + " 次）");
         failure.setData(data);
         return failure;
       }
@@ -8961,6 +9484,10 @@ public class PlaywrightService {
     if (inst == null) {
       return notFound(browserId);
     }
+    if (!ensureRequestRecorder(inst)) {
+      return RespBodyVo.ok(Kv.by("requests", new ArrayList<>()).set("count", 0).set("total", 0)
+          .set(networkRecordingOffNote()));
+    }
     List<Kv> matched = filterRequests(inst, filter, resourceType, since);
     if (limit != null && limit > 0 && matched.size() > limit) {
       matched = new ArrayList<>(matched.subList(matched.size() - limit, matched.size()));
@@ -9025,6 +9552,11 @@ public class PlaywrightService {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
+    }
+    if (!ensureRequestRecorder(inst)) {
+      RespBodyVo off = RespBodyVo.fail("get_response_body 不可用：网络记录已被配置关掉");
+      off.setData(networkRecordingOffNote());
+      return off;
     }
     List<BrowserInstance.RecordedResponse> matched = new ArrayList<>();
     for (BrowserInstance.RecordedResponse recorded : snapshotResponses(inst)) {
@@ -9111,6 +9643,11 @@ public class PlaywrightService {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
       return notFound(browserId);
+    }
+    if (!ensureRequestRecorder(inst)) {
+      RespBodyVo off = RespBodyVo.fail("wait_for_response 不可用：网络记录已被配置关掉");
+      off.setData(networkRecordingOffNote());
+      return off;
     }
     int lookBack = lookBackSeconds == null ? DEFAULT_RESPONSE_LOOKBACK_SECONDS : lookBackSeconds;
     if (lookBack > 0) {
@@ -9269,7 +9806,12 @@ public class PlaywrightService {
       kv.set("errors", new ArrayList<>(inst.pageErrors));
     }
     if (includeRequests != null && includeRequests) {
-      kv.set("requests", filterRequests(inst, requestFilter));
+      if (ensureRequestRecorder(inst)) {
+        kv.set("requests", filterRequests(inst, requestFilter));
+      } else {
+        kv.set("requests", new ArrayList<>());
+        kv.set(networkRecordingOffNote());
+      }
     }
     return RespBodyVo.ok(kv);
   }
@@ -10190,8 +10732,31 @@ public class PlaywrightService {
     }
     instance.page = page;
     claimPage(instance, page);
+    // 换了**整个浏览器进程**= 截图能力重新有一次机会,必须把截图熔断一起复位。
+    // 旧实现只换上下文、不清冷却:于是重启浏览器也救不回画面,只有 close+start(换 task id)才行 ——
+    // 这正是实测里「怎么试都没图,只能重开任务」的机理。
+    resetCaptureCircuit(instance);
     log.info("任务 {} 的浏览器上下文已重建:{}", instance.id, fresh.context);
     return instance;
   }
 
+  /** 复位截图熔断状态(重建浏览器、或需要给它一次干净机会时调用) */
+  static void resetCaptureCircuit(BrowserInstance instance) {
+    instance.captureCooldownUntil = 0;
+    instance.captureFailures.set(0);
+    instance.captureSpuriousFailures.set(0);
+    instance.captureFailureReason = null;
+  }
+
+  /** 此刻有多少个任务的截图正被熔断(get_config 用它给调用方一个「现在有没有谁瞎着」的信号) */
+  static int countOpenCaptureCircuits() {
+    long now = System.currentTimeMillis();
+    int count = 0;
+    for (BrowserInstance instance : INSTANCES.values()) {
+      if (instance.captureCooldownUntil > now) {
+        count++;
+      }
+    }
+    return count;
+  }
 }

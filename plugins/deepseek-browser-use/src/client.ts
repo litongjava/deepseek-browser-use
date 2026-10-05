@@ -1,6 +1,18 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Params = { [key: string]: Json };
 export interface Envelope extends Params { ok: boolean; }
+/** 请求体可以是命令信封,也可以是 `POST /playwright/upload` 那样的裸文件字节 */
+export type RequestBody = Params | Uint8Array;
+export interface RequestOptions {
+  /**
+   * 跳过受管后端就绪检查
+   *
+   * <p>
+   * 无 body 的 GET 以前也会走 `ensureBackend`,于是一条只读的 `dsb_health` 能把安装器/编译流程
+   * 拉起来 —— 健康检查是「看一眼现状」,不该有副作用。
+   */
+  skipEnsure?: boolean;
+}
 export interface ClientOptions {
   baseUrl: string;
   timeoutMs: number;
@@ -27,18 +39,21 @@ export class BrowserClient {
     this.baseUrl = url.href.replace(/\/$/, '');
   }
 
-  async request(path: string, signal: AbortSignal, body?: Params): Promise<Envelope> {
+  async request(path: string, signal: AbortSignal, body?: RequestBody, options: RequestOptions = {}): Promise<Envelope> {
     signal.throwIfAborted();
+    const method = body && !(body instanceof Uint8Array) ? String(body.method) : undefined;
     // Cleanup and existing job observation must not resurrect a stopped backend.
-    if (!body || !['close', 'cancel_job', 'get_job'].includes(String(body.method))) {
+    if (!options.skipEnsure && !['close', 'cancel_job', 'get_job'].includes(String(method))) {
       await this.options.ensureBackend?.(signal);
     }
     const combined = AbortSignal.any([signal, AbortSignal.timeout(this.options.timeoutMs)]);
+    const raw = body instanceof Uint8Array;
     try {
       const response = await fetch(this.baseUrl + path, {
         method: body ? 'POST' : 'GET', redirect: 'error', signal: combined,
-        headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
-        ...(body ? { body: JSON.stringify(body) } : {}),
+        headers: { Accept: 'application/json',
+          ...(raw ? { 'Content-Type': 'application/octet-stream' } : body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: raw ? Buffer.from(body as Uint8Array) : JSON.stringify(body) } : {}),
       });
       const reader = response.body?.getReader();
       if (!reader) throw new Error('Empty HTTP response');
@@ -72,4 +87,9 @@ export class BrowserClient {
 export function requireSuccess(result: Envelope): Envelope {
   if (!result.ok) throw new Error(`Browser command failed: ${JSON.stringify(result)}`);
   return result;
+}
+
+/** 只增补诊断字段的**类型化**信封合并:直接写 `{...result, data:{...}}` 会被 infer 成带可选 undefined 的新类型 */
+export function augment(result: Envelope, extra: Params): Envelope {
+  return { ...result, data: { ...((result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data : {}) as Params), ...extra } };
 }
