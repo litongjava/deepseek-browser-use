@@ -6,6 +6,26 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 
 # DeepSeek Browser Use（HTTP 浏览器自动化）
 
+> ## ⚠️ 开工第一条：所有调用一律走 `dsb`
+>
+> **本机（Windows）驱动浏览器的唯一入口是 `dsb`**：`D:\code\java\project-litongjava\deepseek-browser-use\client\dsb.cmd`，
+> 在仓库根目录执行就是 `.\client\dsb.cmd ...`。**不要手写 `curl`/`Invoke-WebRequest` 往 `POST /playwright/command` 拼 JSON，
+> 也不要写 `python client\dsb.py ...`**（只有 cmd.exe 会吃掉参数里的 `&`/`^`/`%`/`|` 时才退回，且要点明原因）。
+>
+> | 要干的事 | 正确写法（在 `D:\code\java\project-litongjava\deepseek-browser-use` 下执行） |
+> | --- | --- |
+> | 看服务活没活 | `.\client\dsb.cmd --port 10049 health`（**别用 curl 探 `/playwright/health`**） |
+> | 服务没起 | `scripts\run\start-server.cmd`（或 `pwsh -File scripts/run/start-server.ps1`），停：`scripts\run\stop-server.cmd` |
+> | 开任务 | `.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful` |
+> | 走一步 | `.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com` |
+> | 读页面 | `.\client\dsb.cmd --port 10049 --id 1001 state --text-only`（`--full` 要标题/URL/元素） |
+> | 批量 | `.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait` |
+> | 记不清子命令 | `.\client\dsb.cmd --help`（`run`/`state`/`js`/`batch`/`upload`/`last`/`selftest` 是子命令，`js` 不能跟在 `run` 后面） |
+>
+> 好处是现成的：参数不用跟 shell 打架、每次调用都留档（`logs/agent/<会话>/`、`steps.log`）、
+> 退出码把「服务没起(1)」与「业务失败(2)」分开、返回体自动脱敏。**跨调用要复用同一个 `--id`**（实例只在内存里）。
+> 只关心某几个字段时用 `--select data.text` / `--grep 关键词` / `--out 文件.json`，别把整封几万字的回执拉进上下文。
+
 新增阅读方式：`dsb state --text-only` 只输出脱敏结构化文本；`--viewport-expansion -1`
 纳入视口外元素，`--include-frames` 纳入跨域 frame。字段筛选用 `--select data.fields` 等，
 仍保留客户端日志、脱敏和失败退出码，详见 [客户端分册](references/client.md)。

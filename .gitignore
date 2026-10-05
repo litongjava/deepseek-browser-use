@@ -176,3 +176,4 @@ secrets.txt
 # 但服务自己的默认配置(端口)必须进版本库,否则 clone 下来起不了服务。
 !playwright-server/src/main/resources/app.properties
 taobao.json
+scripts/

@@ -97,6 +97,10 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 
 ## 三、在 DeepSeek Harness（DSH）里怎么用
 
+### 原生工具插件（推荐）
+
+[`plugins/deepseek-browser-use`](plugins/deepseek-browser-use/README.md) 提供 Harness 原生 `dsb_*` 工具：TypeScript 客户端在宿主进程内直接发送 HTTP，自动管理会话任务、串行操作、异步作业、文件传输与图片附件，无需模型调用 shell 或 Python。安装包、配置、版本要求和验证方法见插件 README。下面保留 Skill + CLI 的接入方式，便于脚本和其他智能体使用。
+
 在 DSH 里用这个工具就三步：**① 读技能文档（本仓库自带，就在 `.agents/skills/`） → ② 起服务、用 `dsb` 客户端发请求 → ③ 用一句话把任务交给智能体。**
 
 ### 1. 读 skill 文件：技能就在 `.agents/skills/`

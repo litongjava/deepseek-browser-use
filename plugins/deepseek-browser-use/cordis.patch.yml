@@ -1,0 +1,10 @@
+- insert:
+    - id: litongjava-browser-use
+      name: '@litongjava/dsh-plugin-deepseek-browser-use'
+      config:
+        baseUrl: http://127.0.0.1:10049
+        browser: chrome
+        headless: false
+        timeoutMs: 60000
+        maxTextChars: 24000
+        maxResponseBytes: 16777216
