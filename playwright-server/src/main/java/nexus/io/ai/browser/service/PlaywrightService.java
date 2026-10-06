@@ -2330,10 +2330,16 @@ public class PlaywrightService {
       // 以前同源 iframe 里的元素拿不到正确路由(它们的 xpath 相对 iframe 文档,在主文档里求值必然失败)。
       // includeFrames 控制的是「要不要连跨域 iframe 也纳入」。
       state = DomService.getFrameState(inst.page, doHighlight, expansion, !withFrames);
-    } catch (PlaywrightException e) {
+    } catch (RuntimeException e) {
       inst.domState = null;
       inst.snapshotInvalidated = true;
-      return RespBodyVo.fail("构建页面结构失败：" + briefMessage(e.getMessage()));
+      String raw = e.getMessage();
+      // 只读快照撞上「页面正在导航」时必须能被归成可重试的 PAGE_NAVIGATING。以前这里只接
+      // PlaywrightException,于是 frame 为 null 的 NPE 直接冒到 ActionService 的兜底分支,变成
+      // ACTION_UNCERTAIN(「别重试」)。实测在控制台重定向循环里,同一条命令还会抛
+      // Index 0 out of bounds for length 0 —— 一样是这里兜住,至少给出准确的方向。
+      String prefix = ActionError.isPageNavigating(raw) ? ActionError.PAGE_NAVIGATING + " " : "";
+      return RespBodyVo.fail(prefix + "构建页面结构失败：" + briefMessage(raw));
     }
     recordSnapshot(inst, state);
 

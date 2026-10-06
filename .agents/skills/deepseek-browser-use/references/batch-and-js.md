@@ -6,14 +6,22 @@
 
 `commands` 是**降低推理步数**的关键：把「动作 + 读取」打包成一次请求，一次模型推理就能拿到全部观察结果。
 
-```shell
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
+把要跑的命令写进一个文件（`cmds.json`；`batch` 认三种写法：整个请求体 / `{"commands":[…]}` / 纯数组），
+再交给 `dsb`：
+
+```json
+{
   "id": 1001,
   "method": "commands",
   "params": {
     "stopOnError": false,
     "commands": [ {"go_to_url":{"url":"https://example.com"}}, {"get_browser_state":{}} ]
-  }}'
+  }
+}
+```
+
+```shell
+.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait
 ```
 
 | 字段 | 默认 | 说明 |
@@ -45,24 +53,28 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 
 **PTC 推荐节奏**：一个批次 = 一个计划段。批次里先做动作，末尾放一个 `get_browser_state`，这样下一次推理直接基于最新快照决策。
 
-```shell
-# 搜索全过程：输入 → 回车 → 等结果 → 取新快照，一次请求完成
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
-  "id": 1001, "method": "commands",
-  "params": {"stopOnError": false, "commands": [
-    {"input_text": {"index": 14, "text": "Mac Mini M4"}},
-    {"send_keys": {"keys": "Enter"}},
-    {"wait_for_text": {"text": "Mac Mini", "timeoutSeconds": 10}},
-    {"get_browser_state": {}}
-  ]}}'
+```json
+// search.json：搜索全过程 —— 输入 → 回车 → 等结果 → 取新快照，一次请求完成
+{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
+  {"input_text":{"index":14,"text":"Mac Mini M4"}},
+  {"send_keys":{"keys":"Enter"}},
+  {"wait_for_text":{"text":"Mac Mini","timeoutSeconds":10}},
+  {"get_browser_state":{}}
+]}}
 ```
 
 ```shell
-# 一批独立读取：一条失败不影响其它条
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
-  "id": 1001, "method": "commands",
-  "params": {"stopOnError": false, "commands": [
-    {"get_title":{}},{"get_url":{}},{"get_element_text":{"index":0}},{"get_console_logs":{}}]}}'
+.\client\dsb.cmd --port 10049 --id 1001 batch search.json
+```
+
+```json
+// reads.json：一批独立读取，一条失败不影响其它条
+{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
+  {"get_title":{}},{"get_url":{}},{"get_element_text":{"index":0}},{"get_console_logs":{}}]}}
+```
+
+```shell
+.\client\dsb.cmd --port 10049 --id 1001 batch reads.json
 ```
 
 - 需要循环、条件判断这类逻辑，就在批次里用 `execute_js` 一步做完，不要拆成几十条命令。
@@ -72,14 +84,17 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
 
 每一步都可以带一个 `expect`，在**命令执行之后**求值。这是本工具最值钱的一个习惯：**回执说 `ok:true` 不代表页面真的变了** —— JS 派发的点击在某些框架控件上完全无效，接口照样回成功。加了断言，「动作发了、状态没变」会被当场标出来。
 
+```json
+// confirm.json：点击后用 expect 断言弹窗真的关掉了
+{"id":1001,"method":"commands","params":{"stopOnError":false,"stopOnExpectFailure":true,"commands":[
+  {"click_element_by_selector":{"selector":".ant-modal-confirm .ant-btn-primary","mode":"mouse"},
+   "expect":{"js":"document.querySelectorAll(\".ant-modal-confirm\").length","equals":0}},
+  {"wait_for_count":{"selector":".ant-modal-confirm","max":0,"timeoutSeconds":5}}
+]}}
+```
+
 ```shell
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
-  "id": 1001, "method": "commands",
-  "params": {"stopOnError": false, "stopOnExpectFailure": true, "commands": [
-    {"click_element_by_selector": {"selector": ".ant-modal-confirm .ant-btn-primary", "mode": "mouse"},
-     "expect": {"js": "document.querySelectorAll(\".ant-modal-confirm\").length", "equals": 0}},
-    {"wait_for_count": {"selector": ".ant-modal-confirm", "max": 0, "timeoutSeconds": 5}}
-  ]}}'
+.\client\dsb.cmd --port 10049 --id 1001 batch confirm.json
 ```
 
 | `expect` 字段 | 说明 |

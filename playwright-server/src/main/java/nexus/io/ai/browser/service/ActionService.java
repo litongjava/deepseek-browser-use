@@ -223,27 +223,43 @@ public class ActionService {
     int maxAttempts = retrySafeFor(method, params) ? SPURIOUS_MAX_ATTEMPTS : 1;
     if ((method.equals("screenshot") || method.equals("get_element_screenshot"))
         && params != null && Boolean.TRUE.equals(params.getBoolean("force"))) maxAttempts = 1;
+    // 这次重发的起因:伪故障(事件泵噪声)还是页面正在导航。两者都只对**重发无害**的命令重发,
+    // 但回执里必须标出到底踩的是哪一个,事后统计与排查才不会张冠李戴。
+    String retryReason = null;
     // A single monotonic deadline and retry allowance includes nested screenshot helpers.
     try (RetryBudget budget = RetryBudget.open(30000)) {
       for (int attempt = 1;; attempt++) {
         RespBodyVo result;
         try { result = call.get(); }
         catch (RuntimeException error) {
-          if (attempt >= maxAttempts || !ActionError.isSpuriousDispatch(error.getMessage()) || !budget.retry()) throw error;
-          sleepBeforeSpuriousRetry();
+          String reason = retryReason(error.getMessage());
+          if (attempt >= maxAttempts || reason == null || !budget.retry()) throw error;
+          retryReason = reason;
+          sleepBeforeRetry(error.getMessage());
           continue;
         }
-        if (result != null && !result.isOk() && attempt < maxAttempts
-            && ActionError.isSpuriousDispatch(result.getMsg()) && budget.retry()) {
-          sleepBeforeSpuriousRetry();
-          continue;
+        if (result != null && !result.isOk() && attempt < maxAttempts) {
+          String reason = retryReason(result.getMsg());
+          if (reason != null && budget.retry()) {
+            retryReason = reason;
+            sleepBeforeRetry(result.getMsg());
+            continue;
+          }
         }
         if (result != null) {
           Kv data = result.getData() instanceof Kv ? (Kv) result.getData() : new Kv();
           data.set("retryBudget", Kv.by("attempts", budget.retries() + 1).set("retries", budget.retries())
               .set("commandAttempts", attempt).set("elapsedMs", budget.elapsedMs()).set("remainingMs", budget.remainingMs()));
-          if (budget.retries() > 0) data.set("spuriousRetry", Kv.by("attempts", budget.retries() + 1)
-              .set("errorCode", ActionError.SPURIOUS_DISPATCH).set("note", "命令与内部截图共用重试额度，含首次最多3次；详见 retryBudget。"));
+          if (budget.retries() > 0 && retryReason != null) {
+            if ("navigating".equals(retryReason)) {
+              data.set("pageNavigatingRetry", Kv.by("attempts", budget.retries() + 1)
+                  .set("errorCode", ActionError.PAGE_NAVIGATING)
+                  .set("note", "读取期间页面正在导航/重建；服务端已按可重发名单重试，详见 retryBudget。"));
+            } else {
+              data.set("spuriousRetry", Kv.by("attempts", budget.retries() + 1)
+                  .set("errorCode", ActionError.SPURIOUS_DISPATCH).set("note", "命令与内部截图共用重试额度，含首次最多3次；详见 retryBudget。"));
+            }
+          }
           // Preserve non-Kv successful payloads; commands returning Kv receive additive diagnostics.
           if (result.getData() == null || result.getData() instanceof Kv) result.setData(data);
         }
@@ -283,9 +299,34 @@ public class ActionService {
     return params != null && Boolean.TRUE.equals(params.getBoolean("retryOnSpurious"));
   }
 
-  private static void sleepBeforeSpuriousRetry() {
+  /**
+   * 这次失败值不值得重发
+   *
+   * @return {@code "spurious"}(事件泵伪故障)或 {@code "navigating"}(页面正在导航/重建);都不沾返回 null
+   */
+  private static String retryReason(String message) {
+    if (ActionError.isSpuriousDispatch(message)) {
+      return "spurious";
+    }
+    if (ActionError.isPageNavigating(message)) {
+      return "navigating";
+    }
+    return null;
+  }
+
+  /**
+   * 重发前的等待
+   *
+   * <p>
+   * 伪故障只要挪开一点点 —— 噪声是消息泵里**正在派发的那一条**;页面导航则要给页面时间回来,
+   * 按 {@link ActionError#retryAfterMs} 的建议值(1 秒)等,但至少 200 毫秒,免得贴着导航抢跑。
+   */
+  private static void sleepBeforeRetry(String message) {
+    long ms = ActionError.isPageNavigating(message)
+        ? Math.max(200, Math.min(ActionError.retryAfterMs(ActionError.PAGE_NAVIGATING), 1_000))
+        : SPURIOUS_RETRY_DELAY_MS;
     try {
-      Thread.sleep(SPURIOUS_RETRY_DELAY_MS);
+      Thread.sleep(ms);
     } catch (InterruptedException e) {
       // 被中断就把中断标志还回去,别在这里把调用方的语义改掉
       Thread.currentThread().interrupt();
@@ -720,6 +761,23 @@ public class ActionService {
         RespBodyVo resp = RespBodyVo.fail(method + " 失败：" + detail
             + "（[" + ActionError.SPURIOUS_DISPATCH + "] 疑似 Playwright 事件分发的伪故障，可以再发一次）");
         resp.setData(detailKv);
+        return resp;
+      }
+      if (ActionError.isPageNavigating(rawMessage)) {
+        // 页面正在导航/重建:这一刻拿不到 DOM。只读命令重发无害(服务端也已经按可重发名单重发过),
+        // 必须归成可重试的 PAGE_NAVIGATING;动作类命令则保留「不确定」,不诱导调用方重复提交。
+        Kv navigating = Kv.by("errorCode", ActionError.PAGE_NAVIGATING)
+            .set("retryable", retrySafe)
+            .set("pageNavigating", true)
+            .set("retryAfterMs", ActionError.retryAfterMs(ActionError.PAGE_NAVIGATING))
+            .set("note", retrySafe
+                ? "页面正在导航/重建，这一刻拿不到 DOM；这是只读命令，重发无害，稍后再发即可。"
+                : "页面正在导航/重建，这一刻拿不到 DOM；这是动作类命令，无法判断是否已生效，"
+                    + "请先用只读命令确认页面状态再决定是否重发。");
+        RespBodyVo resp = RespBodyVo.fail(method + " 失败：" + detail
+            + "（[" + ActionError.PAGE_NAVIGATING + "] 页面正在导航/重建，DOM 这一刻不可用"
+            + (retrySafe ? "，可以重发" : "，先读页面状态") + "）");
+        resp.setData(navigating);
         return resp;
       }
       Kv uncertain = Kv.by("errorCode", ActionError.ACTION_UNCERTAIN)

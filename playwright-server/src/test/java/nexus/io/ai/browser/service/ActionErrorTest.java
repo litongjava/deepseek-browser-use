@@ -95,4 +95,31 @@ public class ActionErrorTest {
     assertTrue(command, command.contains("结果未知"));
     assertTrue(command, command.contains("close + start"));
   }
+
+  // ==================== 页面正在导航 / 重建 ====================
+
+  /**
+   * 主 frame 为 null 的 NPE 与服务端自己的哨兵都要归成可重试的 {@code PAGE_NAVIGATING}
+   *
+   * <p>
+   * 实测(阿里云控制台停在重定向循环上):同一条只读的 {@code get_browser_state} 一会儿抛
+   * {@code Cannot invoke "com.microsoft.playwright.Frame.childFrames()" because "frame" is null},
+   * 一会儿抛 {@code Index 0 out of bounds for length 0}。前者是「等一会儿就好」的瞬时状态,以前却被
+   * 归成 {@code ACTION_UNCERTAIN}(「无法判断是否生效,别重试」)—— 方向正好相反。
+   */
+  @Test public void pageNavigatingIsItsOwnRetryableCode() {
+    assertEquals(ActionError.PAGE_NAVIGATING,
+        ActionError.code("构建页面结构失败：Cannot invoke \"com.microsoft.playwright.Frame.childFrames()\""
+            + " because \"frame\" is null"));
+    // DomService.frameTree 自己掷的哨兵(主 frame 为 null)
+    assertEquals(ActionError.PAGE_NAVIGATING,
+        ActionError.code("page_navigating: page.mainFrame() 为 null(页面正在导航或整页重建,这一刻拿不到 DOM)"));
+    assertTrue("导航是瞬时状态,应当可重试", ActionError.retryable(ActionError.PAGE_NAVIGATING));
+    assertTrue("退避要够页面回来,实际:" + ActionError.retryAfterMs(ActionError.PAGE_NAVIGATING),
+        ActionError.retryAfterMs(ActionError.PAGE_NAVIGATING) > 0);
+    // 元素类错误不能被它抢走
+    assertEquals("ELEMENT_HIDDEN", ActionError.code("element is not visible"));
+    assertFalse("没有导航证据的越界异常不该被误判成导航",
+        ActionError.isPageNavigating("Index 0 out of bounds for length 0"));
+  }
 }

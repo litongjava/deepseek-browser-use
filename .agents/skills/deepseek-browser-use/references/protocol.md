@@ -23,33 +23,20 @@
 - **只支持 POST + JSON 请求体**。参数不再放查询串或表单，也不再需要 URL 编码，中文直接写在 JSON 里即可。
 - `id` 是雪花 ID，序列化成字符串返回（`{"data":{"id":"1001"}}`），但请求里写数字或字符串都可以。
 
+这一层就是普通 HTTP：**一个端点、JSON 进 JSON 出**。实际动手时不要手写 HTTP 请求，用客户端 `dsb`
+（它就是这套 HTTP 的封装：传参、解析回执、脱敏、留档、退出码都替你办了，见 `client.md`）：
+
 ```shell
-BASE=http://localhost:10049/playwright/command
-
-# 启动（headless=true 无头；false 会弹出真实窗口）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"start","params":{"headless":false}}'
-# {"data":{"id":"1001"},"code":1,"ok":true,...}
-
-# 打开页面（注意 data 里带回了自动截图的地址）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"go_to_url","params":{"url":"https://example.com"}}'
-# {"data":{"status":200,"seq":1,"screenshot":"/data/1001/1.png","screenshot_path":"..."},...}
-
-# 取浏览器状态（AI 读 browser_state 与 text，元素索引就在 text 里）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"get_browser_state","params":{}}'
-
-# 按索引操作（索引来自上一步的 [index]）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"click_element_by_index","params":{"index":0}}'
-
-# 关闭
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"close"}'
+# Windows 在仓库根目录：.\client\dsb.cmd    macOS/Linux：./client/dsb
+.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
+.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
+.\client\dsb.cmd --port 10049 --id 1001 state --text-only           # 打开页面后读状态
+.\client\dsb.cmd --port 10049 --id 1001 run click_element_by_index -p index=0
+.\client\dsb.cmd --port 10049 --id 1001 close
 ```
 
-> 不想手拼 JSON 时用现成客户端 `dsb`，见 `client.md`。
+> 要看裸 HTTP 的原始报文，读追踪日志（`logs/trace/`，见本文末）里那对请求 / 响应 JSON；
+> 要复现别人给的一整封请求体，存成文件用 `--params @文件.json` 或 `batch 文件.json` 喂进去。
 
 ## 响应格式
 
@@ -82,7 +69,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
 
 属性中的 name、value、状态值不再按 15 字符截断；title、placeholder、alt、aria-label、selected-text 的展示上限为 160 字符。普通布局容器不增加缩进，表单、菜单、表格等语义结构保留缩进，最多 6 层。
 
-动作错误的 `data.errorCode` 区分 ELEMENT_READ_ONLY、ELEMENT_DISABLED、ELEMENT_HIDDEN、ELEMENT_OBSCURED、ELEMENT_NOT_EDITABLE、STALE_ELEMENT、ACTION_TIMEOUT 和 ACTION_FAILED；另有一个 SPURIOUS_DISPATCH 专门标「异常来自 Playwright 的事件分发、与本次命令无关」（见 `pitfalls.md` 第 47 条）。错误原因来自完整调用日志；没有充分证据的超时只报 ACTION_TIMEOUT。
+动作错误的 `data.errorCode` 区分 ELEMENT_READ_ONLY、ELEMENT_DISABLED、ELEMENT_HIDDEN、ELEMENT_OBSCURED、ELEMENT_NOT_EDITABLE、STALE_ELEMENT、ACTION_TIMEOUT 和 ACTION_FAILED；另有两个瞬时状态码：SPURIOUS_DISPATCH 标「异常来自 Playwright 的事件分发、与本次命令无关」（见 `pitfalls.md` 第 47 条），PAGE_NAVIGATING 标「页面正在导航/整页重建，这一刻拿不到 DOM」（主 frame 为 null；只读命令会由服务端自己重试，动作类命令仍是「不确定」）。错误原因来自完整调用日志；没有充分证据的超时只报 ACTION_TIMEOUT。
 
 **另外两个超时码要单独认**（它们**不可重试**，与 `ACTION_TIMEOUT` 的「元素在、只是暂时不可点」是两回事）：
 

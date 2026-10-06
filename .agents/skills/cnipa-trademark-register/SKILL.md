@@ -338,8 +338,8 @@ for (let i = 0; i < 7 && !btn('添加'); i++) { jsClick(btn('下一步')); await
 
 `path` 是**服务端**路径。智能体与浏览器不在同一台机器时（客户端-服务器模式），先把文件 POST 到服务端：
 
-```bash
-curl -F "file=@图样.jpg" http://<服务端>:10049/playwright/upload
+```shell
+.\client\dsb.cmd --port 10049 upload 图样.jpg
 # → {"data":{"filename":"图样.jpg","path":"<服务端暂存目录>/图样.jpg","relativePath":"图样.jpg",...}}
 ```
 

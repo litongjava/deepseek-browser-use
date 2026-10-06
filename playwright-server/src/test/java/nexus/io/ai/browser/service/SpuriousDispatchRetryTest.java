@@ -241,4 +241,41 @@ public class SpuriousDispatchRetryTest {
     assertNull("读不回来就不下结论", ActionService.tabEffect(null, Kv.by("tabCount", 2)));
     assertNull("页签反而变少也不下结论", ActionService.tabEffect(Kv.by("tabCount", 2), Kv.by("tabCount", 1)));
   }
+
+  /**
+   * 页面正在导航/重建时,只读命令同样自动重发
+   *
+   * <p>
+   * 以前这条会冒到 {@link ActionService} 的兜底分支、被归成 {@code ACTION_UNCERTAIN}
+   * (「无法判断是否生效,别重试」),而它其实是**等一会儿就好**的瞬时状态。实测场景:控制台停在
+   * 重定向循环上,{@code get_browser_state} 连抛「frame is null」与「Index 0 out of bounds」。
+   */
+  @Test
+  public void readOnlyCommandRetriesWhilePageIsNavigating() {
+    final String navigating = "构建页面结构失败：Cannot invoke \"com.microsoft.playwright.Frame.childFrames()\""
+        + " because \"frame\" is null";
+    AtomicInteger calls = new AtomicInteger();
+    RespBodyVo result = ActionService.dispatchWithSpuriousRetry("get_browser_state", () -> {
+      if (calls.incrementAndGet() < 3) {
+        return RespBodyVo.fail("get_browser_state 失败：" + navigating);
+      }
+      return RespBodyVo.ok(Kv.by("text", "页面回来了"));
+    });
+    assertEquals("页面恢复后这次快照应当被采用", 3, calls.get());
+    assertTrue(result.getMsg(), result.isOk());
+    Kv retry = (Kv) ((Kv) result.getData()).get("pageNavigatingRetry");
+    assertEquals(ActionError.PAGE_NAVIGATING, retry.getStr("errorCode"));
+  }
+
+  /** 页面正在导航**不代表动作没生效**:动作类命令照旧一次都不重发 */
+  @Test
+  public void actionCommandIsNotRetriedWhilePageIsNavigating() {
+    AtomicInteger calls = new AtomicInteger();
+    RespBodyVo result = ActionService.dispatchWithSpuriousRetry("click_element_by_index", () -> {
+      calls.incrementAndGet();
+      return RespBodyVo.fail("click_element_by_index 失败：page_navigating: page.mainFrame() 为 null");
+    });
+    assertEquals("动作类不能因为「页面在导航」就重发", 1, calls.get());
+    assertFalse(result.isOk());
+  }
 }

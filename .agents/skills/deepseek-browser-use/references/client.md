@@ -61,7 +61,7 @@ dsb --id 1001 run get_browser_state --grep mediaCount
 **这两个参数文件都认「整个请求体」**：`--params @文件.json` 里的
 `{"id":1001,"method":"request_human_input","params":{…}}` 会自动只取 `params` 那一层（按 `method`
 字段识别），`batch` 认纯数组 / `{"commands":[…]}` / 整个请求体三种写法。留档文件、文档示例、
-别人贴过来的 curl 载荷都能原样存下来直接喂进去 —— 以前这么写会把 `id`/`method` 当命令参数发下去，
+别人贴过来的裸 HTTP 请求体都能原样存下来直接喂进去 —— 以前这么写会把 `id`/`method` 当命令参数发下去，
 真正的参数一个都没传，报回来的是 `缺少参数 prompt` 这种指不到原因的话。
 
 ```shell

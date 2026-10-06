@@ -1,4 +1,4 @@
-# 坑与限制（72 条）
+# 坑与限制（78 条）
 
 > 本文是 [SKILL.md](../SKILL.md) 的分册，按需阅读。SKILL.md 开头的「症状 → 命令」表里提到的「第 N 条」就是本文的编号。
 
@@ -430,7 +430,7 @@
     并在 stderr 说明是退回去了，免得调用方以为投影生效了。业务退出码不变。
 
 63. **`--params` / `batch` 现在认「整个请求体」。**
-    手边常常已经有一份完整请求体（留档文件、文档示例、别人贴过来的 curl 载荷），原样存成文件喂进去最自然：
+    手边常常已经有一份完整请求体（留档文件、文档示例、别人贴过来的裸 HTTP 请求体），原样存成文件喂进去最自然：
     `{"id":1001,"method":"request_human_input","params":{…}}`。以前会把 `id`/`method` 当命令参数一起发下去，
     真正的参数一个都没传，报回来的却是 `缺少参数 prompt` —— 完全指不到原因。现在按 `method` 字段识别，
     只取 `params` 那一层。`batch` 同样认三种写法：纯数组、`{"commands":[…]}`、整个请求体。
@@ -644,6 +644,29 @@
     `data.effective:true` + `data.warning`（说清「切过去」这半段不一定完成、**别重发**，
     并把推断的 `switchedToNewTab`/`currentIndex` 一起给出）；页签数没变则回 `retryable:true` +
     「已核对未生效，可以安全重发」。**仍然要按 `data.currentIndex` 复核一次再打字** —— 推断不是事实。
+
+78. **控制台一直在登录页打转、怎么都到不了？先怀疑「主机名写错了」，不是浏览器坏了。**
+
+    实测（2026-10）要查阿里云账单，我按直觉打开 `billing.console.aliyun.com`：地址栏立刻变成
+    `account.aliyun.com/login/login.htm?oauth_callback=…`，并在 `account.aliyun.com` 与
+    `account.alibabacloud.com` 之间来回弹，**永远进不去**；这一页上 `get_browser_state` 还连抛两种异常：
+    `Cannot invoke "com.microsoft.playwright.Frame.childFrames()" because "frame" is null` 与
+    `Index 0 out of bounds for length 0`。真相是**账单控制台的真实主机名是
+    `billing-cost.console.aliyun.com`**（只差一个 `-cost`），旧主机名只是把你弹回登录页。
+
+    正确排查姿势（顺序别乱）：
+
+    1. **看到「一直在登录页打转」先怀疑主机名**，不要在这一页上找元素、换选择器、反复填登录表单；
+    2. 回一个**已经登录**的控制台，用 `execute_js` 把导航链接的 `href` 全读出来
+       （`[...document.querySelectorAll('a')].map(a=>({t:a.innerText.trim(),h:a.href}))`），
+       从真实链接里照抄主机名与路径 —— 这一步同时给出了新入口；
+    3. 用 `get_page_snapshot` 观察 URL 是否稳定，不要用「有没有画面」判断。
+
+    **服务端行为也一并改了**（2026-10）：主 frame 为 null 时 `DomService.frameTree` 现在抛带
+    ``page_navigating`` 哨兵的异常，`get_browser_state` 把它归成 **`PAGE_NAVIGATING`**（`retryable:true`，
+    只读命令服务端按可重发名单自动重试，回执里给出 `pageNavigatingRetry`），而不是以前那句
+    `ACTION_UNCERTAIN`（「无法判断是否生效，别重试」—— 方向正好相反）。动作类命令仍是「不确定」，
+    不会因为「页面在导航」就被自动重发。
 
 
 ## 截图与重试补充（2026-10-05）

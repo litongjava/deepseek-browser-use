@@ -61,7 +61,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | `references/human-in-loop.md` | 验证码 / 扫码 / 短信码 / 人工登录、`ocr_image`、多步 `steps` |
 | `references/payment-onboarding.md` | 商户申请、多层弹窗、短信验证、密钥上传、审核状态及资料脱敏 |
 | `references/browsers.md` | 选浏览器与引擎、profile 与登录态、实例生命周期、残留进程 |
-| `references/pitfalls.md` | 72 条坑与限制（下面「症状表」与「最常踩的坑」里说的「第 N 条」都指它） |
+| `references/pitfalls.md` | 78 条坑与限制（下面「症状表」与「最常踩的坑」里说的「第 N 条」都指它） |
 
 > ## 省 token 铁律：非必要不要读图
 >
@@ -117,7 +117,8 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **报 `ELEMENT_NOT_FOUND`** | 选择器**一个都没匹配到**（不是超时、不是被遮挡）：先 `get_element_count` 复核数量，再检查父子/兄弟关系写错了没有。别去查监听器、别去查遮挡 |
 | **`get_element_count` 说有好几个，但点击/输入就是不可操作** | 匹配到的多半是**隐藏副本**（同名控件在隐藏弹窗里还有一份）：动作类命令现在会优先挑可见的那个，看回执的 `matched` / `chosenIndex` / `visibleMatched` / `hiddenMatchNote` |
 | **回执里 `probeTrustworthy:false` / `observationComplete:false`，还附一个 `coveredBy`** | 页面正在导航或整页重建，**这次取证不可信**：`changed` 与 `coveredBy` 都是假象（实测两次点击其实都成功了）。不要重复点击，等几秒重新 `get_browser_state` |
-| **报 `because "frame" is null`，可这条命令只是只读查询** | `PAGE_NAVIGATING`：页面正在刷新/重建，**可重试**（约 1 秒后重发），只读命令服务端已自己等过 |
+| **报 `because "frame" is null`，可这条命令只是只读查询** | `PAGE_NAVIGATING`：页面正在刷新/重建，**可重试**（约 1 秒后重发），只读命令服务端会自己等、自己重发；动作类命令仍是「不确定」，先读页面状态 |
+| **控制台/站点一直在几个地址之间打转，怎么都到不了**（地址栏反复回到登录页） | 这是站点的 **SSO 重定向循环**，不是浏览器坏了：`get_page_snapshot` 会看到 URL 在登录域与目标控制台之间来回跳。**先怀疑主机名写错了** —— 实测阿里云账单控制台是 `billing-cost.console.aliyun.com`，写成 `billing.console.aliyun.com` 就会永远卡在 `account.aliyun.com/login` 上。正解是回一个**已经登录**的控制台，用 `execute_js` 把导航链接的 `href` 全读出来（`[...document.querySelectorAll('a')].map(a=>a.href)`），照抄真实主机名；不要在这一页上找元素、换选择器或重复提交动作类命令 |
 | **`send_keys` 回了 `ok:true` 但页面毫无反应** | 看回执里的 `focused`：焦点可能根本不在输入框上（`isBody:true` 时会给 `focusNote`）。先 `click` 目标输入框，再送键 |
 | **要往输入框里打一段文本，却不知道该用哪条命令**（隐藏输入框没选择器、又不想先取快照拿索引） | 直接 `send_keys` 传整段文本（`keys: "CRCL"`）：回执 `data.mode` 为 `type` 时说明走的是逐字符打字（进框架模型）；`Enter` / `Control+A` / `Shift+Enter` 这类**按键**走 `mode:press`。判据是输入形态，不用你选 |
 | **`go_to_url` 报失败，可地址栏其实已经跳过去了** | 幂等导航现在会读地址栏核对（忽略 `?vd_source=…` 这类会话参数），到达了就按成功返回并带 `data.warning` |
@@ -134,7 +135,68 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **`get_form_state` 说某个必填项是空的，可页面上明明填好了**；或反过来：**报出来的值看着挺对，提交却说"必填"** | 都是**自定义下拉**（`ds-select` / `ant-select` 那类）：落库前 `input.value` 里是"你打的字"（看着像值、其实没落库），落库后它被清空、真值只在显示节点里。看 `valueFrom`：`display` 就是后者（第 56 条）。**判据要三样一起看**：值 / 显示节点文本 / 容器类名后缀（`--error` = 没落库） |
 | **`wait_for_idle` 等满超时（页面有轮询），而且批量里后面的步骤全没跑** | 改用 `wait_for_stable`；批量加 `--keep-going`（= `stopOnError:false`），否则一条等待超时会把后面全吃掉（第 57 条） |
 
-## 一、最小可用：请求、客户端、自省
+## 一、原理与最小可用：这是一个 HTTP 服务
+
+**先记住一句话：这套中间件就是一个本地 HTTP 服务（tio-boot），浏览器跑在服务端进程里，智能体只跟 HTTP 打交道。**
+
+理解这一点，后面所有现象都能对上：客户端与浏览器可以不在同一台机器上；所有能力（点击、读页面、
+执行 JS、截图、上传……）都收敛到**同一个端点**；超时、脱敏、留档、重试都发生在这一层。
+
+| 项 | 值 |
+| --- | --- |
+| 默认地址 | `http://localhost:10049`（端口来自 `playwright-server/src/main/resources/app.properties` 的 `server.port`） |
+| **唯一业务端点** | `POST http://localhost:10049/playwright/command`，请求头 `Content-Type: application/json` |
+| 自省 / 健康 | `GET /playwright/health`、`GET /playwright/methods`、`GET /playwright/config`、`GET /playwright/tasks` |
+| 读取产物 | `GET /data/**`（截图与结构化文本落盘后的地址） |
+| 请求体 | `{id, method, params}`，`method` 就是命令全表里的名字 |
+| 响应体 | `{"data":{},"code":1,"ok":true}` |
+
+> **不要手写 `curl`/`Invoke-WebRequest` 去拼这层 JSON。** 仓库里的 `dsb` 客户端就是这个 HTTP 端点的封装：
+> 它替你找解释器、传参、解析回执、脱敏、每步留档，并把退出码分成「服务没起(1)」与「业务失败(2)」。
+> 手拼 JSON 在中文 / 引号上必踩坑，还会绕开留档与退出码 —— 本文之后所有示例都写 `dsb`。
+
+### 起停服务（实测命令与回执）
+
+服务是独立的 Java 进程，与 `dsb` 客户端分开。开发态在仓库根目录：
+
+```shell
+# 启动（Windows）
+scripts\run\start-server.cmd
+# 等价： pwsh -File scripts\run\start-server.ps1
+# macOS/Linux： scripts/run/start-server.sh
+# 发行包： java -jar deepseek-browser-use-<版本>-<平台>.jar
+
+# 停止（Windows）
+scripts\run\stop-server.cmd
+# macOS/Linux： scripts/run/stop-server.sh
+```
+
+也可以用 `dsb` 发命令让服务自己退出（`stop-server.cmd` 做的就是这件事）：
+
+```shell
+.\client\dsb.cmd --port 10049 run shutdown
+```
+
+起没起来**不要靠猜**，用 `dsb` 问一句（这是本仓库唯一的探活方式，别去请求 `/playwright/health`）：
+
+```shell
+.\client\dsb.cmd --port 10049 health
+```
+
+实测回执（2026-10，本机 Windows，本会话）：
+
+```text
+> .\client\dsb.cmd --port 10049 health
+{"data":{"name":"playwright-server"},"code":1,"ok":true}
+# 退出码 0；服务没起时是传输错，退出码 1（而不是业务失败 2）
+
+> .\client\dsb.cmd --port 10049 --id 2026100501 start --browser chrome --headful
+start OK 3520ms
+{"data":{"engineHonored":true,"effectiveBrowser":"chrome",
+ "browser":{"type":"chrome","engine":"chromium","profileDir":"<仓库>\\.dsb-backend\\profile",
+            "profileSeenBefore":true,"headless":false},"id":"2026100501"},"code":1,"ok":true}
+# 关键字段：engineHonored（参数被采纳）、effectiveBrowser（实际用的引擎）、profileSeenBefore（这份 profile 之前用过吗）
+```
 
 所有操作都是同一个端点，请求体是 `{id, method, params}`：
 
@@ -152,29 +214,23 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 - 响应信封：`{"data":{},"code":1,"ok":true}`。`code=1`/`ok=true` 成功；`code=0`/`ok=false` 失败，原因在 `msg`（中文）。**空字段不输出**：成功回执里既没有 `msg` 也没有 `error`，失败回执里没有 `error` —— 所以判断成败只认 `ok`/`code`，别用「字段在不在」来判断（想恢复带 null 的输出，配置项 `browser.json.skipNull=false`）。
 - **任何参数问题都返回 JSON 错误，不再有 HTTP 500**：缺必填参数得到 `click_element_by_index 失败：缺少参数 index`，方法名不存在得到 `不支持的方法：xxx`（还会按编辑距离给近似建议），请求体不是合法 JSON 得到 `请求体不是合法 JSON：...`。实例不存在时统一返回 `没有找到对应的浏览器实例：<id>`。
 
+同一串操作，用 `dsb` 走一遍（在仓库根目录执行；macOS/Linux 把 `.\client\dsb.cmd` 换成 `./client/dsb`）：
+
 ```shell
-BASE=http://localhost:10049/playwright/command
-
-# 启动（headless=true 无头；false 会弹出真实窗口）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"start","params":{"headless":false}}'
-# {"data":{"id":"1001"},"code":1,"ok":true,...}
-
-# 打开页面（data 里带回自动截图的地址）→ 取状态（AI 读 browser_state 与 text）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"go_to_url","params":{"url":"https://example.com"}}'
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"get_browser_state","params":{}}'
-
-# 按索引操作（索引来自上一步的 [index]）→ 关闭
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"click_element_by_index","params":{"index":0}}'
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"method":"close"}'
+.\client\dsb.cmd --port 10049 health                        # 探活
+.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
+.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
+.\client\dsb.cmd --port 10049 --id 1001 state --text-only   # 读页面（要标题/URL/元素用 --full）
+.\client\dsb.cmd --port 10049 --id 1001 run click_element_by_index -p index=0
+.\client\dsb.cmd --port 10049 --id 1001 close
 ```
+
+> 上面那段里的 `{id, method, params}` 与 HTTP 响应体依然成立 —— `dsb` 只是替你把它们组装好发出去。
+> 想把整封请求原样喂进去（留档文件、别人贴过来的请求体）就用 `--params @文件.json` 或 `batch 文件.json`。
 
 ### 也可以不手拼 JSON：用现成客户端（**首选**）
 
-手工拼 `-d '...'` 在参数带中文、引号、换行时很容易出错（PowerShell 尤其爱吃掉引号），返回体还得自己解析。仓库里的 `dsb` 客户端把这几件事都替你办了：**子命令式传参**、**批量与异步**、**每一步的请求与响应都留档**。凡是「发请求 → 读页面 → 再发请求」的任务，用它比手拼 JSON 少一大类无谓的失败。
+手拼 HTTP 请求体在参数带中文、引号、换行时很容易出错（PowerShell 尤其爱吃掉引号），返回体还得自己解析。仓库里的 `dsb` 客户端把这几件事都替你办了：**子命令式传参**、**批量与异步**、**每一步的请求与响应都留档**。凡是「发请求 → 读页面 → 再发请求」的任务，用它比手拼 JSON 少一大类无谓的失败。
 
 ```shell
 # Windows（本机首选，在仓库根目录执行）：.\client\dsb.cmd ...
@@ -577,7 +633,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 - **登录态跟着共享 profile 走，不跟任务 ID 走**：换任务、换 id 都不影响；是否仍有效由网站决定。若 `data.browser.userProfile=false` 或 `chrome=false`，说明这次不是用户日常那份登录态。
 - **用户直接在浏览器里操作不会自动更新人工请求记录**，`get_human_input` 可能仍为 `pending`。不要只等该字段，也不能直接跳过验证：重新读页面确认成功后才继续。
 
-完整流程（含 `steps`、`expiresAt`、OCR 回执字段与 curl 示例）见 `references/human-in-loop.md`。
+完整流程（含 `steps`、`expiresAt`、OCR 回执字段与 `dsb` 示例）见 `references/human-in-loop.md`。
 
 ## 八、典型任务
 

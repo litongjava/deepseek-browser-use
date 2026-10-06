@@ -189,11 +189,15 @@ public final class ActionError {
       return false;
     }
     String text = message.toLowerCase(Locale.ROOT);
+    // 最后一条是本服务自己掷的哨兵:主 frame 为 null 时 DomService 抛的就是它。实测在阿里云账单页的
+    // **重定向循环**里,主 frame 一直没有,get_browser_state 连抛两种异常(见 DomService.frameTree 与
+    // PlaywrightService.getBrowserStateAttempt),都要能归到这里。
     return text.contains("because \"frame\" is null")
         || text.contains("because \"page\" is null")
         || text.contains("execution context was destroyed")
         || text.contains("frame was detached")
-        || text.contains("navigating and changing the document");
+        || text.contains("navigating and changing the document")
+        || text.contains("page_navigating");
   }
 
   public static String code(String message) {

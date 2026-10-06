@@ -104,23 +104,21 @@
 
 **客户端-服务器模式**（智能体在客户端、浏览器在服务端）下，客户端本地文件服务端读不到，先把文件 POST 到暂存接口，再用回执里的路径：
 
-```bash
-# 1. 上传（三种写法等价，任选）
-curl -F "file=@图样.jpg"            http://<服务端>:10049/playwright/upload
-curl --data-binary @图样.jpg "http://<服务端>:10049/playwright/upload?filename=图样.jpg"
-curl -H "Content-Type: application/json" \
-     -d '{"filename":"图样.jpg","contentBase64":"/9j/4AAQ..."}' http://<服务端>:10049/playwright/upload
-
+```shell
+# 1. 上传到服务端暂存区（就是 POST /playwright/upload 的封装）
+.\client\dsb.cmd --port 10049 upload 图样.jpg
 # 回执：{"ok":true,"data":{"filename":"图样.jpg","path":"<服务端暂存目录>/图样.jpg",
 #                        "relativePath":"图样.jpg","size":18363,"sha256":"...","existed":false}}
-
-# 2. 把 path（或 relativePath）回填给 upload_file
-{"id":"1001","method":"upload_file","params":{"selector":"#form_item_imageAttJson","path":"图样.jpg"}}
-
-# 辅助接口：GET /playwright/upload 列出暂存文件；DELETE /playwright/upload?name=图样.jpg 删掉一个
 ```
 
-- 文件字段名默认 `file`，可用 `?field=xxx` 改；multipart 之外的两种写法见上。文件名会被清洗（只留基本名、去掉路径分隔符与控制字符、保留中文），并且**只能落在暂存目录里**，`../` 这类路径会被拒绝。
+```json
+// 2. 把 path（或 relativePath）回填给 upload_file
+{"id":"1001","method":"upload_file","params":{"selector":"#form_item_imageAttJson","path":"图样.jpg"}}
+```
+
+- 暂存区的底层接口是 `POST /playwright/upload`（另有 `GET` 列出、`DELETE ?name=…` 删除）；日常用 `dsb upload` 就够，不必自己拼 multipart。
+
+- 文件字段名默认 `file`，可用 `?field=xxx` 改；底层也接受「原始字节」与「JSON + base64」两种非 multipart 写法（`dsb upload` 已替你选好了）。文件名会被清洗（只留基本名、去掉路径分隔符与控制字符、保留中文），并且**只能落在暂存目录里**，`../` 这类路径会被拒绝。
 - 回执字段：`data.filename`、`data.path`、`data.relativePath`、`data.size`、`data.sha256`（客户端可据此核对是否传对了文件）、`data.target`（`index=3` 或 `selector=...`）。
 - 单文件上限默认 64MB（`browser.upload.maxBytes`），同名默认覆盖（`browser.upload.overwrite=false` 则自动改名 `a-1.jpg`）。暂存目录默认 `<启动目录>/upload`，`start` 的返回里能看到实际路径。
 - 文件不存在时错误信息会直接告诉你去 `POST /playwright/upload`，不要再去猜路径。
@@ -377,12 +375,15 @@ dsb run mouse_up -p button=left
 
 **读接口数据用 `wait_for_response`，不要靠 `get_requests` 猜**：SPA 的数据都在 XHR 里，而 `get_requests` 只有 url 和状态码。典型用法是「点一下 → 等接口 → 读 JSON」，放在一个批次里：
 
+```json
+// api.json：点一下 → 等接口 → 读 JSON
+{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
+  {"click_element_by_index":{"index":12}},
+  {"wait_for_response":{"urlPattern":"**/api/query*","timeoutSeconds":20}}]}}
+```
+
 ```shell
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{
-  "id": 1001, "method": "commands",
-  "params": {"stopOnError": false, "commands": [
-    {"click_element_by_index":{"index":12}},
-    {"wait_for_response":{"urlPattern":"**/api/query*","timeoutSeconds":20}}]}}'
+.\client\dsb.cmd --port 10049 --id 1001 batch api.json
 ```
 
 **为什么顺序写就行**：`wait_for_response` **先回看再等** —— `lookBackSeconds`（默认 10 秒）内已经收到过的匹配响应会直接返回，`data.ageMs` 是它距今的毫秒数、`data.fromLookBack` 为 `true`。响应通常在你拿到点击结果之前就到了，所以顺序调用照样命中。`lookBackSeconds=0` 表示只等新响应（这时必须并发触发，而**同一个实例不要并发发请求**，见 `pitfalls.md` 第 13 条，所以一般不需要）。

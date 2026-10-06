@@ -60,8 +60,8 @@ POST http://localhost:10049/playwright/command
 - 开工前先自检，避免「服务没起来 / 引擎不是你要的」这类白跑：
 
 ```shell
-curl -s http://localhost:10049/playwright/health
-python client/dsb.py --port 10049 selftest
+.\client\dsb.cmd --port 10049 health
+.\client\dsb.cmd --port 10049 selftest
 ```
 
 - 服务方法名拿不准就先问它（**别猜**，猜错只会拿到一句「不支持的方法」）：
@@ -580,7 +580,7 @@ python client/dsb.py --port 10049 selftest
   先把文件 POST 到服务端暂存接口，再用回执里的 `path`：
 
 ```shell
-curl -F "file=@<授权书.pdf>" http://<服务端>:10049/playwright/upload
+.\client\dsb.cmd --port 10049 upload <授权书.pdf>
 # → {"data":{"filename":"<授权书.pdf>","path":"<服务端暂存目录>/<授权书.pdf>","relativePath":"...","size":...,"sha256":"..."}}
 ```
 

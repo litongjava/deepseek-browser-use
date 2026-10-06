@@ -827,7 +827,7 @@ POST http://localhost:10049/playwright/command
 | `input_text_by_selector 失败：[ELEMENT_HIDDEN] 元素当前不可见` | 目标是隐藏输入框 | 优先切到它所在的那一步；不行才用 `mode:"js"`，并注意回执的 `data.committed=false` |
 | `upload_file 失败：缺少参数 index` | 这个构建的 `upload_file` 要求 `index` | 改用/补上 `selector`（4.4、4.5）；本站在这里**优先选择器** |
 | `send_keys 失败：Unknown key: "..."` | `send_keys` 只认键名 | 中文一律用 `input_text_by_selector`（8.6） |
-| `请求体不是合法 JSON：not allow unquoted fieldName` | 客户端把 JSON 拼坏了（PowerShell / `curl.exe` 常见） | 改用 `dsb.py` 或 `Invoke-RestMethod` 传 UTF-8 字节；别用 `-d '...'` 手拼中文 |
+| `请求体不是合法 JSON：not allow unquoted fieldName` | 客户端把 JSON 拼坏了（PowerShell 吃引号、手拼 `-d '...'` 常见） | 改用 `dsb` 客户端：`.\client\dsb.cmd ...`，参数带中文时写进 `--params @文件.json`；别在命令行手拼中文 JSON |
 | `不支持的方法：xxx` | 服务端这个版本没有该方法 | **先 `list_methods` 确认能力再写脚本**；老版本发布包可能没有 `wait_for_idle` / `get_form_state` 等新方法，缺失就用 `execute_js` 自己实现等价逻辑 |
 | `没有找到对应的浏览器实例：<id>` | 实例不在（服务重启过 / id 写错 / 已 `close`） | `list_tasks` 看活着的任务，再决定 `start` 还是改用已有 id |
 | `start 失败：该 id 已经有正在运行的浏览器实例：<id>` | 同 id 重复 `start` | 先 `close` 或换 id（主技能第 12 条） |

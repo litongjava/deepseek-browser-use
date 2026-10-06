@@ -241,7 +241,16 @@ public class DomService {
    */
   public static List<FrameNode> frameTree(Page page) {
     List<FrameNode> out = new java.util.ArrayList<>();
-    Frame main = page.mainFrame();
+    Frame main = page == null ? null : page.mainFrame();
+    if (main == null) {
+      // 页面正在导航 / 整页重建(实测:控制台停在一个**重定向循环**上时,主 frame 一直是 null)。
+      // 直接 collect(null,...) 会在 childFrames() 上抛 NPE,而 NPE 冒到 ActionService 的兜底分支会被
+      // 归成 ACTION_UNCERTAIN(「无法判断是否生效,别重试」)—— 方向正好相反:这是等一会儿就好的瞬时状态。
+      // 抛一个带 page_navigating 哨兵的异常,由 ActionError 归成可重试的 PAGE_NAVIGATING。
+      // 哨兵用字面量而不是引用 ActionError,是为了不让 dom 包反向依赖 service 包(那会形成包级循环)。
+      throw new IllegalStateException("page_navigating: page.mainFrame() 为 null"
+          + "(页面正在导航或整页重建,这一刻拿不到 DOM)");
+    }
     collect(main, -1, 0, out);
     return out;
   }

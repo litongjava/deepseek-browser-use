@@ -31,9 +31,9 @@ whenToUse: 需要完善或修改企业微信管理后台「企业信息」里的
 先确认服务活着，再看它现在认的是什么引擎、什么 profile：
 
 ```shell
-curl -s http://localhost:10049/playwright/health
-curl -s http://localhost:10049/playwright/config          # engine / profileDir / action / upload
-curl -s http://localhost:10049/playwright/tasks           # 有没有别的任务占着浏览器
+.\client\dsb.cmd --port 10049 health
+.\client\dsb.cmd --port 10049 config          # engine / profileDir / action / upload
+.\client\dsb.cmd --port 10049 tasks           # 有没有别的任务占着浏览器
 ```
 
 `get_config`（或 `GET /playwright/config`）能回答三个高频问题：**这次用的是哪个引擎**、
@@ -271,7 +271,7 @@ logo 行是 `.profile_enterprise_item_Logo`，点它旁边的「修改」打开�
 - 智能体与浏览器不在同一台机器时，先把文件 POST 上去，再用回执里的 `path`：
 
 ```shell
-curl -F "file=@logo.png" http://localhost:10049/playwright/upload
+.\client\dsb.cmd --port 10049 upload logo.png
 # → {"data":{"filename":"logo.png","path":"<服务端暂存目录>/logo.png","relativePath":"logo.png","size":16799,...}}
 ```
 
@@ -763,9 +763,9 @@ JS 派发 click 和真实鼠标点击**都可能不跳转**。要切页时**直�
 不确定服务端有什么能力时，先自省再动手：
 
 ```shell
-curl -s http://localhost:10049/playwright/methods      # 或 list_methods
-curl -s http://localhost:10049/playwright/config
-curl -s http://localhost:10049/playwright/tasks
+.\client\dsb.cmd --port 10049 methods      # 或 run list_methods
+.\client\dsb.cmd --port 10049 config
+.\client\dsb.cmd --port 10049 tasks
 ```
 
 ## 11. 交付话术（收尾）
