@@ -176,4 +176,8 @@ secrets.txt
 # 但服务自己的默认配置(端口)必须进版本库,否则 clone 下来起不了服务。
 !playwright-server/src/main/resources/app.properties
 taobao.json
-scripts/
+# scripts/ 是本地临时脚本目录,不进版本库;正式发布的脚本逐个放行。
+# 注意必须写成 scripts/*(而不是 scripts/):目录被整体排除后,git 不会再往里看,
+# 下面的 ! 例外就失效了。
+scripts/*
+!scripts/sync-skills.mjs

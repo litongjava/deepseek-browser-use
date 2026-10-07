@@ -107,7 +107,7 @@ curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"meth
 
 ### 1. 读 skill 文件：技能就在 `.agents/skills/`
 
-**本仓库自带技能，不用再安装**：8 份技能文档（主技能 + 7 份站点手册）都在 `.agents/skills/` 下，而 `.agents/skills` 正是 DSH 的**项目级技能根**（仓库根有 `.git`），所以**在仓库里启动 dsh 会话，这些技能直接就在技能目录里**：智能体自己会按需加载（动作就是 `skill deepseek-browser-use`），人也可以直接让它读文件。
+**本仓库自带技能，不用再安装**：15 份技能文档（主技能 + 14 份站点手册）都在 `.agents/skills/` 下，而 `.agents/skills` 正是 DSH 的**项目级技能根**（仓库根有 `.git`），所以**在仓库里启动 dsh 会话，这些技能直接就在技能目录里**：智能体自己会按需加载（动作就是 `skill deepseek-browser-use`），人也可以直接让它读文件。
 
 DSH 按固定顺序扫描技能目录：
 
@@ -133,13 +133,54 @@ mkdir -p ~/.dsh/skills
 cp -r .agents/skills/* ~/.dsh/skills/
 ```
 
-**不用重启 DSH**：技能正文每次加载都重新读文件；frontmatter 里的 `name`/`description` 改了，DSH 的文件监听会自己刷新技能目录 —— 这次把技能从 `skills/` 挪到 `.agents/skills/`，同一个会话的技能目录立刻就出现了这 8 个技能。
+**不用重启 DSH**：技能正文每次加载都重新读文件；frontmatter 里的 `name`/`description` 改了，DSH 的文件监听会自己刷新技能目录 —— 这次把技能从 `skills/` 挪到 `.agents/skills/`，同一个会话的技能目录立刻就出现了这 15 个技能。
 
 > **路径注意**：技能正文里的路径都是**相对仓库根**写的（`client/dsb.py`、`recipes/`、`logs/agent/` …）。技能待在仓库自己的 `.agents/skills/` 里、dsh 也在仓库根启动时，这些路径天然对得上；**复制到别的项目或用户级目录之后**，请让 cwd 留在本仓库，或在提示词里给出 dsb 客户端与仓库的绝对路径。
 
 站点手册（`.agents/skills/<站点名>/SKILL.md`，如 `cnipa-trademark-register`、`railway-12306-ticket`、`wecom-*`）就在同一个目录里，技能名取各自 frontmatter 里的 `name`。它和主技能分工不同：主技能讲「服务能做什么」，站点手册讲「这个站点必须怎么点」。
 
-### 2. 使用 dsb 客户端：起服务 + 发请求
+### 2. 装到其它工具：`scripts/sync-skills.mjs`
+
+技能源只有一份——仓库里的 `.agents/skills/`。要在别的 AI 工具里也能用，用仓库自带的同步脚本装过去；它会按各工具的规则改写 frontmatter，源文件不用动。
+
+```bash
+node scripts/sync-skills.mjs
+```
+
+不带参数会弹出菜单，输入序号勾选（可多选，如 `1,3`），直接回车 = 全部：
+
+```
+选择要安装到的位置（可多选，逗号分隔；直接回车 = 全部）：
+
+  1. dsh     DSH (DeepSeek Harness)   <用户目录>\.dsh\skills
+  2. claude  Claude Code              <用户目录>\.claude\skills
+  3. codex   Codex                    <用户目录>\.codex\skills
+  a. 全部
+```
+
+也可以非交互地跑：
+
+| 命令 | 作用 |
+| --- | --- |
+| `node scripts/sync-skills.mjs --all` | 装到全部工具 |
+| `node scripts/sync-skills.mjs dsh claude` | 只装指定工具 |
+| `node scripts/sync-skills.mjs --status` | 只看各目标与仓库是否一致，不写文件 |
+| `node scripts/sync-skills.mjs --all --dry-run` | 预览会改什么，不写文件 |
+| `node scripts/sync-skills.mjs --all --force` | 覆盖目标里已存在、但不是本脚本装的同名技能 |
+
+**三个工具对 frontmatter 的要求不一样，脚本按目标改写**：
+
+| 目标 | 技能目录 | 对 `whenToUse` 的处理 |
+| --- | --- | --- |
+| dsh | `~/.dsh/skills/` | 认驼峰 `whenToUse`，原样复制 |
+| claude | `~/.claude/skills/` | 只认下划线 `when_to_use`，改写键名（驼峰会被静默忽略，丢掉「什么时候该用」的说明） |
+| codex | `~/.codex/skills/` | 严格白名单：只允许 `name`/`description`/`license`/`allowed-tools`/`metadata`，多一个键就整份拒绝加载。脚本把 `whenToUse` 的文本并进 `description`（直接删会丢掉触发说明），并把尖括号换成全角、超长截断 |
+
+> codex 的两条硬限制（description 不能含 `<` `>`、不超过 1024 字符）来自它自带的 `quick_validate.py`；脚本写完会按同样的规则复查一遍，不通过就报错退出。
+
+每个目标目录下有一份 `.sync-skills.json`，记着哪些技能是本脚本装的。不在清单里的同名技能会被跳过（除非 `--force`），所以脚本不会覆盖你手工放进去的技能。
+
+### 3. 使用 dsb 客户端：起服务 + 发请求
 
 技能文档负责让智能体知道**有哪些命令、有哪些坑**；真正发请求推荐走仓库里的 `dsb` 客户端，而不是手拼 `curl -d '{...}'`。
 
@@ -175,7 +216,7 @@ client\dsb.cmd --port 10049 --id 1001 close
 client\dsb.cmd --port 10049 selftest --browser chrome
 ```
 
-### 3. 你的任务是"……"：三步式提示词
+### 4. 你的任务是"……"：三步式提示词
 
 最省事的用法是把下面这段直接粘进 DSH，只改最后一句：
 
@@ -744,6 +785,7 @@ deepseek-browser-use/
 │       ├── app.properties                 端口
 │       ├── browser.properties             内嵌 Chromium 修订号 + 浏览器/profile/日志/上传配置
 │       └── dom/dom_tree/                  DOM 转结构化文本的 JS
+├── scripts/sync-skills.mjs                 把 .agents/skills/ 同步到 dsh / claude / codex 的技能目录(按各自规则改写 frontmatter)
 ├── scripts/package/build-release.mjs      发行版打包脚本
 ├── scripts/run/start-server.sh            macOS/Linux 后台启动服务(脱离当前进程树) + 等健康检查
 ├── scripts/run/stop-server.sh             先 shutdown 再结束进程树,不留孤儿浏览器(macOS/Linux)
@@ -754,7 +796,7 @@ deepseek-browser-use/
 ├── client/dsb.cmd                          Windows 薄包装(能直接敲 dsb,不必写 python 前缀)
 ├── client/README.md                        Python 客户端的用法与退出码约定
 ├── recipes/*.json                          显式 opt-in 的站点配方(run_recipe 用)
-├── .agents/skills/                        DSH 项目级技能根(在仓库里启动 dsh 会话就自动发现这 8 份技能)
+├── .agents/skills/                        DSH 项目级技能根(在仓库里启动 dsh 会话就自动发现这 15 份技能)
 │   ├── deepseek-browser-use/SKILL.md      主技能:服务端能力的唯一权威清单(命令表覆盖、端点、协议)
 │   └── <站点名>/SKILL.md                   站点实操手册(cnipa-trademark-register、railway-12306-ticket、aliyun-lightweight-server、wecom-*)
 ├── docs/SKILL-CONVENTIONS.md              写站点 skill 的约定(单反引号 vs 双反引号等)
