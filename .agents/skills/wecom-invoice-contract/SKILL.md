@@ -60,8 +60,8 @@ POST http://localhost:10049/playwright/command
 - 开工前先自检，避免「服务没起来 / 引擎不是你要的」这类白跑：
 
 ```shell
-.\client\dsb.cmd --port 10049 health
-.\client\dsb.cmd --port 10049 selftest
+dsb --port 10049 health
+dsb --port 10049 selftest
 ```
 
 - 服务方法名拿不准就先问它（**别猜**，猜错只会拿到一句「不支持的方法」）：
@@ -92,7 +92,7 @@ POST http://localhost:10049/playwright/command
 
 - 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、`NNNNNN-<任务id>-<方法>.json`
   完整请求响应、`uploads.log` 上传记录）。
-- 客户端：`client/dsb.py`（跨平台、退出码区分传输错/业务失败/用法错、默认脱敏），或
+- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起），或
   `scripts/trace/browse.ps1`（PowerShell 习惯）。
 - 追踪日志**默认脱敏**（手机号、18 位证件号/统一社会信用代码、邮箱、长数字 → `***`），但这是**尽力而为**：
   企业名、姓名、门牌号这类认不出来的不会被掩掉。任务结束提醒用户清理（`cleanup`，**默认只预演**）。
@@ -580,7 +580,7 @@ POST http://localhost:10049/playwright/command
   先把文件 POST 到服务端暂存接口，再用回执里的 `path`：
 
 ```shell
-.\client\dsb.cmd --port 10049 upload <授权书.pdf>
+dsb --port 10049 upload <授权书.pdf>
 # → {"data":{"filename":"<授权书.pdf>","path":"<服务端暂存目录>/<授权书.pdf>","relativePath":"...","size":...,"sha256":"..."}}
 ```
 

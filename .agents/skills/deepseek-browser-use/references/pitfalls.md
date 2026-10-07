@@ -360,7 +360,7 @@
     - 服务端日志（`logs/server/server-<端口>.out.log`）里有 `Downloading …` / `Removing unused browser …`；
     - 什么都没下、`launching` 也是 `null`，才去看端口与进程。
 
-    只想「预热一次」的话，先跑一遍 `./client/dsb selftest --browser chrome` 把这一步摆在明面上。
+    只想「预热一次」的话，先跑一遍 `dsb selftest --browser chrome` 把这一步摆在明面上。
 
 59. **服务起不来时，先分清是「JDK 跑不起来」还是「版本太低」—— 两者的日志长得完全不一样，而脚本从前的提示都不沾边。**
     实测两次都是环境问题、却都被引到「端口没被覆盖」上：

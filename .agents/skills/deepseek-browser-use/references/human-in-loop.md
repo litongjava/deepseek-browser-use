@@ -109,18 +109,18 @@
 ```shell
 # 1. 请人看验证码（把图和问题一起拿出来）。带中文的参数写进文件，别在命令行里跟 shell 打架：
 #     human.json = {"id":1001,"method":"request_human_input","params":{"prompt":"请输入图片验证码","index":7}}
-.\client\dsb.cmd --port 10049 --id 1001 run request_human_input --params "@human.json"
+dsb --port 10049 --id 1001 run request_human_input --params "@human.json"
 # {"data":{"requestId":"hr-1001-3001","prompt":"请输入图片验证码","base64Omitted":true,
 #          "imagePath":"data/1001/shot-3.png","imageUrl":"/data/1001/shot-3.png","expiresAt":1750000000000},...}
 # 确实要内联 base64（喂视觉模型）时再加 "inline":true
 
 # 1'. 读不了图的模型：先让服务端用本机 OCR 读一遍
-.\client\dsb.cmd --port 10049 --id 1001 run ocr_image -p index=7
+dsb --port 10049 --id 1001 run ocr_image -p index=7
 # {"data":{"ok":true,"text":"8f3k","lineCount":1}} → 直接拿去填，人工都不用叫
 
 # 2. 人给出答案后立刻回填
-.\client\dsb.cmd --port 10049 --id 1001 run submit_human_input -p requestId=hr-1001-3001 -p answer=8f3k
+dsb --port 10049 --id 1001 run submit_human_input -p requestId=hr-1001-3001 -p answer=8f3k
 
 # 3. 取答复并立刻提交表单
-.\client\dsb.cmd --port 10049 --id 1001 run get_human_input -p requestId=hr-1001-3001
+dsb --port 10049 --id 1001 run get_human_input -p requestId=hr-1001-3001
 ```

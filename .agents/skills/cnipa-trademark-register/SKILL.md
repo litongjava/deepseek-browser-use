@@ -93,7 +93,7 @@ return { ua: navigator.userAgent, webdriver: navigator.webdriver,
 - 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、`NNNNNN-<任务id>-<方法>.json` 完整请求响应、`uploads.log` 上传记录）。
 - 客户端：用仓库里的 `scripts/trace/browse.ps1` 按序号成对落盘 `NNN.req.json` / `NNN.res.json`，
   **请求在发出前就落盘**，连「服务没起来、请求没发出去」也看得见。跨平台或要写进脚本时用
-  `client/dsb.py`（同一套留档格式与脱敏规则，退出码区分传输错/业务失败/用法错）。
+  `dsb`（同一套留档格式，退出码区分传输错/业务失败/用法错，服务没起会自动拉起）。
 - 服务端日志**默认脱敏**（手机号、18 位证件号/统一社会信用代码、邮箱、长数字 → `***`，可用
   `browser.trace.redact` 追加公司名、商标名这类自定义规则），但这是**尽力而为**：姓名、门牌号这类
   认不出来的个人信息不会被掩掉，而且两份日志**都不会自动清理**。任务结束提醒用户清理。
@@ -122,7 +122,8 @@ https://sbj.cnipa.gov.cn/index.html                     -> 302 -> https://tzwh.s
   base64 灌进上下文）→ 用 PowerShell 的 `Windows.Media.Ocr` 识别（大字号中文识别率明显更好，
   年份这类数字仍可能读错，用发布时间与常识校正）。
 - **恢复探测**：带 Firefox UA 定时请求首页，**不再 302 到维护图**就是恢复了
-  （`curl -A "<firefox UA>" -o NUL -w "%{http_code}|%{redirect_url}"`）。注意直接请求 `toas.*`
+  （`curl -A "<firefox UA>" -o NUL -w "%{http_code}|%{redirect_url}"` —— 这是对**外站**的 HTTP 探测，
+  只看状态码与 Location，不走 `dsb`）。注意直接请求 `toas.*`
   域名会被 CDN 以 `Ws-Action: bot` 判成机器人返回 403，**用首页做探针更可靠**。
 - 维护窗口通常只有 1 小时量级（如「20:00 至 21:00 暂停服务」），**别在这期间改方案或重放旧载荷**；
   恢复后先按第 7 节的纪律回读一次表单，再继续。
@@ -339,7 +340,7 @@ for (let i = 0; i < 7 && !btn('添加'); i++) { jsClick(btn('下一步')); await
 `path` 是**服务端**路径。智能体与浏览器不在同一台机器时（客户端-服务器模式），先把文件 POST 到服务端：
 
 ```shell
-.\client\dsb.cmd --port 10049 upload 图样.jpg
+dsb --port 10049 upload 图样.jpg
 # → {"data":{"filename":"图样.jpg","path":"<服务端暂存目录>/图样.jpg","relativePath":"图样.jpg",...}}
 ```
 

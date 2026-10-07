@@ -41,6 +41,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -177,7 +178,8 @@ def cmd_status(args):
 
 def cmd_sitemap(args):
     """把站点 sitemap.xml 登记到资源平台的 sitemap 提交页。"""
-    dsb = os.path.join(REPO, "client", "dsb.cmd" if os.name == "nt" else "dsb")
+    # dsb 已装在 PATH 上;找不到时退回仓库里的 Go 源码构建产物路径,便于没装 PATH 的机器
+    dsb = shutil.which("dsb") or shutil.which("dsb.exe") or os.path.join(REPO, "dsb", "dsb.exe")
     sitemap_url = args.site.rstrip("/") + "/sitemap.xml"
 
     def dsb_run(*argv, summary=True):

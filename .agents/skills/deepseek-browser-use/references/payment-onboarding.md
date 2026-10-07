@@ -17,7 +17,7 @@
 ```powershell
 @{selector='#appName';text='示例应用';mode='type'} |
   ConvertTo-Json | Set-Content tmp/app-name.json -Encoding utf8
-client\dsb.cmd --port 10049 --id 1001 run input_text_by_selector --params '@tmp/app-name.json'
+dsb --port 10049 --id 1001 run input_text_by_selector --params '@tmp/app-name.json'
 ```
 
 ## 人工验证与密钥
@@ -32,4 +32,4 @@ client\dsb.cmd --port 10049 --id 1001 run input_text_by_selector --params '@tmp/
 
 技能和公共教程使用虚构企业名、`example.com`、`YOUR_APP_ID`、`YOUR_SELLER_ID` 等占位符。不要复制真实手机号、短信验证码、证照、账号、AppID、密钥、签名链接或本地个人资料路径。
 
-终端输出的自动脱敏不代表 `data/`、截图、trace 或临时 JSON 已脱敏。原始留档仅用于本地核验，不整段复制到公共文档；公开前检查正文、页签 URL、图片与文件名。公钥不属于私钥，但教程没有必要包含真实应用公钥。
+客户端**不做脱敏**（留档与终端输出都是原文），`data/`、截图、trace 或临时 JSON 也都不脱敏。原始留档仅用于本地核验，不整段复制到公共文档；公开前检查正文、页签 URL、图片与文件名。公钥不属于私钥，但教程没有必要包含真实应用公钥。

@@ -106,7 +106,7 @@
 
 ```shell
 # 1. 上传到服务端暂存区（就是 POST /playwright/upload 的封装）
-.\client\dsb.cmd --port 10049 upload 图样.jpg
+dsb --port 10049 upload 图样.jpg
 # 回执：{"ok":true,"data":{"filename":"图样.jpg","path":"<服务端暂存目录>/图样.jpg",
 #                        "relativePath":"图样.jpg","size":18363,"sha256":"...","existed":false}}
 ```
@@ -383,7 +383,7 @@ dsb run mouse_up -p button=left
 ```
 
 ```shell
-.\client\dsb.cmd --port 10049 --id 1001 batch api.json
+dsb --port 10049 --id 1001 batch api.json
 ```
 
 **为什么顺序写就行**：`wait_for_response` **先回看再等** —— `lookBackSeconds`（默认 10 秒）内已经收到过的匹配响应会直接返回，`data.ageMs` 是它距今的毫秒数、`data.fromLookBack` 为 `true`。响应通常在你拿到点击结果之前就到了，所以顺序调用照样命中。`lookBackSeconds=0` 表示只等新响应（这时必须并发触发，而**同一个实例不要并发发请求**，见 `pitfalls.md` 第 13 条，所以一般不需要）。

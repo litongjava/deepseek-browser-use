@@ -47,8 +47,8 @@ URL 里有 `&`，**在 cmd/PowerShell 里别直接拼命令行**（`&` 会被 cm
 ```
 
 ```shell
-# 用 dsb 客户端发(Windows 在 PowerShell 里要写 .\client\dsb.cmd)
-python client/dsb.py --port 10049 --id 9001 run go_to_url --params @tmp/nav-buy.json
+# 用 dsb 客户端发(Windows 在 PowerShell 里要写 dsb)
+dsb --port 10049 --id 9001 run go_to_url --params @tmp/nav-buy.json
 ```
 
 `regionId` 取中国内地（例如 ``cn-beijing`` / ``cn-hangzhou``），`duration` 是**月数**：`1` / `3` / `12`，它决定「应付」那一行算几个月。页面上的「时长」区在 DOM 里**只有一个广告卡**，真正的时长由这个 URL 参数决定 —— 想比 3 个月与 1 年的价，就换参数重新打开一次。

@@ -2,19 +2,18 @@
 
 > 本文是 [SKILL.md](../SKILL.md) 的分册，按需阅读。
 
-> **Windows 上默认入口是 `.\client\dsb.cmd`（在仓库根目录执行），本文所有示例都按它写。**
-> **不要写 `python client/dsb.py …`**：`dsb.cmd` 就是这个仓库的客户端入口，它负责找解释器、
-> 把 `client/dsb.py` 连同参数交出去、并原样透传退出码；手写 `python dsb.py` 只是在包装层用不了时
-> 的退路（例如 `--grep` 的正则带 `|` 被 cmd.exe 吃掉，见下文）。macOS/Linux 把前缀换成 `./client/dsb`。
+> **`dsb` 是装在 `PATH` 上的一个 Go 二进制，在任何目录直接敲就行**（源码在仓库 `dsb/`，用法见 `dsb/README.md`）。
+> 不需要写 `python`、不需要 `.\client\dsb.cmd`、也不需要把 cwd 切到仓库根。
+> **不要手写 `curl`/`Invoke-WebRequest` 往 `POST /playwright/command` 拼 JSON**。
 
 ## 也可以不手拼 JSON：用现成客户端（**首选**）
 
-阅读页面首选 `dsb state --text-only`，只输出脱敏的结构化文本，不重复列出元素清单。
+阅读页面首选 `dsb state --text-only`，只输出结构化文本，不重复列出元素清单。
 视口外内容用 `--viewport-expansion 1500`（`-1` 表示全部），跨域 frame 用 `--include-frames`。
 需要字段筛选时用 `dsb run get_form_state --select data.fields` 或
 `dsb run get_browser_state --select data.text`。`--select` 输出 JSON，支持点分隔对象键和数字数组下标
 （如 `data.fields.0`），不执行表达式；缺少路径报用法错误，显式 null 保留为 null。
-它只筛终端输出，日志仍记录完整脱敏响应。
+它只筛终端输出，日志仍记录完整响应。
 **失败响应同样按路径投影**（业务退出码不变）：批量回执里只要有一步失败、整批 `ok` 就是 `false`，
 但 `data.results[N]` 仍在，所以 `--select data.results.N.…` 恰好是「只看失败那一步」的正确用法。
 只有路径确实不存在（例如单条命令没有 `data.results`）才退回打印整封，并在 stderr 说明是退回去了。
@@ -36,27 +35,24 @@ dsb --id 1001 run get_browser_state --grep mediaCount
 - 读页面时最常用：一条回执动辄几万字符，而你只想确认某一行的存在。**服务端侧的等价能力是 `find_text`**
   （它连文本都不用传回来），这里两个开关是给"回执已经拿到、只想看其中几行"准备的。
 - 两者可以同时用：先落盘，再从同一份文本里打命中行。
-- `--grep` 的正则**带 `|`（或其它 shell 元字符）时，走 `dsb.cmd` 会被 Windows 的批处理引号处理打断**
-  （报成 `'xxx' is not recognized as an internal or external command`）。这时直接调 `python client/dsb.py …`
-  绕开 `.cmd` 包装，或者把模式写简单一点（例如先 `--grep mediaCount`）。
-- **落盘文件的回执里中文是乱码（`ä¾èµ–` 这种）？先怀疑你的读法，不是文件坏了。** `dsb` 一律以
-  `encoding="utf-8"` 写盘，服务端也按 UTF-8 回；但 **Windows PowerShell 5.1 的 `Get-Content` 默认按 ANSI
-  解码**，含中文的 UTF-8 回执就会被显示成 Latin-1 乱码 —— 而 `read` 工具或 `Get-Content -Encoding utf8`
+- **落盘文件的回执里中文是乱码（`ä¾èµ–` 这种）？先怀疑你的读法，不是文件坏了。** `dsb` 一律以 UTF-8
+  写盘，服务端也按 UTF-8 回；但 **Windows PowerShell 5.1 的 `Get-Content` 默认按 ANSI 解码**，
+  含中文的 UTF-8 回执就会被显示成 Latin-1 乱码 —— 而 `read` 工具或 `Get-Content -Encoding utf8`
   读同一个文件是完全正常的。先看版本（`$PSVersionTable.PSVersion`：`5.1.x` 就是老的 Windows PowerShell，
   `7.x` 才是 pwsh，7 默认 UTF-8 没有这个问题），是 5.1 就一律加 `-Encoding utf8`：
 
   ```powershell
   $PSVersionTable.PSVersion                                  # 5.1.x → 下面三条都必须带 -Encoding
-  .\client\dsb.cmd --id 1001 run execute_js --params '@p.json' --out state.json
+  dsb --id 1001 run execute_js --params '@p.json' --out state.json
   Get-Content state.json -Encoding utf8 -TotalCount 20        # ✗ 不带 -Encoding 会看到乱码
   Select-String -Path state.json -Pattern '中央仓库' -Encoding utf8
   ```
 
-  **别据乱码去报「服务端/客户端编码 bug」**：先读同一份文件的留档（`logs/agent/<会话>/*.res.json` 是
-  `ensure_ascii=False` 的 UTF-8），或者干脆换成 harness 的 read 工具再判断一次。
+  **别据乱码去报「服务端/客户端编码 bug」**：先读同一份文件的留档（`logs/agent/<会话>/*.res.json`，
+  UTF-8），或者用 harness 的 read 工具再判断一次。
 
 复杂请求继续使用 `--params @文件.json` / `batch 文件.json`，不为过滤输出改用裸 HTTP 请求，
-否则会丢失客户端脱敏、统一退出码和调用留档。
+否则会丢失统一退出码和调用留档。
 
 **这两个参数文件都认「整个请求体」**：`--params @文件.json` 里的
 `{"id":1001,"method":"request_human_input","params":{…}}` 会自动只取 `params` 那一层（按 `method`
@@ -65,86 +61,113 @@ dsb --id 1001 run get_browser_state --grep mediaCount
 真正的参数一个都没传，报回来的是 `缺少参数 prompt` 这种指不到原因的话。
 
 ```shell
-client\dsb.cmd --port 10049 --id 1001 js "@脚本.js" --retry-on-spurious   # 只读脚本:伪故障自动重发
+dsb --port 10049 --id 1001 js "@脚本.js" --retry-on-spurious   # 只读脚本:伪故障自动重发
 ```
 
 `--retry-on-spurious` 对应服务端的 `retryOnSpurious`（见 `references/pitfalls.md` 第 47 条）。
 **只给只读脚本加**：会点按钮、提交表单的脚本重发等于再执行一次。
 
 手工拼 `-d '...'` 在参数带中文、引号、换行时很容易出错（PowerShell 尤其爱吃掉引号），返回体还得自己解析。
-仓库里的 `dsb` 客户端把这几件事都替你办了：**子命令式传参**、**批量与异步**、**每一步的请求与响应都留档**。
-凡是「发请求 → 读页面 → 再发请求」的任务，用它比手拼 JSON 少一大类无谓的失败。
+`dsb` 把这几件事都替你办了：**子命令式传参**、**批量与异步**、**每一步的请求与响应都留档**、
+**服务没起时自动拉起后端**。凡是「发请求 → 读页面 → 再发请求」的任务，用它比手拼 JSON 少一大类无谓的失败。
 
-四个客户端（都在仓库里，跟着仓库一起分发）：
+两个客户端（见 [protocol.md](protocol.md) 的说明）：
 
-| 客户端 | 位置 | 适合 | 例子 |
+| 客户端 | 运行环境 | 适合 | 例子 |
 | --- | --- | --- | --- |
-| `dsb.py`（Python 3，只用标准库，跨平台，也可当库 import） | 仓库根 `client/dsb.py` | 写进脚本、yaml/CI、批量、异步；**交互使用时的退路**（包装层吃参数时才直接调它） | `python client/dsb.py --port 10049 start --browser chrome` |
-| `dsb`（macOS/Linux 薄包装，可执行，透传参数与退出码） | 仓库根 `client/dsb` | macOS/Linux 上少打一截前缀，直接敲就行 | `./client/dsb --port 10049 health` |
-| `dsb.cmd`（Windows 薄包装，透传参数与退出码） | 仓库根 `client/dsb.cmd` | **Windows 上的默认入口**（在仓库根目录写 `.\client\dsb.cmd`） | `.\client\dsb.cmd --port 10049 health` |
-| `browse.ps1` | `scripts/trace/browse.ps1` | 已有的 PowerShell 排查习惯 | `browse.ps1 -PayloadFile req.json -Session t1` |
+| `dsb`（Go 二进制，装在 `PATH`） | 任意平台 | **默认入口**：写进脚本/CI、批量、异步；服务没起会自动拉起 | `dsb --port 10049 health` |
+| `browse.ps1` | Windows PowerShell | 已有的 PowerShell 排查习惯 | `browse.ps1 -PayloadFile req.json -Session t1` |
 
-**macOS / Linux 上用 `./client/dsb`，不必写 `python dsb.py`**：它只做两件事 —— 挑一个 Python 3（顺序 `DSB_PYTHON` > `python3` > `python`），再把同目录的 `dsb.py` 连同全部参数交出去；用 `exec` 交棒，退出码原样透传。它会解析符号链接，所以 `ln -s "$(pwd)/client/dsb" ~/.local/bin/dsb` 之后在任何目录直接敲 `dsb` 即可。Unix shell 不像 cmd/PowerShell 那样额外吃 `&`、方括号、逗号（只有自己没加引号时才会被 shell 解释）。包装自身找不到解释器或 `dsb.py` 时退出 `127`。
+安装（若 `dsb --version` 报「不认识这个命令」）：
 
-**Windows 上直接用它，不必写 `python dsb.py`**：`dsb.cmd` 只做两件事 —— 找 `python`（取不到就退回 `py`），
-再把 `%~dp0dsb.py` 连同全部参数交出去，退出码原样 `exit /b` 透传。两点注意：
+```bash
+cd dsb && go build -o "$(go env GOPATH)/bin/dsb" .    # Windows 加 .exe
+```
 
-- 在 **PowerShell** 里当前目录不在 `PATH`，要写成 `.\client\dsb.cmd ...`；在 **cmd.exe** 里 `client\dsb.cmd ...` 就行。
-- `dsb.cmd` 中间隔着一层 cmd.exe，参数里的 `&`、`^`、`%` 可能被提前吃掉（中文与引号不受影响，已验证）。
-  遇到这种参数不要换回别的发送方式，而是**把参数从命令行挪进文件**：`--params @文件.json`、`batch cmds.json`、
-  `js @脚本.js` —— 长脚本、带中文的 JSON、带引号的选择器都走这条路，连转义都不用想。
-- **PowerShell 还会额外吃掉方括号与逗号**（它自己的一套参数解析），实测两种翻车：
-  `-p selector=div[role=button]` → `unrecognized arguments: div[role=button]`；
-  `-Dtest=A,B` → `Missing argument in parameter list`（逗号是 PowerShell 的数组运算符）。
-  **凡是值里带 `[`、`]`、`,`、`"` 的参数，一律写进 `--params @文件.json`**，别在命令行里跟 shell 打架。
-  CSS 属性选择器（`input[name=foo][value=bar]` 这种不带引号的写法）虽然能在命令行里活下来，
-  但放进文件始终更省事。
+### 服务没起会自己拉起来
 
-`dsb` 的要点（完整用法与退出码见 `client/README.md`）：
+普通命令连不上**本机**服务时，`dsb` 会按配置里的仓库位置找到后端 jar、把服务拉起来，再重试一次 —— 所以
+「先把服务起起来」这一步可以不做。仓库位置记在 `~/.dsb/config.json`（`dsb server init --repo-dir <仓库根>`
+写一次即可；`DSB_REPO_DIR` 环境变量优先）。显式管理：
+
+```shell
+dsb server start          # 起服务(已在跑就复用)
+dsb server build          # 构建当前代码的后端 jar 并归档进 releases/<commit>/(想用最新代码时先跑这个)
+dsb server status         # 服务地址、pid、仓库、可用 jar、日志
+dsb server logs --lines 80  # 看日志尾部(排查启动失败最常用)
+dsb server stop           # 停服务(先让服务关掉浏览器,再按进程结束)
+dsb server restart        # 重启(用上新构建的 jar 要这一步)
+```
+
+关掉自动拉起:`dsb --no-auto-start health` 或 `DSB_AUTO_START=0`。**服务超时、业务失败都不触发**
+自动拉起 —— 超时说明服务在跑,只是慢。
+
+### 服务在别的机器上，或者本机开了好几个
+
+后端可能在别的机器(团队共用一台跑浏览器),本机也可能同时跑好几个实例(不同端口 = 不同 profile/登录态)。
+两种都用同一组开关:
+
+```shell
+dsb --host 10.0.0.5 --port 10049 health        # 直接给主机与端口
+dsb --port 10050 start --headful               # 本机第二个实例
+
+dsb server target add lab --host 10.0.0.5 --port 10049   # 给主机+端口起个名字
+dsb server target list                                   # 列出已登记的目标
+dsb --use lab methods                                    # 之后就不用敲 IP 了
+```
+
+地址优先级:`--base-url` > `--use` > `--host/--port` > 环境变量 > 配置文件 > 默认 `localhost:10049`。
+`dsb server status` 会把最终地址与它的来源一并打出来(`来源:具名目标 lab` / `命令行 --port` …),避免连错机器而不自知。
+
+**远端目标不自动拉起**:那台机器上的服务得由它自己起(客户端没有理由去启动别人的进程;硬起只会把
+「地址写错了」变成「在本机起了个没用的服务,然后照样失败」)。远端连不上时得到的是明确提示,不是傻等。
+
+`dsb` 的要点（完整用法与退出码见 `dsb/README.md`）：
 
 ```shell
 # 通用选项放子命令前后都行；退出码 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错
-# Windows（本机首选）：.\client\dsb.cmd ...    macOS/Linux：把前缀换成 ./client/dsb
-.\client\dsb.cmd --port 10049 health
-.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
-.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
-.\client\dsb.cmd --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
-.\client\dsb.cmd --port 10049 --id 1001 js @脚本.js --var who=dsb   # 支持 {{变量}} 注入
-.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
-.\client\dsb.cmd --port 10049 --id 1001 recipes --run close-all-modals
-.\client\dsb.cmd --port 10049 upload 图样.jpg                 # 送文件到服务端暂存区
-.\client\dsb.cmd --port 10049 last                            # 重放最近一次响应
+dsb --port 10049 health
+dsb --port 10049 --id 1001 start --browser chrome --headful
+dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
+dsb --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
+dsb --port 10049 --id 1001 js @脚本.js --var who=dsb   # 支持 {{变量}} 注入
+dsb --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
+dsb --port 10049 --id 1001 recipes --run close-all-modals
+dsb --port 10049 upload 图样.jpg                 # 送文件到服务端暂存区
+dsb --port 10049 last                            # 重放最近一次响应
 ```
 
 用它还有两个直接好处：**`steps.log` 一行一次调用**（时间、序号、任务 ID、方法、成败、耗时、摘要），第几步开始
 不对一眼就能看出来；**退出码把「服务没起」与「业务失败」分开**（`1` 与 `2`），写脚本时不用去解析 `msg` 猜。
-只有包装层本身用不了时（cmd.exe 吃掉 `&`/`^`/`%`、`|` 等参数）才临时退回 `python client/dsb.py`，
-其余参数与用法完全一致 —— 这是例外，不是默认写法。
 
-三个容易用错的地方：
+### 几个容易用错的地方
 
 - **`--summary`（`--compact` 是同一个开关）只管本地输出**，与服务端协议里的 `responseMode:"compact"`
   （响应精简模式）不是一回事；后者要用 `--response-mode compact` 传（**信封级字段**，不是 `params` 里的）。
   摘要为空时（`get_tabs`/`get_console_logs`/`get_dialog` 这类没有可摘要字段的方法）dsb 会自动退回打印一行
   JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了。
-- **默认脱敏不会掩掉「下一步还要回填的凭据」**：`requestId`、`jobId` 与 `hr-<n>-<雪花号>` 原样保留，
-  其余（手机号、证件号、邮箱、长号码）照旧打码。理由很实际：把要回填的 ID 掩成 `***` 之后，
-  `submit_human_input` / `get_response_body(requestId=…)` 就没法用了，比泄露它更糟。
+- **不做脱敏**：留档与终端输出都是原文（手机号、证件号、邮箱、长号码一律原样），`requestId`/`jobId`
+  这些下一步要回填的凭据自然也在。交付或共享 `logs/agent/**` 前自己过一眼。
 - **多行脚本不要写在命令行里**：经 cmd/PowerShell 传参会只剩第一行。用 `js @脚本.js`、`--params @文件.json`
   或 `batch cmds.json`。
 - **`js` / `batch` / `state` 这些是子命令，不是 `run` 的方法名**。写成 `dsb run js @脚本.js` 只会得到一句
   `用法错:unrecognized arguments: @脚本.js`（真正的错在「`js` 不该跟在 `run` 后面」）。
-  客户端现在会补一句对症提示，但正确写法是：
+  客户端会补一句对症提示，但正确写法是：
 
   ```shell
   dsb --port 10049 --id 1001 js @脚本.js        # 对：子命令直接写
   dsb --port 10049 --id 1001 run get_title      # 对：run 只用于服务端方法
   ```
 
+- **PowerShell 会吃掉方括号与逗号**（它自己的一套参数解析），实测两种翻车：
+  `-p selector=div[role=button]` → `unrecognized arguments: div[role=button]`；
+  `-Dtest=A,B` → `Missing argument in parameter list`（逗号是 PowerShell 的数组运算符）。
+  **凡是值里带 `[`、`]`、`,`、`"` 的参数，一律写进 `--params @文件.json`**，别在命令行里跟 shell 打架。
+
 不确定服务端现在是什么状态（引擎、profile 目录、命令数、配方数）时，先跑一次自检：
 
 ```shell
-.\client\dsb.cmd --port 10049 selftest --browser chrome    # macOS/Linux 换成 ./client/dsb
+dsb --port 10049 selftest --browser chrome
 ```
 
 
@@ -153,9 +176,9 @@ client\dsb.cmd --port 10049 --id 1001 js "@脚本.js" --retry-on-spurious   # �
 ``state --text-only``的stdout仍是纯页面文本；截图失败/熔断、观测不完整、索引不可用的提示输出到stderr。``state --select data.text``保留同样告警且stdout仍是合法JSON。``start --select data.browser.engine``不会再混入profile说明行。
 
 ```powershell
-.\client\dsb.cmd start --browser chrome --headful --out start.json
-.\client\dsb.cmd health --out health.json
-.\client\dsb.cmd state --out state.json
+dsb start --browser chrome --headful --out start.json
+dsb health --out health.json
+dsb state --out state.json
 ```
 
-``--out``保存完整脱敏响应，不受``--select``投影影响；业务失败退出码仍为2。截图降级与业务断言分开登记，详见 [testing-evidence.md](testing-evidence.md)。
+``--out``保存完整响应，不受``--select``投影影响；业务失败退出码仍为2。截图降级与业务断言分开登记，详见 [testing-evidence.md](testing-evidence.md)。

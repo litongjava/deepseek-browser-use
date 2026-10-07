@@ -7,8 +7,7 @@ description: 用 deepseek-browser-use 在全球站 TradingView 登录并把自�
 
 一次真实任务（2026-09-27）的完整记录：登录 tradingview.com，把美国 moomoo 账户连上 TradingView 的 Trading Panel，并读出账户与持仓。用户的验收条件里有一条「如果需要花钱就算了」，所以文中把**哪一步可能涉及付费**单独写清。
 
-> **平台说明**：下文用 Windows 的 `client/dsb.cmd`。macOS/Linux 换成 `./client/dsb`（参数完全一致），
-> 服务端启停换成 `scripts/run/start-server.sh` / `stop-server.sh`。
+> **命令一律用 `dsb`（装在 `PATH` 上，任何目录直接敲）。** 服务端不用先起：连不上时 `dsb` 会自动拉起后端并重试。
 
 ## 站点特征
 
@@ -21,8 +20,8 @@ description: 用 deepseek-browser-use 在全球站 TradingView 登录并把自�
 ## 一、确认服务与实例
 
 ```shell
-client\dsb.cmd --port 10049 health
-client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
+dsb --port 10049 health
+dsb --port 10049 --id 1001 start --browser chrome --headful
 ```
 
 **必须 `--headful`**：登录、OAuth 授权都要人来做，无头窗口没法交接。
@@ -40,8 +39,8 @@ client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
 把浏览器窗口带到前台再请人操作：
 
 ```shell
-client\dsb.cmd --port 10049 --id 1001 run bring_to_front --params "{}"
-client\dsb.cmd --port 10049 --id 1001 run request_human_input --params "@human.json"
+dsb --port 10049 --id 1001 run bring_to_front --params "{}"
+dsb --port 10049 --id 1001 run request_human_input --params "@human.json"
 ```
 
 然后**不要靠人工答复的字段判断是否登录成功**，回读页面自己确认。登录成功的铁证是首屏元素里出现：
@@ -107,7 +106,7 @@ client\dsb.cmd --port 10049 --id 1001 run request_human_input --params "@human.j
 按文本定位必须给完整标签，否则报「没找到文本为「Orders」的元素」：
 
 ```shell
-client\dsb.cmd --port 10049 --id 1001 run click_element_by_text --params "@click-orders.json"
+dsb --port 10049 --id 1001 run click_element_by_text --params "@click-orders.json"
 ```
 
 ```json
@@ -167,10 +166,10 @@ C  Cerebras Systems Inc.  1D  NASDAQ  O 211.81  H 213.00  L 203.61  C 206.75  +0
 `mouse_up`。按下期间十字线被钉死，图例切换成**光标锁住那一根**自己的 O/H/L/C/Vol。实测：
 
 ```shell
-client\dsb.cmd --port 10049 --id 1003 run mouse_move -p x=990 -p y=280
-client\dsb.cmd --port 10049 --id 1003 run mouse_down -p button=left
-client\dsb.cmd --port 10049 --id 1003 js @读图例.js --retry-on-spurious   # 脚本里取 legend 的 innerText
-client\dsb.cmd --port 10049 --id 1003 run mouse_up -p button=left          # 别忘了松手
+dsb --port 10049 --id 1003 run mouse_move -p x=990 -p y=280
+dsb --port 10049 --id 1003 run mouse_down -p button=left
+dsb --port 10049 --id 1003 js @读图例.js --retry-on-spurious   # 脚本里取 legend 的 innerText
+dsb --port 10049 --id 1003 run mouse_up -p button=left          # 别忘了松手
 ```
 
 漏掉 `mouse_up` 会一直按着，之后所有点击都会变成拖拽。另外**不必非按住不可**：鼠标悬停扫过去图例也会跟着变，

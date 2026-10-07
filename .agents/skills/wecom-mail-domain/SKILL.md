@@ -54,7 +54,7 @@ whenToUse: 需要给企业微信 / 腾讯企业邮箱开通邮箱服务、绑定
 ### 1.3 留档
 
 - 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、`NNNNNN-<任务id>-<方法>.json` 完整请求响应）。
-- 客户端：`client/dsb.py`（跨平台、退出码区分传输错/业务失败/用法错、默认脱敏）或 `scripts/trace/browse.ps1`。
+- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起）或 `scripts/trace/browse.ps1`。
 - **DNS 变更证据要自己留**：把「加记录前」「加记录后」的 `get_requests` / 页面文本各存一份，别只靠口头说加好了。
 
 ## 2. 第一步：加 MX 记录（在 DNS 服务商那边）

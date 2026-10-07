@@ -42,12 +42,15 @@ description: 使用 deepseek-browser-use 在 Cloudflare 配置域名 HTTP/HTTPS 
 - 实测 Deploy 返回 ``SPURIOUS_DISPATCH``，规则却已创建。不能重复点击部署；先读规则列表或相关响应。新回执的 ``actionStatus:unknown`` 也应如此处理。
 - ``snapshotConsistent:false`` 或 ``indicesUsable:false`` 表示本次索引不可用。等目标内容后重新取快照。即使 ``snapshotConsistent:true``，也只说明读取期间没有检测到变化，不证明异步业务已完成。
 - 新版 DNS 编辑区域使用具名按钮、Proxy status 开关、Save。优先按真实的 aria-label 定位所需记录，避免点错多个 Edit 中的一个。
-- 用 `dsb state --text-only` 阅读，或 `dsb run get_form_state --select data.fields` 筛字段，保留客户端脱敏和日志。复杂选择器、表达式和批量参数放 JSON 文件，不为缩短输出绕过 dsb。
+- 用 `dsb state --text-only` 阅读，或 `dsb run get_form_state --select data.fields` 筛字段，仍保留客户端留档与统一退出码。复杂选择器、表达式和批量参数放 JSON 文件，不为缩短输出绕过 dsb。
 - 一条命令仍在运行时，先等它完成，再发依赖它的下一步；不能一边点击部署，一边并发读取同一任务。
 
 ## 验证与结论
 
 分别验证来源根域名/授权的 www、HTTP/HTTPS、路径和查询参数。HTTP 检查先不跟随跳转，确认状态码和 Location，再用浏览器检查最终目标可访问。
+
+> 这里的 `curl` 是**对外站做 HTTP 探测**（只看状态码与 Location，不渲染页面、不要登录态），
+> 浏览器服务替代不了，所以保持 `curl`。面向浏览器服务（`/playwright/**`）的请求才统一走 `dsb`。
 
 ```shell
 curl -I --max-time 20 https://old.example/

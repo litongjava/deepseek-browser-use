@@ -24,15 +24,14 @@
 - `id` 是雪花 ID，序列化成字符串返回（`{"data":{"id":"1001"}}`），但请求里写数字或字符串都可以。
 
 这一层就是普通 HTTP：**一个端点、JSON 进 JSON 出**。实际动手时不要手写 HTTP 请求，用客户端 `dsb`
-（它就是这套 HTTP 的封装：传参、解析回执、脱敏、留档、退出码都替你办了，见 `client.md`）：
+（它就是这套 HTTP 的封装：传参、解析回执、留档、退出码都替你办了，连不上时还会自动拉起服务，见 `client.md`）：
 
 ```shell
-# Windows 在仓库根目录：.\client\dsb.cmd    macOS/Linux：./client/dsb
-.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
-.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
-.\client\dsb.cmd --port 10049 --id 1001 state --text-only           # 打开页面后读状态
-.\client\dsb.cmd --port 10049 --id 1001 run click_element_by_index -p index=0
-.\client\dsb.cmd --port 10049 --id 1001 close
+dsb --port 10049 --id 1001 start --browser chrome --headful
+dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
+dsb --port 10049 --id 1001 state --text-only           # 打开页面后读状态
+dsb --port 10049 --id 1001 run click_element_by_index -p index=0
+dsb --port 10049 --id 1001 close
 ```
 
 > 要看裸 HTTP 的原始报文，读追踪日志（`logs/trace/`，见本文末）里那对请求 / 响应 JSON；

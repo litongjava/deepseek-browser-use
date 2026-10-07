@@ -31,9 +31,9 @@ whenToUse: 需要完善或修改企业微信管理后台「企业信息」里的
 先确认服务活着，再看它现在认的是什么引擎、什么 profile：
 
 ```shell
-.\client\dsb.cmd --port 10049 health
-.\client\dsb.cmd --port 10049 config          # engine / profileDir / action / upload
-.\client\dsb.cmd --port 10049 tasks           # 有没有别的任务占着浏览器
+dsb --port 10049 health
+dsb --port 10049 config          # engine / profileDir / action / upload
+dsb --port 10049 tasks           # 有没有别的任务占着浏览器
 ```
 
 `get_config`（或 `GET /playwright/config`）能回答三个高频问题：**这次用的是哪个引擎**、
@@ -77,7 +77,7 @@ whenToUse: 需要完善或修改企业微信管理后台「企业信息」里的
 
 - 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、
   `NNNNNN-<任务id>-<方法>.json` 完整请求响应、`uploads.log` 上传记录）。
-- 客户端：仓库里的 `client/dsb.py`（跨平台、退出码区分传输错/业务失败/用法错、默认脱敏、
+- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起、
   `js` 子命令支持 `{{变量}}` 注入）；已有 PowerShell 排查习惯的可以用 `scripts/trace/browse.ps1`。
 - 服务端日志**默认脱敏**（手机号、18 位统一社会信用代码、邮箱、长数字 → `***`），但这是**尽力而为**：
   公司名、门牌号这类认不出来的不会被掩掉，而且日志**不会自动清理**。
@@ -88,11 +88,11 @@ whenToUse: 需要完善或修改企业微信管理后台「企业信息」里的
 中文、引号、换行在手拼 `-d '...'` 时很容易被吃掉（PowerShell 尤其）。稳定写法：
 
 ```shell
-python client/dsb.py --port 10049 --id 1001 health
-python client/dsb.py --port 10049 --id 1001 start --browser chrome
-python client/dsb.py --port 10049 --id 1001 run go_to_url -p url=https://work.weixin.qq.com/wework_admin/frame
-python client/dsb.py --port 10049 --id 1001 js @回读.js          # 支持 {{变量}} 注入
-python client/dsb.py --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
+dsb --port 10049 --id 1001 health
+dsb --port 10049 --id 1001 start --browser chrome
+dsb --port 10049 --id 1001 run go_to_url -p url=https://work.weixin.qq.com/wework_admin/frame
+dsb --port 10049 --id 1001 js @回读.js          # 支持 {{变量}} 注入
+dsb --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
 ```
 
 ## 2. 登录：交给人
@@ -271,7 +271,7 @@ logo 行是 `.profile_enterprise_item_Logo`，点它旁边的「修改」打开�
 - 智能体与浏览器不在同一台机器时，先把文件 POST 上去，再用回执里的 `path`：
 
 ```shell
-.\client\dsb.cmd --port 10049 upload logo.png
+dsb --port 10049 upload logo.png
 # → {"data":{"filename":"logo.png","path":"<服务端暂存目录>/logo.png","relativePath":"logo.png","size":16799,...}}
 ```
 
@@ -763,9 +763,9 @@ JS 派发 click 和真实鼠标点击**都可能不跳转**。要切页时**直�
 不确定服务端有什么能力时，先自省再动手：
 
 ```shell
-.\client\dsb.cmd --port 10049 methods      # 或 run list_methods
-.\client\dsb.cmd --port 10049 config
-.\client\dsb.cmd --port 10049 tasks
+dsb --port 10049 methods      # 或 run list_methods
+dsb --port 10049 config
+dsb --port 10049 tasks
 ```
 
 ## 11. 交付话术（收尾）

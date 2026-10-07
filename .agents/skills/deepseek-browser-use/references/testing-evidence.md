@@ -31,20 +31,16 @@
 CLI示例（仓库根目录）：
 
 ```powershell
-.\client\dsb.cmd --id 1001 state --text-only
-.\client\dsb.cmd --id 1001 state --out state.json
-.\client\dsb.cmd --id 1001 run screenshot -p fullPage=true -p fallbackToViewport=true -p timeoutMs=8000 --out shot.json
-.\client\dsb.cmd --id 1001 run screenshot -p force=true -p timeoutMs=3000 --out probe.json
+dsb --id 1001 state --text-only
+dsb --id 1001 state --out state.json
+dsb --id 1001 run screenshot -p fullPage=true -p fallbackToViewport=true -p timeoutMs=8000 --out shot.json
+dsb --id 1001 run screenshot -p force=true -p timeoutMs=3000 --out probe.json
 ```
 
-``state --text-only`` 的stdout保持纯页面文本，截图降级、快照不可靠、观测不完整及索引不可用的告警保留在stderr。重定向stdout留证时也保存stderr。``--select``不代表可以忽略这些告警；``--out``保存完整脱敏JSON，优先于终端字段筛选。
+``state --text-only`` 的stdout保持纯页面文本，截图降级、快照不可靠、观测不完整及索引不可用的告警保留在stderr。重定向stdout留证时也保存stderr。``--select``不代表可以忽略这些告警；``--out``保存完整JSON，优先于终端字段筛选。
 
 ## 诊断字段
 
 ``data.capture`` 包含请求/实际模式（``requestedMode`` / ``actualMode``）、实际截图调用数（``attempts``）、共享重试数（``retries``）、``elapsedMs``、``timeoutMs`` 和 ``stage``。阶段区分预检、熔断拒绝、截图、完成、写文件；浏览器路径还提供可获取的视口尺寸、页面关闭状态及浏览器连接状态。视口尺寸不等于文档总尺寸，不能由它推定全页已捕获。
 
 ``data.retryBudget`` 描述命令与嵌套截图的共享重试统计。事件泵伪故障共用最多两次额外重试，不再由各层分别重置次数；``attempts``为初次加共享重试数，``commandAttempts``为外层命令实际调用次数。明确请求的视口回退不属于事件泵重试，其截图调用数以 ``data.capture.attempts`` 为准。动作默认仍不重试；不要因为截图缺失而重复点击或提交。
-
-## Harness 插件
-
-Harness中的同等入口是 ``dsb_state`` / ``dsb_screenshot``，不是CLI进程；结果仍采用相同服务端字段。详见仓库 ``plugins/deepseek-browser-use/README.md``。若服务端尚未升级而返回 ``unknownParams``，参数未生效，不能声称已启用预算、强制探测或视口回退。

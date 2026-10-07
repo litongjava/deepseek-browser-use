@@ -21,7 +21,7 @@
 ```
 
 ```shell
-.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait
+dsb --port 10049 --id 1001 batch cmds.json --async --wait
 ```
 
 | 字段 | 默认 | 说明 |
@@ -64,7 +64,7 @@
 ```
 
 ```shell
-.\client\dsb.cmd --port 10049 --id 1001 batch search.json
+dsb --port 10049 --id 1001 batch search.json
 ```
 
 ```json
@@ -74,7 +74,7 @@
 ```
 
 ```shell
-.\client\dsb.cmd --port 10049 --id 1001 batch reads.json
+dsb --port 10049 --id 1001 batch reads.json
 ```
 
 - 需要循环、条件判断这类逻辑，就在批次里用 `execute_js` 一步做完，不要拆成几十条命令。
@@ -94,7 +94,7 @@
 ```
 
 ```shell
-.\client\dsb.cmd --port 10049 --id 1001 batch confirm.json
+dsb --port 10049 --id 1001 batch confirm.json
 ```
 
 | `expect` 字段 | 说明 |
@@ -140,7 +140,7 @@
 ### 用 `bodyFile` + `vars` 传长脚本（客户端-服务器模式下必看）
 
 > **多行脚本走命令行会被 shell 吃掉，这是 Windows 上最常见的一类假故障。** 把多行 JS 直接塞进
-> `dsb.cmd`/PowerShell 的参数里时，可能只有第一行到达服务端，报错却是语法级的
+> `dsb`/PowerShell 的参数里时，可能只有第一行到达服务端，报错却是语法级的
 > `SyntaxError: Unexpected end of input` —— 只说语法，人根本想不到是传输层把脚本切了。所以服务端遇到这类
 > 语法错误会额外回一句 `data.hint`（「脚本像是被截断了…改用 bodyFile 或 `js @脚本.js`」）并给出
 > `data.scriptLength`，客户端侧也用文件传（`js @脚本.js` / `--params @文件.json`），别在命令行里拼多行脚本。

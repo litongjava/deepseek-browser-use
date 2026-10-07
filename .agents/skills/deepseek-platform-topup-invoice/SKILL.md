@@ -8,9 +8,8 @@ description: 用 deepseek-browser-use 在 DeepSeek 开放平台（platform.deeps
 平台是 `platform.deepseek.com`（DeepSeek 开放平台，API 计费的那个，不是 chat.deepseek.com）。本文覆盖两件事：
 **给账号充值**与**就充值金额开票**。两条线共用一套登录态，通常一次会话里连着做。
 
-> **平台说明**：本文示例用 Windows 写法（`client\dsb.cmd`、`scripts\run\start-server.cmd`）。macOS/Linux 下分别换成
-> `./client/dsb` 与 `scripts/run/start-server.sh` / `stop-server.sh`，参数含义一致（`-Port` 对应 `-p`/`--port`，`-Jar` 对应
-> `--jar`）。下文所有 `client\dsb.cmd` / `scripts\run\*.cmd` 均按此替换。
+> **命令一律用 `dsb`（装在 `PATH` 上，任何目录直接敲）。** 服务端不用先起：连不上时 `dsb` 会自动拉起
+> 后端并重试一次（也可以 `dsb server start` / `dsb server stop` 显式管理）。
 
 ## 0. 边界（先读这一节）
 
@@ -76,19 +75,16 @@ description: 用 deepseek-browser-use 在 DeepSeek 开放平台（platform.deeps
 
 ```shell
 # 第一步永远是这一条:确认手上这份服务有哪些方法
-client\dsb.cmd --port 10049 run list_methods
+dsb --port 10049 run list_methods
 ```
 
-- 连 `list_methods` 都不支持 → 这就是一份落后很多的旧包，**改用开发态启动**（与仓库源码一致）：
+- 连 `list_methods` 都不支持 → 这就是一份落后很多的旧包，**改用与源码一致的 jar 启动**：
 
   ```shell
-  scripts\run\start-server.cmd                          # 默认 10049,开发态 mvn spring-boot:run
-  scripts\run\start-server.cmd -Jar dist\<某个 jar>      # 想用发行版就显式指定
+  dsb server start --jar dist\<某个 jar>    # 显式指定要用的 jar
+  dsb server status                        # 确认起来了、用的是哪个 jar
   ```
 
-- **`pwsh` 不一定装了**：本机实测没有 `pwsh`，直接敲 `pwsh -File scripts\run\start-server.ps1` 会
-  `not recognized`。用 `.cmd` 包装（`scripts\run\start-server.cmd` / `stop-server.cmd`），
-  或者 `powershell -NoProfile -ExecutionPolicy Bypass -File <脚本>`。
 - 启动脚本的 `/playwright/config` 那一步在老服务上会 404（`get_config` 不存在），**不影响启动**：
   健康检查过了就是起来了，用 `run list_methods` 复核即可。
 
@@ -102,7 +98,7 @@ client\dsb.cmd --port 10049 run list_methods
 1. `start` 时用**有头**模式（`--headful`），因为接下来一定要人登录、还要人扫码付钱：
 
    ```shell
-   client\dsb.cmd --port 10049 --id <数字ID> start --browser chrome --headful
+   dsb --port 10049 --id <数字ID> start --browser chrome --headful
    ```
 
 2. 直接用 `go_to_url` 打开 `https://platform.deepseek.com/transactions`，再 `get_url` 看是否被
@@ -118,7 +114,7 @@ client\dsb.cmd --port 10049 run list_methods
    ```
 
    ```
-   client\dsb.cmd --port 10049 --id <ID> run request_human_input --params @tmp\hr-login.json
+   dsb --port 10049 --id <ID> run request_human_input --params @tmp\hr-login.json
    ```
 
    **优先让人在浏览器窗口里自己登**（不要人在聊天里发密码）；有头模式下 `request_human_input`
@@ -130,7 +126,7 @@ client\dsb.cmd --port 10049 run list_methods
    ```
 
    ```
-   client\dsb.cmd --port 10049 --id <ID> --timeout 300 run wait_for_function --params @tmp\wait-login.json
+   dsb --port 10049 --id <ID> --timeout 300 run wait_for_function --params @tmp\wait-login.json
    ```
 
    登录成功后平台会自己跳到 `/usage`；**再 `get_browser_state` 复核一次**（地址 + 页面上出现
@@ -262,8 +258,8 @@ $colors.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
 ```
 
 ```
-client\dsb.cmd --port 10049 --id <ID> run execute_js --params @tmp\clear-highlight.json
-client\dsb.cmd --port 10049 --id <ID> run get_element_screenshot -p selector=canvas
+dsb --port 10049 --id <ID> run execute_js --params @tmp\clear-highlight.json
+dsb --port 10049 --id <ID> run get_element_screenshot -p selector=canvas
 ```
 
 注意顺序：**先摘高亮层、再截图**；中间不要再调 `get_browser_state`（它会把高亮层重新画回来）。
@@ -276,7 +272,7 @@ client\dsb.cmd --port 10049 --id <ID> run get_element_screenshot -p selector=can
 `http://localhost:10049/data/<id>/shot-N.png` 更好用，用户点开就能看）；② 让人看已经带到最前的浏览器窗口。
 
 ```
-client\dsb.cmd --port 10049 --id <ID> run request_human_input --params @tmp\hr-pay.json
+dsb --port 10049 --id <ID> run request_human_input --params @tmp\hr-pay.json
 ```
 
 `hr-pay.json` 里传 `selector: "canvas"` 让服务端把二维码一起截下来（回执里有 `imageUrl`），
@@ -405,7 +401,7 @@ client\dsb.cmd --port 10049 --id <ID> run request_human_input --params @tmp\hr-p
    ```
 
    ```
-   client\dsb.cmd --port 10049 --id <ID> run get_browser_state --params @tmp\state-expand.json
+   dsb --port 10049 --id <ID> run get_browser_state --params @tmp\state-expand.json
    ```
 
    （`state-expand.json` = `{"viewportExpansion": 1500, "highlight": false}`）
@@ -452,7 +448,7 @@ PDF, OFD, and XML formats will be available for download in the email.
 2. **接口请求体**（证明税号/邮箱真的发出去了——UI 里看不到税号）：
 
    ```
-   client\dsb.cmd --port 10049 --id <ID> run get_requests -p filter=fapiao
+   dsb --port 10049 --id <ID> run get_requests -p filter=fapiao
    ```
 
    实测拿到 `POST https://platform.deepseek.com/api/v0/fapiao/apply`，请求体：
@@ -465,7 +461,7 @@ PDF, OFD, and XML formats will be available for download in the email.
 3. **接口响应**：用回执里的 `requestId` 取响应体（`get_response_body` 是**回看**，跳页也读得到）：
 
    ```
-   client\dsb.cmd --port 10049 --id <ID> run get_response_body -p requestId=<requestId> --no-redact
+   dsb --port 10049 --id <ID> run get_response_body -p requestId=<requestId> --no-redact
    ```
 
    ```
@@ -520,8 +516,8 @@ PDF, OFD, and XML formats will be available for download in the email.
 或 `Missing argument in parameter list`），带逗号的 `-Dtest=A,B,C` 也一样。**把参数写进 JSON 文件**：
 
 ```
-client\dsb.cmd --port 10049 --id <ID> run input_text_by_selector --params @tmp\fill.json
-client\dsb.cmd --port 10049 --id <ID> batch tmp\batch-fill.json --keep-going
+dsb --port 10049 --id <ID> run input_text_by_selector --params @tmp\fill.json
+dsb --port 10049 --id <ID> batch tmp\batch-fill.json --keep-going
 ```
 
 ### 5.6 钱的事要留余额证据
@@ -533,7 +529,7 @@ client\dsb.cmd --port 10049 --id <ID> batch tmp\batch-fill.json --keep-going
 
 ```
 ① dsb run list_methods                     # 先确认服务的能力(旧 jar 在这里就露馅)
-② scripts\run\start-server.cmd             # 需要时(用开发态,与源码一致)
+② dsb server status                       # 需要时:确认服务在跑、用的是哪个 jar(没起就自动拉起/`dsb server start`)
 ③ dsb --id <ID> start --browser chrome --headful
 ④ go_to_url https://platform.deepseek.com/transactions  →  get_url 看是否被踢到 /sign_in
 ⑤ 没登录:request_human_input + wait_for_function 等人登录,再复核地址与 Topped-up balance

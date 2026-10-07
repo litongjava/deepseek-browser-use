@@ -9,9 +9,8 @@ whenToUse: 需要把一个本地视频文件（或一组视频）投稿到哔哩
 一次真实任务（2026-09-25，发布 `使用 deepseek-browser-use 在腾讯云购买服务器.mp4`，9 分 48 秒 / 1080P / 47MB）
 的完整记录:从打开投稿页到拿到 BV 号。文中数据都已脱敏,替换占位符即可复用。
 
-> **平台说明**：本文示例用 Windows 的 `client/dsb.cmd`。macOS/Linux 下换成 `./client/dsb`（参数完全相同），
-> 例如 `./client/dsb --id 3001 start --browser chrome --headful`；服务端启动/停止换成 `scripts/run/start-server.sh` /
-> `stop-server.sh`。下文所有以 `client/dsb.cmd` 开头或嵌在命令里的调用，均按此替换。
+> **命令一律用 `dsb`（装在 `PATH` 上，任何目录直接敲）。** 服务端不用先起 —— 连不上时 `dsb` 会自己
+> 把后端拉起来并重试（也可以 `dsb server start` / `dsb server stop` 显式管理）。
 
 ## 一、站点特征
 
@@ -36,8 +35,8 @@ whenToUse: 需要把一个本地视频文件（或一组视频）投稿到哔哩
 ### 1. 起任务并打开投稿页
 
 ```bash
-client/dsb.cmd --id 3001 start --browser chrome --headful
-client/dsb.cmd --id 3001 run go_to_url -p url=https://member.bilibili.com/platform/upload/video/frame
+dsb --id 3001 start --browser chrome --headful
+dsb --id 3001 run go_to_url -p url=https://member.bilibili.com/platform/upload/video/frame
 ```
 
 有头（`--headful`）**是必须的**:登录要人扫码。
@@ -53,10 +52,10 @@ client/dsb.cmd --id 3001 run go_to_url -p url=https://member.bilibili.com/platfo
 
 ```bash
 # 路径 A(推荐):人就在机器旁 —— 把窗口带到最前,让他直接扫
-client/dsb.cmd --id 3001 run bring_to_front
+dsb --id 3001 run bring_to_front
 
 # 路径 B(人不在机器旁):把二维码**抠出来存成文件**,再用 /data/** 静态路由给人看
-client/dsb.cmd --id 3001 js "() => document.querySelector('.login-scan__qrcode img').src"
+dsb --id 3001 js "() => document.querySelector('.login-scan__qrcode img').src"
 # 把回执里的 base64 落成 data/<id>/bili-qr.png,然后给人这个地址:
 #   http://localhost:10049/data/<id>/bili-qr.png
 ```
@@ -67,7 +66,7 @@ client/dsb.cmd --id 3001 js "() => document.querySelector('.login-scan__qrcode i
 **怎么确认真的登录了**——别看页面变没变,看控制台:
 
 ```bash
-client/dsb.cmd --id 3001 run get_page_snapshot -p includeConsole=true --json
+dsb --id 3001 run get_page_snapshot -p includeConsole=true --json
 # 日志里出现「手机端扫码成功，等待确认」→「登录成功, 即将跳转」就是成了
 ```
 
@@ -102,7 +101,7 @@ client/dsb.cmd --id 3001 run get_page_snapshot -p includeConsole=true --json
 
 ```bash
 # 一行读出稿件卡片与视频项的状态
-client/dsb.cmd --id 3001 js "() => JSON.stringify({tasks:[...document.querySelectorAll('.task-list-content-item')].map(e=>({title:(e.querySelector('.task-title-text')||{}).innerText,status:(e.querySelector('.task-status .text')||{}).innerText})),files:[...document.querySelectorAll('.file-item .title-text')].map(e=>e.getAttribute('title'))})"
+dsb --id 3001 js "() => JSON.stringify({tasks:[...document.querySelectorAll('.task-list-content-item')].map(e=>({title:(e.querySelector('.task-title-text')||{}).innerText,status:(e.querySelector('.task-status .text')||{}).innerText})),files:[...document.querySelectorAll('.file-item .title-text')].map(e=>e.getAttribute('title'))})"
 ```
 
 ### 5. 填标题与简介
@@ -138,7 +137,7 @@ client/dsb.cmd --id 3001 js "() => JSON.stringify({tasks:[...document.querySelec
 # 2) 按 title 属性点选项（下拉项在 .drop-list-v2-item，title 就是分区名）
 {"click_element_by_selector": {"selector": ".video-human-type .drop-list-v2-item[title='科技数码']"}}
 # 3) 回读确认
-client/dsb.cmd --id 3001 js "() => document.querySelector('.video-human-type .select-item-cont').innerText"
+dsb --id 3001 js "() => document.querySelector('.video-human-type .select-item-cont').innerText"
 ```
 
 **第 2 步的回执很可能是 `changed:false` + `coveredBy: div.header`(提示说「被遮挡物吃掉了」),
@@ -166,7 +165,7 @@ client/dsb.cmd --id 3001 js "() => document.querySelector('.video-human-type .se
    换一个标签或干脆少一个。**每次只加一条、加完回读**能最快发现哪一种被吞:
 
 ```bash
-client/dsb.cmd --id 3001 js "() => JSON.stringify({tags:[...document.querySelectorAll('.tag-pre-wrp .label-item-v2-content')].map(e=>e.innerText.trim()),hint:(document.querySelector('.tag-last-wrp')||{}).innerText})"
+dsb --id 3001 js "() => JSON.stringify({tags:[...document.querySelectorAll('.tag-pre-wrp .label-item-v2-content')].map(e=>e.innerText.trim()),hint:(document.querySelector('.tag-last-wrp')||{}).innerText})"
 ```
 
 ### 8. 创作声明（必填,加了就不能改）
@@ -205,7 +204,7 @@ ffmpeg -y -v error -ss 292 -i "<视频>.mp4" -frames:v 1 cover.png
 # 3) 点「完成」（注意：它是个 div，不是 <button>）
 {"click_element_by_selector": {"selector": ".cover-editor-content-right-bottom .button.submit"}}
 # 4) 回读：coverEmpty 变成 false 才算设上
-client/dsb.cmd --id 3001 js "() => JSON.stringify({coverEmpty: !!document.querySelector('.cover .cover-empty')})"
+dsb --id 3001 js "() => JSON.stringify({coverEmpty: !!document.querySelector('.cover .cover-empty')})"
 ```
 
 上传成功后回执里会出现 `blob:` 预览,页面文案变成「双比例同步改动」——**4:3 与 16:9 两个比例由
@@ -214,7 +213,7 @@ client/dsb.cmd --id 3001 js "() => JSON.stringify({coverEmpty: !!document.queryS
 ### 10. 提交前对一遍,再点「立即投稿」
 
 ```bash
-client/dsb.cmd --id 3001 js "() => JSON.stringify({title:(document.querySelector('input[placeholder=\"请输入稿件标题\"]')||{}).value,zone:(document.querySelector('.video-human-type .select-item-cont')||{}).innerText,tags:[...document.querySelectorAll('.tag-pre-wrp .label-item-v2-content')].map(e=>e.innerText.trim()),statement:(document.querySelector('.bcc-select-input-inner')||{}).value,coverEmpty:!!document.querySelector('.cover .cover-empty'),files:[...document.querySelectorAll('.file-item .title-text')].map(e=>e.getAttribute('title'))})"
+dsb --id 3001 js "() => JSON.stringify({title:(document.querySelector('input[placeholder=\"请输入稿件标题\"]')||{}).value,zone:(document.querySelector('.video-human-type .select-item-cont')||{}).innerText,tags:[...document.querySelectorAll('.tag-pre-wrp .label-item-v2-content')].map(e=>e.innerText.trim()),statement:(document.querySelector('.bcc-select-input-inner')||{}).value,coverEmpty:!!document.querySelector('.cover .cover-empty'),files:[...document.querySelectorAll('.file-item .title-text')].map(e=>e.getAttribute('title'))})"
 ```
 
 立即投稿是 `span.submit-add`（`存草稿` 是 `span.submit-draft`）:
@@ -228,12 +227,12 @@ client/dsb.cmd --id 3001 js "() => JSON.stringify({title:(document.querySelector
 
 ```bash
 # 成不成看这句文案
-client/dsb.cmd --id 3001 js "() => document.body.innerText.replace(/\s+/g,' ').slice(0,200)"
+dsb --id 3001 js "() => document.body.innerText.replace(/\s+/g,' ').slice(0,200)"
 # 「稿件投递成功 … 立即加热 查看进度 再投一个」= 提交成功
 
 # 再到稿件管理页回读（拿 BV 号）
-client/dsb.cmd --id 3001 run go_to_url -p url=https://member.bilibili.com/platform/upload-manager/article
-client/dsb.cmd --id 3001 js "() => JSON.stringify([...document.querySelectorAll('a[href*=\"/video/BV\"]')].map(a=>({href:a.getAttribute('href'),text:a.innerText.trim()})))"
+dsb --id 3001 run go_to_url -p url=https://member.bilibili.com/platform/upload-manager/article
+dsb --id 3001 js "() => JSON.stringify([...document.querySelectorAll('a[href*=\"/video/BV\"]')].map(a=>({href:a.getAttribute('href'),text:a.innerText.trim()})))"
 ```
 
 稿件管理页列表第一行就是刚投的稿件:标题、时长、时间,链接形如
@@ -314,7 +313,7 @@ hint: …目标中心点上命中的是别的元素——很可能被遮挡物�
 
 一次会话里把「填值 + 回车」拼成 12 条命令的批量,跑在中途页面整页重建,客户端侧直接看不到结果。
 **小步走**:一个字段一次调用、加完回读;批量的条目越多,一次页面重渲染吞掉的越多。
-长批次用 `client/dsb.cmd --id <id> batch cmds.json --async --wait`,别让它撞 HTTP 超时。
+长批次用 `dsb --id <id> batch cmds.json --async --wait`,别让它撞 HTTP 超时。
 
 ## 三·补、第二次投稿（2026-09-25）新增的实测结论
 
@@ -343,7 +342,7 @@ hint: …目标中心点上命中的是别的元素——很可能被遮挡物�
 # 1) 每 40 秒抽一帧(1080p PNG,文件名用 ASCII,省得跟 shell 打架)
 ffmpeg -y -v error -ss <秒> -i "<视频>.mp4" -frames:v 1 tmp\bili-frame-070.png
 # 2) 逐帧 OCR,只把命中的关键词打出来,不吃 token
-client/dsb.cmd --port 10049 --json run ocr_image -p path=<帧的绝对路径>
+dsb --port 10049 --json run ocr_image -p path=<帧的绝对路径>
 ```
 
 - **`--json` 是必须的**：不加它，dsb 会先打一行 `ocr_image OK 631ms`，`ConvertFrom-Json` 直接解析失败

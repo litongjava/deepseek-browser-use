@@ -64,7 +64,7 @@ POST http://localhost:10049/playwright/command
   `NNNNNN-<任务id>-<方法>.json` 完整请求响应、`uploads.log` 上传记录）。
 - 页面留档：`data/<id>/<seq>.png`（截图）与 `data/<id>/<seq>.txt`（同刻的页签 + 可交互结构化文本）。
   **事后复看某一步**直接 GET `http://localhost:10049/data/<id>/<seq>.txt`，比重新跑一遍便宜得多。
-- 客户端：`python client/dsb.py`（跨平台、退出码区分传输错/业务失败/用法错、默认脱敏），
+- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起），
   写进脚本时用它，不要手拼 `-d '...'`（带中文和引号的 JSON 在 PowerShell 里很容易被吃掉引号，实测 `curl.exe` 会
   返回 `请求体不是合法 JSON：not allow unquoted fieldName`）。
 - **两份日志都默认脱敏但不会自动清理**：手机号、18 位身份证号/统一社会信用代码、邮箱、长数字会被掩成 `***`，
@@ -827,7 +827,7 @@ POST http://localhost:10049/playwright/command
 | `input_text_by_selector 失败：[ELEMENT_HIDDEN] 元素当前不可见` | 目标是隐藏输入框 | 优先切到它所在的那一步；不行才用 `mode:"js"`，并注意回执的 `data.committed=false` |
 | `upload_file 失败：缺少参数 index` | 这个构建的 `upload_file` 要求 `index` | 改用/补上 `selector`（4.4、4.5）；本站在这里**优先选择器** |
 | `send_keys 失败：Unknown key: "..."` | `send_keys` 只认键名 | 中文一律用 `input_text_by_selector`（8.6） |
-| `请求体不是合法 JSON：not allow unquoted fieldName` | 客户端把 JSON 拼坏了（PowerShell 吃引号、手拼 `-d '...'` 常见） | 改用 `dsb` 客户端：`.\client\dsb.cmd ...`，参数带中文时写进 `--params @文件.json`；别在命令行手拼中文 JSON |
+| `请求体不是合法 JSON：not allow unquoted fieldName` | 客户端把 JSON 拼坏了（PowerShell 吃引号、手拼 `-d '...'` 常见） | 改用 `dsb` 客户端：`dsb ...`，参数带中文时写进 `--params @文件.json`；别在命令行手拼中文 JSON |
 | `不支持的方法：xxx` | 服务端这个版本没有该方法 | **先 `list_methods` 确认能力再写脚本**；老版本发布包可能没有 `wait_for_idle` / `get_form_state` 等新方法，缺失就用 `execute_js` 自己实现等价逻辑 |
 | `没有找到对应的浏览器实例：<id>` | 实例不在（服务重启过 / id 写错 / 已 `close`） | `list_tasks` 看活着的任务，再决定 `start` 还是改用已有 id |
 | `start 失败：该 id 已经有正在运行的浏览器实例：<id>` | 同 id 重复 `start` | 先 `close` 或换 id（主技能第 12 条） |

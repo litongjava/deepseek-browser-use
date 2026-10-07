@@ -8,31 +8,29 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 
 测试验收、截图超时或留证时，读取 [testing-evidence.md](references/testing-evidence.md)：前置条件、业务断言、截图完整性分别记录。自动/手动截图共用熔断，``force:true``仅探测一次；全页回退图必须标注为视口证据。``state --text-only``仍通过stderr提示证据缺失。
 
-本文CLI约束针对命令行方式；Harness已加载本仓库原生插件时使用其 ``dsb_*`` 工具，参阅仓库 ``plugins/deepseek-browser-use/README.md``，不需要另起CLI会话。
-
 > ## ⚠️ CLI方式第一条：调用统一走 `dsb`
 >
-> **本机（Windows）的CLI入口是 `dsb`**：仓库根目录下的 `.\client\dsb.cmd`，
-> 在仓库根目录执行就是 `.\client\dsb.cmd ...`。**不要手写 `curl`/`Invoke-WebRequest` 往 `POST /playwright/command` 拼 JSON，
-> 也不要写 `python client\dsb.py ...`**（只有 cmd.exe 会吃掉参数里的 `&`/`^`/`%`/`|` 时才退回，且要点明原因）。
+> **`dsb` 是装在 `PATH` 上的一个 Go 二进制，在任何目录直接敲 `dsb ...` 就行**（源码在仓库 `dsb/`）。
+> **不要手写 `curl`/`Invoke-WebRequest` 往 `POST /playwright/command` 拼 JSON**，
+> 也不要写 `python dsb.py` / `.\client\dsb.cmd` 之类旧入口 —— 那些已经删掉了，只有 `dsb`。
 >
-> | 要干的事 | 正确写法（在仓库根目录下执行） |
+> | 要干的事 | 正确写法 |
 > | --- | --- |
-> | 看服务活没活 | `.\client\dsb.cmd --port 10049 health`（**别用 curl 探 `/playwright/health`**） |
-> | 服务没起 | `scripts\run\start-server.cmd`（或 `pwsh -File scripts/run/start-server.ps1`），停：`scripts\run\stop-server.cmd` |
-> | 开任务 | `.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful` |
-> | 走一步 | `.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com` |
-> | 读页面 | `.\client\dsb.cmd --port 10049 --id 1001 state --text-only`（`--full` 要标题/URL/元素） |
-> | 批量 | `.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait` |
-> | 记不清子命令 | `.\client\dsb.cmd --help`（`run`/`state`/`js`/`batch`/`upload`/`last`/`selftest` 是子命令，`js` 不能跟在 `run` 后面） |
+> | 看服务活没活 | `dsb --port 10049 health`（**别用 curl 探 `/playwright/health`**） |
+> | 服务没起 | 不用管：普通命令会自动拉起后端并重试一次（显式管理用 `dsb server start` / `dsb server stop`） |
+> | 开任务 | `dsb --port 10049 --id 1001 start --browser chrome --headful` |
+> | 走一步 | `dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com` |
+> | 读页面 | `dsb --port 10049 --id 1001 state --text-only`（`--full` 要标题/URL/元素） |
+> | 批量 | `dsb --port 10049 --id 1001 batch cmds.json --async --wait` |
+> | 记不清子命令 | `dsb --help`（`run`/`state`/`js`/`batch`/`upload`/`last`/`server`/`selftest` 是子命令，`js` 不能跟在 `run` 后面） |
 >
 > 好处是现成的：参数不用跟 shell 打架、每次调用都留档（`logs/agent/<会话>/`、`steps.log`）、
-> 退出码把「服务没起(1)」与「业务失败(2)」分开、返回体自动脱敏。**跨调用要复用同一个 `--id`**（实例只在内存里）。
+> 退出码把「服务没起(1)」与「业务失败(2)」分开、服务没起会自动拉起。**跨调用要复用同一个 `--id`**（实例只在内存里）。
 > 只关心某几个字段时用 `--select data.text` / `--grep 关键词` / `--out 文件.json`，别把整封几万字的回执拉进上下文。
 
-新增阅读方式：`dsb state --text-only` 只输出脱敏结构化文本；`--viewport-expansion -1`
+新增阅读方式：`dsb state --text-only` 只输出结构化文本；`--viewport-expansion -1`
 纳入视口外元素，`--include-frames` 纳入跨域 frame。字段筛选用 `--select data.fields` 等，
-仍保留客户端日志、脱敏和失败退出码，详见 [客户端分册](references/client.md)。
+仍保留客户端日志、原文输出和失败退出码，详见 [客户端分册](references/client.md)。
 快照返回 ``snapshotConsistent:false`` / ``indicesUsable:false`` 时不要使用该次索引；
 点击返回 ``actionStatus:unknown`` 时先读取业务结果，禁止自动重发。已完成的动作与后续观测错误分别报告，
 详见 [协议分册](references/protocol.md)。同一任务的依赖命令要等前一条返回后再执行。
@@ -40,13 +38,15 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 这是给智能体用的浏览器中间件：一个 tio-boot 服务，用 HTTP 驱动真实的浏览器（默认是**本机安装的 Google Chrome**，配一份**共享的持久化 profile**），把网页变成「可交互结构化文本 + 截图」。
 
 - 默认地址：`http://localhost:10049`（端口来自 `playwright-server/src/main/resources/app.properties` 的 `server.port`）
-- 启动服务：`java -jar deepseek-browser-use-<版本>-<平台>.jar`（发行包），或开发态在 `playwright-server` 目录执行 `mvn spring-boot:run`
-- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物，实测有一版连 `list_methods` / `get_config` / `shutdown` 都不支持，拿它开工会在半路撞「不支持的方法」。**开工第一条命令永远是 `list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就用开发态起（Windows 用 `scripts/run/start-server.cmd`，macOS/Linux 用 `scripts/run/start-server.sh`；停止分别对应 `stop-server.cmd` / `stop-server.sh`）。
+- 服务也可能在**别的机器**上，或本机同时开着好几个实例（不同端口 = 不同 profile / 登录态）：用 `--host`/`--port` 指定，或 `dsb server target add <名字> --host <主机> --port <端口>` 登记后 `--use <名字>`。远端目标不自动拉起（那台机器上的服务得自己起）。
+- 启动服务：`dsb server start`（连不上时普通命令会自动拉起）；也可以 `java -jar deepseek-browser-use-<版本>-<平台>.jar`（发行包），或开发态在 `playwright-server` 目录执行 `mvn spring-boot:run`
+- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物，实测有一版连 `list_methods` / `get_config` / `shutdown` 都不支持，拿它开工会在半路撞「不支持的方法」。**开工第一条命令永远是 `list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
 - **只有一个业务端点**：`POST http://localhost:10049/playwright/command`
 - 另有 `GET /playwright/health`（健康检查）与 `GET /data/**`（读取截图与结构化文本）
 - 共 120 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测
-- **本机是 Windows：调客户端一律写 `.\client\dsb.cmd ...`（在仓库根目录执行），不要写 `python client\dsb.py ...`。**
-  两者参数完全一致、包装内部最终也是交给 `dsb.py`，但**默认入口必须是 `dsb.cmd`**：它是这个仓库对外的客户端入口（负责找解释器、透传参数与退出码），手写 `python dsb.py` 等于跳过包装、把「客户端」降级成「随手写的一段脚本」，还会绕开文档里所有以 `dsb.cmd` 为前缀的现成示例。只有撞上 cmd.exe 会吃掉参数里的 `&`/`^`/`%`（见 `references/client.md`）这一类包装层限制时，才临时退回 `python client\dsb.py`，并在说明里点出原因。macOS/Linux 对应 `./client/dsb`。
+- **调客户端一律写 `dsb ...`（装在 `PATH` 上，任何目录直接敲），不要用 `curl`/`Invoke-WebRequest` 手拼 JSON。**
+  它是这个仓库对外的客户端入口：子命令式传参、统一退出码、每次调用留档、服务没起时自动拉起后端。
+  细节见 [客户端分册](references/client.md)。
 
 **本文只放「每次都要用的核心」；细节按需再读同目录分册（都在 `.agents/skills/deepseek-browser-use/references/`）：**
 
@@ -98,7 +98,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **要用户提供敏感字段（银行卡号 / 身份证号 / 验证码）** | **先问，别替用户决定**：让他选「自己在页面上填」还是「告诉你、你来填」（第 72 条）。用户选了自己填，就**不要**再把值要过来 |
 | 模型读不了图，但要读验证码 / 维护图 | `ocr_image`（Windows 自带 OCR，支持中文） |
 | 长批次怕 HTTP 超时 | `commands` 加 `async: true` + `get_job`；或客户端 `batch cmds.json --async --wait` |
-| 手拼 JSON 被引号 / 中文 / 编码坑了（Windows 尤其） | 别硬拼，用仓库里的 `dsb` 客户端：Windows 敲 `.\client\dsb.cmd`，macOS/Linux 敲 `./client/dsb`，参数进文件用 `batch cmds.json` / `js @脚本.js`，见 `references/client.md` |
+| 手拼 JSON 被引号 / 中文 / 编码坑了（Windows 尤其） | 别硬拼，用仓库里的 `dsb` 客户端：Windows 敲 `dsb`，macOS/Linux 敲 `dsb`，参数进文件用 `batch cmds.json` / `js @脚本.js`，见 `references/client.md` |
 | **`--select` 只挑一个字段，结果整封回执都打出来了** | 只有「路径在这条响应里不存在」才会退回整封（stderr 会说明）。批量回执里只要有一步失败、整批 `ok` 就是 `false`，但 `data.results[N]` 仍在 —— `--select data.results.N.…` 对失败批次**照常生效**，失败那一步也能直接挑出来看 |
 | **`execute_js` 老是撞 `Object doesn't exist: response@…`，只能自己手拼 `retryOnSpurious`** | 客户端已给开关：`js @脚本.js --retry-on-spurious`（只给**只读**脚本加；会点按钮/提交表单的脚本不要加，重发等于再执行一次） |
 | **`--params @文件.json` 报「缺少参数 xxx」，可文件里明明写着** | 文件里写**整个请求体**（`{"id":…,"method":…,"params":{…}}`）也认，会自动只取 `params`；`batch` 同样认整个请求体。留档文件与文档示例可以直接原样存下来喂进去 |
@@ -140,7 +140,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 **先记住一句话：这套中间件就是一个本地 HTTP 服务（tio-boot），浏览器跑在服务端进程里，智能体只跟 HTTP 打交道。**
 
 理解这一点，后面所有现象都能对上：客户端与浏览器可以不在同一台机器上；所有能力（点击、读页面、
-执行 JS、截图、上传……）都收敛到**同一个端点**；超时、脱敏、留档、重试都发生在这一层。
+执行 JS、截图、上传……）都收敛到**同一个端点**；超时、留档、重试都发生在这一层。
 
 | 项 | 值 |
 | --- | --- |
@@ -152,7 +152,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | 响应体 | `{"data":{},"code":1,"ok":true}` |
 
 > **不要手写 `curl`/`Invoke-WebRequest` 去拼这层 JSON。** 仓库里的 `dsb` 客户端就是这个 HTTP 端点的封装：
-> 它替你找解释器、传参、解析回执、脱敏、每步留档，并把退出码分成「服务没起(1)」与「业务失败(2)」。
+> 它替你传参、解析回执、每步留档，并把退出码分成「服务没起(1)」与「业务失败(2)」，连不上时还会自动把服务拉起来。
 > 手拼 JSON 在中文 / 引号上必踩坑，还会绕开留档与退出码 —— 本文之后所有示例都写 `dsb`。
 
 ### 起停服务（实测命令与回执）
@@ -174,23 +174,23 @@ scripts\run\stop-server.cmd
 也可以用 `dsb` 发命令让服务自己退出（`stop-server.cmd` 做的就是这件事）：
 
 ```shell
-.\client\dsb.cmd --port 10049 run shutdown
+dsb --port 10049 run shutdown
 ```
 
 起没起来**不要靠猜**，用 `dsb` 问一句（这是本仓库唯一的探活方式，别去请求 `/playwright/health`）：
 
 ```shell
-.\client\dsb.cmd --port 10049 health
+dsb --port 10049 health
 ```
 
 实测回执（2026-10，本机 Windows，本会话）：
 
 ```text
-> .\client\dsb.cmd --port 10049 health
+> dsb --port 10049 health
 {"data":{"name":"playwright-server"},"code":1,"ok":true}
 # 退出码 0；服务没起时是传输错，退出码 1（而不是业务失败 2）
 
-> .\client\dsb.cmd --port 10049 --id 2026100501 start --browser chrome --headful
+> dsb --port 10049 --id 2026100501 start --browser chrome --headful
 start OK 3520ms
 {"data":{"engineHonored":true,"effectiveBrowser":"chrome",
  "browser":{"type":"chrome","engine":"chromium","profileDir":"<仓库>\\.dsb-backend\\profile",
@@ -214,15 +214,15 @@ start OK 3520ms
 - 响应信封：`{"data":{},"code":1,"ok":true}`。`code=1`/`ok=true` 成功；`code=0`/`ok=false` 失败，原因在 `msg`（中文）。**空字段不输出**：成功回执里既没有 `msg` 也没有 `error`，失败回执里没有 `error` —— 所以判断成败只认 `ok`/`code`，别用「字段在不在」来判断（想恢复带 null 的输出，配置项 `browser.json.skipNull=false`）。
 - **任何参数问题都返回 JSON 错误，不再有 HTTP 500**：缺必填参数得到 `click_element_by_index 失败：缺少参数 index`，方法名不存在得到 `不支持的方法：xxx`（还会按编辑距离给近似建议），请求体不是合法 JSON 得到 `请求体不是合法 JSON：...`。实例不存在时统一返回 `没有找到对应的浏览器实例：<id>`。
 
-同一串操作，用 `dsb` 走一遍（在仓库根目录执行；macOS/Linux 把 `.\client\dsb.cmd` 换成 `./client/dsb`）：
+同一串操作，用 `dsb` 走一遍（装在 `PATH` 上，任何目录直接敲）：
 
 ```shell
-.\client\dsb.cmd --port 10049 health                        # 探活
-.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
-.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
-.\client\dsb.cmd --port 10049 --id 1001 state --text-only   # 读页面（要标题/URL/元素用 --full）
-.\client\dsb.cmd --port 10049 --id 1001 run click_element_by_index -p index=0
-.\client\dsb.cmd --port 10049 --id 1001 close
+dsb --port 10049 health                        # 探活
+dsb --port 10049 --id 1001 start --browser chrome --headful
+dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
+dsb --port 10049 --id 1001 state --text-only   # 读页面（要标题/URL/元素用 --full）
+dsb --port 10049 --id 1001 run click_element_by_index -p index=0
+dsb --port 10049 --id 1001 close
 ```
 
 > 上面那段里的 `{id, method, params}` 与 HTTP 响应体依然成立 —— `dsb` 只是替你把它们组装好发出去。
@@ -233,19 +233,17 @@ start OK 3520ms
 手拼 HTTP 请求体在参数带中文、引号、换行时很容易出错（PowerShell 尤其爱吃掉引号），返回体还得自己解析。仓库里的 `dsb` 客户端把这几件事都替你办了：**子命令式传参**、**批量与异步**、**每一步的请求与响应都留档**。凡是「发请求 → 读页面 → 再发请求」的任务，用它比手拼 JSON 少一大类无谓的失败。
 
 ```shell
-# Windows（本机首选，在仓库根目录执行）：.\client\dsb.cmd ...
-# macOS/Linux 把前缀换成 ./client/dsb（软链进 PATH 后直接敲 dsb）；
-# 只有包装层本身用不了（如参数里的 &/^/% 被 cmd.exe 吃掉）才退回 python client/dsb.py。
-.\client\dsb.cmd --port 10049 health
-.\client\dsb.cmd --port 10049 --id 1001 start --browser chrome --headful
-.\client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
-.\client\dsb.cmd --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
-.\client\dsb.cmd --port 10049 --id 1001 js @脚本.js --var who=dsb
-.\client\dsb.cmd --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
-.\client\dsb.cmd --port 10049 selftest --browser chrome       # 不确定服务端状态时先自检
+# dsb 装在 PATH 上，任何目录直接敲；服务没起会自动拉起
+dsb --port 10049 health
+dsb --port 10049 --id 1001 start --browser chrome --headful
+dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
+dsb --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
+dsb --port 10049 --id 1001 js @脚本.js --var who=dsb
+dsb --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
+dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时先自检
 ```
 
-**退出码 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错** —— 把「服务没起」与「业务失败」分开了，写脚本时不用去解析 `msg` 猜。还有两个直接好处：`steps.log` 一行一次调用（时间、序号、任务 ID、方法、成败、耗时、摘要），第几步开始不对一眼就能看出来；每一步的请求与响应都留档。**多行脚本不要写在命令行里**（经 cmd/PowerShell 传参会只剩第一行），用 `js @脚本.js`、`--params @文件.json` 或 `batch cmds.json`。完整用法（含 `--summary` 与 `responseMode` 的区别、脱敏规则）见 `references/client.md`。
+**退出码 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错** —— 把「服务没起」与「业务失败」分开了，写脚本时不用去解析 `msg` 猜。还有两个直接好处：`steps.log` 一行一次调用（时间、序号、任务 ID、方法、成败、耗时、摘要），第几步开始不对一眼就能看出来；每一步的请求与响应都留档。**多行脚本不要写在命令行里**（经 cmd/PowerShell 传参会只剩第一行），用 `js @脚本.js`、`--params @文件.json` 或 `batch cmds.json`。完整用法（含 `--summary` 与 `responseMode` 的区别、`--out`/`--grep`、后端管理）见 `references/client.md`。
 
 > ### 别把 `dsb` 的正常输出截断成「失败」（宿主里显示成红色 exit code 1）
 >
@@ -253,16 +251,16 @@ start OK 3520ms
 >
 > ```powershell
 > # ✗ 假失败：dsb 正常输出 121 行方法清单，被 Select-Object 提前掐断 → exit 1
-> .\client\dsb.cmd methods | Select-Object -First 20
+> dsb methods | Select-Object -First 20
 >
 > # ✓ 要么不截断
-> .\client\dsb.cmd methods
+> dsb methods
 > # ✓ 要么先落盘、再截断文件（文件读取不会反向掐断上游进程）
-> .\client\dsb.cmd methods > $env:TEMP\m.txt; Get-Content $env:TEMP\m.txt -TotalCount 20
+> dsb methods > $env:TEMP\m.txt; Get-Content $env:TEMP\m.txt -TotalCount 20
 > ```
 >
-> 判据：`dsb` 自己的退出码（`$LASTEXITCODE`，紧跟在 `.\client\dsb.cmd` 那条命令之后读）才是它的真实结果；`Get-Content` / `Select-Object` 这类 **cmdlet 不会刷新 `$LASTEXITCODE`**，你读到的 1 可能来自上一条完全无关的命令。只想筛选时用 `Select-String`，不要用 `Select-Object -First`。
-> （若这条命令真的因包装层把参数吃掉而失败，才改用 `python client\dsb.py methods`。）
+> 判据：`dsb` 自己的退出码（`$LASTEXITCODE`，紧跟在 `dsb` 那条命令之后读）才是它的真实结果；`Get-Content` / `Select-Object` 这类 **cmdlet 不会刷新 `$LASTEXITCODE`**，你读到的 1 可能来自上一条完全无关的命令。只想筛选时用 `Select-String`，不要用 `Select-Object -First`。
+> （这条命令失败时先看退出码：1 是服务问题，2 是业务问题。）
 
 不确定有什么能力时先问服务自己：`list_methods`（方法名拿不准别猜）、`get_config`（生效的引擎 / profile 目录 / 超时与降级开关 / 脚本与日志目录）、`list_tasks`（活着的任务与共享浏览器）。三者也有 GET 版本：`GET /playwright/methods`、`GET /playwright/config`、`GET /playwright/tasks`。
 

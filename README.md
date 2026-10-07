@@ -58,9 +58,11 @@ java -jar deepseek-browser-use-1.0.0-windows-x64.jar
 
 ```shell
 # 健康检查
-curl -s http://localhost:10049/playwright/health
-# {"code":1,"data":{"name":"playwright-server"},"ok":true,...}
+dsb health
 ```
+
+> 下面用 `dsb`(仓库自带客户端,见 [`dsb/README.md`](dsb/README.md))演示。它是这套 HTTP 的封装:
+> 传参、解析回执、留档、退出码都替你办了。要直接看 HTTP 协议本身,`GET /playwright/health` 也是同一个东西。
 
 首次启动会把内嵌的 Chromium 解压到用户缓存目录（`~/.cache/deepseek-browser-use/`），之后每次启动都直接用缓存，几秒内可用。
 
@@ -69,31 +71,28 @@ curl -s http://localhost:10049/playwright/health
 ### 一个最小的使用示例
 
 ```shell
-BASE=http://localhost:10049/playwright/command
-
-# 1. 起一个任务（headless=false 会弹出真实窗口，可以看着它操作）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"start","params":{"headless":false}}'
+# 1. 起一个任务（--headful 会弹出真实窗口，可以看着它操作）
+dsb --id 1001 start --headful
 
 # 2. 打开页面（响应里带回这一页的自动截图）
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"go_to_url","params":{"url":"https://example.com"}}'
+dsb --id 1001 run go_to_url -p url=https://example.com
 # {"data":{"status":200,"seq":1,"screenshot":"/data/1001/1.png",...}}
 
 # 3. 取浏览器状态：browser_state 是页签，text 是可交互结构化文本
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"get_browser_state"}'
+dsb --id 1001 state
 
 # 4. 按索引点一下
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' \
-  -d '{"id":1001,"method":"click_element_by_index","params":{"index":0}}'
+dsb --id 1001 run click_element_by_index -p index=0
 
 # 5. 看这一步的截图
 #    http://localhost:10049/data/1001/2.png
 
 # 6. 收工
-curl -s -X POST "$BASE" -H 'Content-Type: application/json' -d '{"id":1001,"method":"close"}'
+dsb --id 1001 close
 ```
+
+> 服务还没起也行:`dsb` 会在连不上时按 `~/.dsb/config.json` 记下的仓库位置把后端拉起来,再重试一次
+> (`dsb server start|stop|status|logs` 可以显式管理,见 [`dsb/README.md`](dsb/README.md))。
 
 ---
 
@@ -135,7 +134,7 @@ cp -r .agents/skills/* ~/.dsh/skills/
 
 **不用重启 DSH**：技能正文每次加载都重新读文件；frontmatter 里的 `name`/`description` 改了，DSH 的文件监听会自己刷新技能目录 —— 这次把技能从 `skills/` 挪到 `.agents/skills/`，同一个会话的技能目录立刻就出现了这 15 个技能。
 
-> **路径注意**：技能正文里的路径都是**相对仓库根**写的（`client/dsb.py`、`recipes/`、`logs/agent/` …）。技能待在仓库自己的 `.agents/skills/` 里、dsh 也在仓库根启动时，这些路径天然对得上；**复制到别的项目或用户级目录之后**，请让 cwd 留在本仓库，或在提示词里给出 dsb 客户端与仓库的绝对路径。
+> **路径注意**：技能正文里的路径都是**相对仓库根**写的（`recipes/`、`logs/agent/` …）。技能待在仓库自己的 `.agents/skills/` 里、dsh 也在仓库根启动时，这些路径天然对得上；**复制到别的项目或用户级目录之后**，请让 cwd 留在本仓库，或在提示词里给出仓库的绝对路径。（客户端 `dsb` 装在 `PATH` 上，不受 cwd 影响。）
 
 站点手册（`.agents/skills/<站点名>/SKILL.md`，如 `cnipa-trademark-register`、`railway-12306-ticket`、`wecom-*`）就在同一个目录里，技能名取各自 frontmatter 里的 `name`。它和主技能分工不同：主技能讲「服务能做什么」，站点手册讲「这个站点必须怎么点」。
 
@@ -180,25 +179,25 @@ node scripts/sync-skills.mjs
 
 每个目标目录下有一份 `.sync-skills.json`，记着哪些技能是本脚本装的。不在清单里的同名技能会被跳过（除非 `--force`），所以脚本不会覆盖你手工放进去的技能。
 
-### 3. 使用 dsb 客户端：起服务 + 发请求
+### 3. 使用 dsb 客户端：发请求
 
-技能文档负责让智能体知道**有哪些命令、有哪些坑**；真正发请求推荐走仓库里的 `dsb` 客户端，而不是手拼 `curl -d '{...}'`。
+技能文档负责让智能体知道**有哪些命令、有哪些坑**；真正发请求走仓库里的 `dsb` 客户端，而不是手拼 `curl -d '{...}'`。
+`dsb` 是一个装进 `PATH` 的 Go 二进制，在任何目录直接敲。
 
 ```shell
-# ① 先把服务起起来(发行版;开发态见第六节)
-java -jar deepseek-browser-use-1.0.0-windows-x64.jar
+# ① 服务没起也不用先起:dsb 会在连不上时按配置自动把后端拉起来(也可以 dsb server start 显式起)
 
 # ② 确认服务活着
-client\dsb.cmd --port 10049 health
+dsb --port 10049 health
 
 # ③ 起任务 → 开页面 → 读页面 → 收工
-client\dsb.cmd --port 10049 --id 1001 start --browser chrome
-client\dsb.cmd --port 10049 --id 1001 run go_to_url -p url=https://example.com
-client\dsb.cmd --port 10049 --id 1001 state --full
-client\dsb.cmd --port 10049 --id 1001 close
+dsb --port 10049 --id 1001 start --browser chrome
+dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
+dsb --port 10049 --id 1001 state --full
+dsb --port 10049 --id 1001 close
 ```
 
-非 Windows 把 `client\dsb.cmd` 换成 `python client/dsb.py`，参数完全一致（`dsb.cmd` 只是一层找 `python`、透传参数与退出码的包装）。完整子命令与退出码见 [`client/README.md`](client/README.md)。
+完整子命令、退出码与后端管理见 [`dsb/README.md`](dsb/README.md)。
 
 让智能体用 `dsb` 而不是手拼请求，省掉的是一整类无谓失败：
 
@@ -209,11 +208,12 @@ client\dsb.cmd --port 10049 --id 1001 close
 | 失败怎么定位 | 只看得到一段文本 | 退出码分层：0 成功 / 1 传输错 / 2 业务失败 / 3 用法错 |
 | 长批次 | 撞 HTTP 超时，且「超时≠失败」说不清 | `batch cmds.json --async --wait`，服务端后台跑、客户端轮询 |
 | 多行 JS | 命令行截断 → `SyntaxError` | `js @脚本.js` |
+| 服务没起 | 只回一句「连不上」 | 自动拉起后端并重试一次 |
 
 装完（或怀疑服务端有问题）想自查，跑一遍端到端自检（用自己的任务 ID `990001`，不会撞上业务任务）：
 
 ```shell
-client\dsb.cmd --port 10049 selftest --browser chrome
+dsb --port 10049 selftest --browser chrome
 ```
 
 ### 4. 你的任务是"……"：三步式提示词
@@ -223,7 +223,7 @@ client\dsb.cmd --port 10049 selftest --browser chrome
 ```text
 1. 工程代码目录是E:\code\java\project-litongjava\deepseek-browser-use
 2. 读取技能文件 .agents/skills/deepseek-browser-use/SKILL.md，按里面的命令与坑来操作，不要凭印象发命令；
-2. 使用 dsb 客户端发请求（Windows 用 client\dsb.cmd，其他平台用 python client/dsb.py），不要手拼 curl JSON；
+2. 用 dsb 客户端发请求（已装在 PATH，直接敲 dsb），不要手拼 curl JSON；
 4. 你的任务是"到12306购买一张车票"。
 ```
 
@@ -283,14 +283,15 @@ Content-Type: application/json
 
 > 现在也可以完全不走 `/playwright/upload`：`upload_file` 支持 `contentBase64` 或 `url`，服务端自己落盘再交给页面，省掉一次往返。`path` 仍然可用（相对路径按服务端暂存目录解析）。
 
-`POST /playwright/upload` 支持三种请求体（任选）：
+`POST /playwright/upload` 支持三种请求体（任选），命令行用 `dsb upload` 一条就够：
 
 ```bash
-curl -F "file=@图样.jpg" http://localhost:10049/playwright/upload
-curl --data-binary @图样.jpg "http://localhost:10049/playwright/upload?filename=图样.jpg"
-curl -H "Content-Type: application/json" -d '{"filename":"图样.jpg","contentBase64":"/9j/4AAQ..."}' \
-     http://localhost:10049/playwright/upload
+dsb --port 10049 upload 图样.jpg
+dsb --port 10049 upload 图样.jpg --filename 图样-改个名.jpg   # 换个服务端文件名
 ```
+
+> 想直接看 HTTP 协议本身：裸字节 + `?filename=`、`multipart/form-data`、以及
+> `{"filename":…,"contentBase64":…}` 三种服务端都认；`dsb upload` 走的是第一种。
 
 返回 `data.filename` / `data.path` / `data.relativePath` / `data.size` / `data.sha256`，其中 `path`（服务端绝对路径）与 `relativePath` 都可以直接填给 `upload_file` 的 `path`。文件名会被清洗（只留基本名、去掉路径分隔符与控制字符、保留中文），并且只能落在暂存目录里；默认上限 64MB，配置项见 `browser.properties`。
 
@@ -347,9 +348,7 @@ Chrome 进程，第二个进程会把命令行交给已有实例然后自己退�
 
 ```shell
 # 用本机安装的 Microsoft Edge 跑这一次任务
-curl -X POST http://127.0.0.1:10049/playwright/command \
-  -H 'Content-Type: application/json' \
-  -d '{"method":"start","params":{"browser":"edge"}}'
+dsb --port 10049 start --browser edge
 ```
 
 | `browser` | 浏览器 | 引擎 | profile | 什么时候 |
@@ -532,23 +531,23 @@ Chromium 会走到空白页或 HTTP 400；同一流程在 Firefox 139 下能正�
 写盘失败只留警告，不会影响浏览器命令；日志**不会自动清理**（里面的敏感值请自行清理），但**默认脱敏** ——
 规则与边界见下文「安全提示」。
 
-客户端这一侧还有两个把请求也留档的客户端：PowerShell 的 `scripts/trace/browse.ps1` 与 Python 的
-`client/dsb.py`（Windows 上还有一层薄包装 `client/dsb.cmd`，直接敲 `client\dsb.cmd ...` 即可，不必写
-`python` 前缀）。它们都按序号把发出去的请求（`NNN.req.json`）与收回来的响应（`NNN.res.json`）
-成对存进 `logs/agent/<会话>/`，并维护一份 `steps.log`。好处是**请求在发送前就落盘**，连服务没起来、
-请求根本没发出去这种情况也能看出来。
+客户端这一侧还有一个把请求也留档的客户端：PowerShell 的 `scripts/trace/browse.ps1`，
+以及仓库自带的 Go 客户端 `dsb`（源码在 `dsb/`，装进 `PATH` 后直接敲）。它们都按序号把发出去的请求
+（`NNN.req.json`）与收回来的响应（`NNN.res.json`）成对存进 `logs/agent/<会话>/`，并维护一份 `steps.log`。
+好处是**请求在发送前就落盘**，连服务没起来、请求根本没发出去这种情况也能看出来。
 
-| | `scripts/trace/browse.ps1` | `client/dsb.py` / `client/dsb`（macOS/Linux）/ `client/dsb.cmd`（Windows） |
+| | `scripts/trace/browse.ps1` | `dsb`（Go 客户端） |
 | --- | --- | --- |
-| 运行环境 | Windows PowerShell | 任意平台的 Python 3（只用标准库）；`dsb` 是 macOS/Linux 包装，`dsb.cmd` 是 Windows 包装 |
-| 形态 | 传 `-PayloadFile` 发一次请求 | 子命令式 CLI（`start`/`run`/`batch`/`state`/`upload`/`selftest`…）+ 可 import 的库 |
+| 运行环境 | Windows PowerShell | 任意平台（Go 静态二进制，装进 `PATH`，任何目录直接敲） |
+| 形态 | 传 `-PayloadFile` 发一次请求 | 子命令式 CLI（`start`/`run`/`batch`/`state`/`upload`/`server`/`selftest`…） |
 | 退出码 | 0 业务结果、1 传输失败 | 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错（分得更细，便于写脚本） |
-| 适合 | 已有的 PowerShell 排查习惯、一次性排障 | 跨平台、写进 Python 流程、批量与异步任务 |
+| 服务没起 | 需要自己先起服务 | 自动拉起后端并重试一次；也可 `dsb server start|stop|status|logs` 显式管理 |
+| 适合 | 已有的 PowerShell 排查习惯、一次性排障 | 跨平台、写进脚本/CI、批量与异步任务 |
 
-`dsb.py` 的完整用法见 `client/README.md`，装完先跑一次端到端自检：
+`dsb` 的完整用法见 [`dsb/README.md`](dsb/README.md)，装完先跑一次端到端自检：
 
 ```bash
-python client/dsb.py --port 10049 selftest --browser firefox
+dsb --port 10049 selftest --browser chrome
 ```
 
 ### driver 与自愈
@@ -692,7 +691,7 @@ mvn spring-boot:run
 >
 > 判断方法：`list_tasks` 的 `launching` 字段非 `null`（带 `elapsedMs`）就说明正在起共享浏览器，
 > 服务端日志里能看到 `Downloading …`。**别重复 `start`**。想先把这一步摆到明面上，跑一次
-> `./client/dsb selftest --browser chrome`。
+> `dsb selftest --browser chrome`。
 
 ### 跑测试
 
@@ -792,9 +791,11 @@ deepseek-browser-use/
 ├── scripts/run/start-server.ps1           Windows 后台启动服务(脱离当前进程树) + 等健康检查
 ├── scripts/run/stop-server.ps1            先 shutdown 再结束进程树,不留孤儿浏览器(Windows)
 ├── scripts/trace/browse.ps1               客户端侧调用留档脚本(与服务端同一套脱敏规则)
-├── client/dsb.py                           Python 客户端(CLI + 可 import,只用标准库)
-├── client/dsb.cmd                          Windows 薄包装(能直接敲 dsb,不必写 python 前缀)
-├── client/README.md                        Python 客户端的用法与退出码约定
+├── dsb/                                    Go 客户端(装进 PATH 后直接敲 dsb)
+│   ├── main.go / args.go / client.go      入口、命令行解析、HTTP 层
+│   ├── commands.go                        各子命令(health/run/batch/state/js/…)
+│   ├── server.go / backend.go             `dsb server` 后端管理 + 仓库/jar 定位与自动拉起
+│   └── README.md                          子命令、退出码、配置与环境变量、后端管理
 ├── recipes/*.json                          显式 opt-in 的站点配方(run_recipe 用)
 ├── .agents/skills/                        DSH 项目级技能根(在仓库里启动 dsh 会话就自动发现这 15 份技能)
 │   ├── deepseek-browser-use/SKILL.md      主技能:服务端能力的唯一权威清单(命令表覆盖、端点、协议)
