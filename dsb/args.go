@@ -17,7 +17,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,6 +90,8 @@ func commonSpecs() []argSpec {
 		{names: []string{"--select"}, dest: "select", takesValue: true, metavar: "PATH",
 			help: "仅输出指定字段的 JSON，如 data.text / data.results.1.data.changed；仍照常留档，" +
 				"失败响应同样按路径投影(只在路径不存在时才退回整封)"},
+		{names: []string{"--select-lenient"}, dest: "select_lenient",
+			help: "--select 的路径不存在时退回打印完整信封(旧行为);默认是打 null 并以退出码 3 报用法错"},
 		{names: []string{"--compact", "--summary"}, dest: "compact",
 			help: "只输出一行摘要(--summary 是同一个开关的正名;注意它只管本地输出," +
 				"服务端的响应精简模式要用 --response-mode compact)"},
@@ -227,23 +228,24 @@ type Args struct {
 	Command     string
 	Positionals []string
 
-	BaseURL      *string
-	Host         *string
-	Port         *int
-	Use          *string
-	ID           *string
-	Timeout      float64
-	Session      *string
-	RecordDir    *string
-	NoRecord     bool
-	NoAutoStart  bool
-	JSON         bool
-	Select       *string
-	Compact      bool
-	ResponseMode *string
-	Diagnostics  bool
-	Index        *int
-	Verbose      bool
+	BaseURL       *string
+	Host          *string
+	Port          *int
+	Use           *string
+	ID            *string
+	Timeout       float64
+	Session       *string
+	RecordDir     *string
+	NoRecord      bool
+	NoAutoStart   bool
+	JSON          bool
+	Select        *string
+	SelectLenient bool
+	Compact       bool
+	ResponseMode  *string
+	Diagnostics   bool
+	Index         *int
+	Verbose       bool
 
 	Filter            *string
 	Run               *string
@@ -346,25 +348,38 @@ func (index *specIndex) lookup(name string) (*argSpec, error) {
 	return nil, usageErrorf("ambiguous option: %s could match %s", name, strings.Join(spellings, ", "))
 }
 
-// isNegativeNumber 判断一个记号是不是负数(argparse 的 _negative_number_matcher 近似版)。
-// 有它才能让 `--viewport-expansion -1` 里的 -1 被当成值。
+// isNegativeNumber 判断一个记号是不是负数(与 argparse 的 _negative_number_matcher 同口径)。
+//
+// 有它才能让 `--viewport-expansion -1` 里的 -1 被当成值。判据就是
+// `^-[0-9]+$` 或 `^-[0-9]*\.[0-9]+$`。
+//
+// 以前写得更松(以 - 开头、至少一个数字、其余只允许数字或点、+- 只允许在开头),
+// 于是 `-1-2`、`-+1`、`-1.` 都被当成负数 —— 那些其实是**写错的选项**,
+// 该按用法错报出来,而不是被悄悄吞成一个值。
 func isNegativeNumber(token string) bool {
-	if len(token) < 2 || token[0] != '-' {
+	body, ok := strings.CutPrefix(token, "-")
+	if !ok || body == "" {
 		return false
 	}
-	body := token[1:]
-	seenDigit := false
-	for position, r := range body {
-		switch {
-		case r >= '0' && r <= '9':
-			seenDigit = true
-		case r == '.':
-		case (r == '+' || r == '-') && position == 0:
-		default:
+	digits := func(text string) bool {
+		if text == "" {
 			return false
 		}
+		for _, r := range text {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
 	}
-	return seenDigit
+	if digits(body) {
+		return true
+	}
+	integer, fraction, found := strings.Cut(body, ".")
+	if !found || !digits(fraction) {
+		return false
+	}
+	return integer == "" || digits(integer)
 }
 
 // looksLikeOption 判断一个记号是不是「看起来像选项」——
@@ -414,7 +429,7 @@ func parseArgs(argv []string) (*Args, error) {
 				name, inline, hasInline = token[:cut], token[cut+1:], true
 			}
 			if name == "--help" {
-				return nil, &helpRequested{}
+				return nil, &helpRequested{Command: args.Command}
 			}
 			if name == "--version" {
 				return nil, &versionRequested{}
@@ -470,7 +485,7 @@ func parseArgs(argv []string) (*Args, error) {
 				name, attached, hasAttached = token[:2], token[2:], true
 			}
 			if name == "-h" {
-				return nil, &helpRequested{}
+				return nil, &helpRequested{Command: args.Command}
 			}
 			spec, err := common.lookup(name)
 			if err != nil {
@@ -631,6 +646,7 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.ID = readString("id")
 	args.Use = readString("use")
 	args.Select = readString("select")
+	args.SelectLenient = flags["select_lenient"]
 	args.ResponseMode = readString("response_mode")
 	args.Run = readString("run")
 	args.Browser = readString("browser")
@@ -715,96 +731,13 @@ func quotedList(items []string) string {
 }
 
 // helpRequested / versionRequested 是「打印完就退出 0」的控制流信号。
-type helpRequested struct{}
+//
+// helpRequested 带上已经认出来的子命令:dsb state --help 应该打 state 的帮助,
+// 而不是每次都把整页全局帮助糊出来 —— 那等于没有 per-command 帮助。
+type helpRequested struct{ Command string }
 
 func (e *helpRequested) Error() string { return "help" }
 
 type versionRequested struct{}
 
 func (e *versionRequested) Error() string { return "version" }
-
-// subcommandMisuseHint 给「把子命令当成 run 的方法名」这种用法错补一句对症的提示。
-//
-// 实测踩过:照着文档敲 `dsb run js @脚本.js`(前面还带着 --port/--id),只拿到一句
-// `用法错:unrecognized arguments: @脚本.js` —— 真正的原因是 js / batch / state 这些是**子命令**,
-// 不是 run 的方法名,而 argparse 的通用提示完全指不到这一点,只能去翻 --help。
-func subcommandMisuseHint(argv []string) string {
-	bare := []string{}
-	for _, item := range argv {
-		if !strings.HasPrefix(item, "-") {
-			bare = append(bare, item)
-		}
-	}
-	runAt := -1
-	for index, item := range bare {
-		if item == "run" {
-			runAt = index
-			break
-		}
-	}
-	if runAt < 0 || runAt+1 >= len(bare) {
-		return ""
-	}
-	name := bare[runAt+1]
-	if !isCommandName(name) || subcommandAlsoMethod[name] {
-		return ""
-	}
-	return fmt.Sprintf("提示:%s 是子命令,不是 run 的方法名 —— 直接写成 `dsb %s ...`"+
-		"(例如 `dsb js @脚本.js`、`dsb batch cmds.json`、`dsb state --full`);"+
-		"run 只用来调服务端方法,例如 `dsb run go_to_url -p url=https://example.com`", name, name)
-}
-
-// usageHint 是每条用法错后面统一补的那句。
-func usageHint() string {
-	return "提示:dsb --help 看用法,dsb methods 看服务端支持的命令"
-}
-
-// printHelp 打印帮助。文案按 Python 版 --help 的结构组织。
-func printHelp(command string) {
-	writer := os.Stdout
-	if command == "" {
-		fmt.Fprintf(writer, "usage: dsb [-h] [--version] [--base-url BASE_URL] [--host HOST] [--port PORT]\n")
-		fmt.Fprintf(writer, "           [--id ID] [--timeout TIMEOUT] [--session SESSION]\n")
-		fmt.Fprintf(writer, "           [--record-dir RECORD_DIR] [--no-record] [--no-auto-start]\n")
-		fmt.Fprintf(writer, "           [--json] [--select PATH]\n")
-		fmt.Fprintf(writer, "           [--compact] [--response-mode MODE] [--diagnostics] [--index INDEX]\n")
-		fmt.Fprintf(writer, "           [-v]\n")
-		fmt.Fprintf(writer, "           {%s}\n           ...\n\n", strings.Join(commandNames, ","))
-		fmt.Fprintf(writer, "deepseek-browser-use 命令行客户端(Go 静态二进制,装进 PATH 后任何目录可直接敲)\n\n")
-		fmt.Fprintf(writer, "子命令:\n")
-		for _, name := range commandNames {
-			fmt.Fprintf(writer, "  %-12s %s\n", name, commandHelp[name])
-		}
-		fmt.Fprintf(writer, "\n通用选项(放在子命令前面或后面都行):\n")
-		for _, spec := range commonSpecs() {
-			fmt.Fprintf(writer, "  %-22s %s\n", strings.Join(spec.names, ", "), spec.help)
-		}
-		fmt.Fprintf(writer, "\n通用选项放在子命令前面或后面都行。\n")
-		fmt.Fprintf(writer, "退出码:0 成功 / 1 传输或协议错 / 2 业务失败 / 3 用法错。\n")
-		fmt.Fprintf(writer, "环境变量:DSB_BASE_URL、DSB_HOST、DSB_PORT、DSB_TASK_ID、DSB_SESSION、DSB_REPO_DIR、DSB_AUTO_START。\n")
-		fmt.Fprintf(writer, "后端服务:用 `dsb server start|stop|status|logs|target` 管理;连不上本机服务时会自动拉起。\n")
-		fmt.Fprintf(writer, "连别的主机:--host/--port 或登记一个具名目标(dsb server target add <名字> --host <主机> --port <端口>),之后 --use <名字>。\n")
-		fmt.Fprintf(writer, "例子:dsb --port 10049 health | dsb start --browser firefox | "+
-			"dsb run go_to_url -p url=https://example.com | dsb batch cmds.json --async --wait\n")
-		return
-	}
-	specs := specsFor(command)
-	positionalNames := []string{}
-	for _, spec := range subcommandSpecs[command] {
-		if !strings.HasPrefix(spec.names[0], "-") {
-			positionalNames = append(positionalNames, spec.metavar)
-		}
-	}
-	fmt.Fprintf(writer, "usage: dsb %s [-h] [选项]", command)
-	if len(positionalNames) > 0 {
-		fmt.Fprintf(writer, " %s", strings.Join(positionalNames, " "))
-	}
-	fmt.Fprintf(writer, "\n\n%s\n\n选项:\n", commandHelp[command])
-	for _, spec := range specs {
-		defaultValue := ""
-		if spec.takesValue && spec.metavar != "" {
-			defaultValue = " " + spec.metavar
-		}
-		fmt.Fprintf(writer, "  %-22s %s\n", strings.Join(spec.names, ", ")+defaultValue, spec.help)
-	}
-}

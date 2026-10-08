@@ -133,6 +133,23 @@ public class BrowserInstance {
   public final List<String> consoleLogs = Collections.synchronizedList(new ArrayList<String>());
   public final List<String> pageErrors = Collections.synchronizedList(new ArrayList<String>());
 
+  /**
+   * 每任务串行锁:同一个任务上的命令必须排队执行。
+   *
+   * <p>
+   * <b>为什么必须有</b>:HTTP handler 跑在 tio 的工作线程池上,同一个 id 的请求可以由不同线程同时
+   * 进来(客户端一边发 commands、一边轮询 get_browser_state;或者两个智能体共用一个 id)。而
+   * Playwright 的 Connection 事件泵不是为并发驱动设计的 —— 本项目自己的注释就写着:独立线程会
+   * 并发驱动共享 Connection 的事件泵,造成响应早于请求登记、对象找不到、响应归属错位。
+   * 让同一任务串行执行,是这条结论唯一的落地方式。
+   *
+   * <p>
+   * 用可重入锁:批量({@code commands})整批持锁,它内部的每一步由 {@code ActionService} 判定
+   * 「已在同一任务的执行域里」后直接放行(步骤可能跑在派生线程上,靠的是 ThreadLocal 而不是重入)。
+   */
+  public final java.util.concurrent.locks.ReentrantLock commandLock =
+      new java.util.concurrent.locks.ReentrantLock();
+
   /** 网络请求记录(最多保留 200 条) */
   public final List<Kv> requests = Collections.synchronizedList(new ArrayList<Kv>());
   /** 同一 Connection 复用请求对象;请求与响应回调必须串行处理,不能按 URL 猜配。 */
@@ -185,7 +202,7 @@ public class BrowserInstance {
 
     /** 当场抄下来的响应体(只对 xhr/fetch;抄不到时为 null) */
     public volatile String body;
-    /** body 太长时只留前 {@code ResponseBodyCache.MAX_CHARS} 个字符 */
+    /** body 太长时只留前 {@code ResponseBodyCache.maxChars()} 个字符(browser.network.bodyChars 可调) */
     public volatile boolean bodyTruncated;
     /** 抄完了(无论成败)。没抄完时调用方可以自己再去读一次 */
     public volatile boolean bodyCaptured;

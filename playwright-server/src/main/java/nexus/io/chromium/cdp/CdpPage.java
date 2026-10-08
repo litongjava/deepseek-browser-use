@@ -231,32 +231,9 @@ public final class CdpPage implements AutoCloseable {
 
   // ==================== 覆盖 / 弹窗 ====================
 
-  /** 覆盖 UA(内置 Chromium 要伪装成 Chrome 时用;本机 Chrome 不要覆写,否则站点侧看不出真身) */
-  public void setUserAgentOverride(String userAgent) {
-    JSONObject params = new JSONObject();
-    params.put("userAgent", userAgent);
-    session.send("Emulation.setUserAgentOverride", params);
-  }
-
   /** 监听原生弹窗({@code alert} / {@code confirm} / {@code prompt} / {@code beforeunload}) */
   public void onDialog(CdpEventListener listener) {
     session.on("Page.javascriptDialogOpening", listener);
-  }
-
-  /**
-   * 处理原生弹窗
-   *
-   * <p>
-   * <b>原生弹窗会阻塞页面</b>:不处理的话后续所有求值都停在那里。所以要么注册
-   * {@link #onDialog} 自动处理,要么在需要时显式调这里。
-   */
-  public void handleDialog(boolean accept, String promptText) {
-    JSONObject params = new JSONObject();
-    params.put("accept", accept);
-    if (promptText != null) {
-      params.put("promptText", promptText);
-    }
-    session.send("Page.handleJavaScriptDialog", params);
   }
 
   // ==================== 收尾 ====================

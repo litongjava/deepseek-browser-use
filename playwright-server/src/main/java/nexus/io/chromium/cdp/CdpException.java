@@ -45,11 +45,6 @@ public class CdpException extends RuntimeException {
     return code;
   }
 
-  /** 是不是「发出去没等到回执」——这类失败**不能**当成没生效 */
-  public boolean isTimeout() {
-    return getCause() instanceof java.util.concurrent.TimeoutException;
-  }
-
   /** 是不是协议级拒绝(浏览器明确回了 error) */
   public boolean isProtocolError() {
     return code != null;

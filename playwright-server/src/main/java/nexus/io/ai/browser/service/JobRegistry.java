@@ -36,11 +36,37 @@ import nexus.io.model.body.RespBodyVo;
 @Slf4j
 public final class JobRegistry {
 
-  /** 最多保留多少个任务(超出时丢掉最老的已结束任务) */
-  private static final int MAX_JOBS = 50;
+  /** 最多保留多少个任务(超出时丢掉最老的已结束任务),可配 {@code browser.jobs.max} */
+  private static int maxJobs() {
+    return positiveInt(ChromeBrowser.config("browser.jobs.max"), DEFAULT_MAX_JOBS);
+  }
 
-  /** 同时最多跑几个长任务:浏览器操作本来就该串行,给 2 个足够「一个跑、一个等」 */
-  private static final int MAX_CONCURRENCY = 2;
+  private static final int DEFAULT_MAX_JOBS = 50;
+
+  /**
+   * 同时最多跑几个长任务,可配 {@code browser.jobs.maxConcurrency}
+   *
+   * <p>
+   * 默认 2:浏览器操作本来就该串行,给 2 个足够「一个跑、一个等」。注意线程池是**类初始化**时建的
+   * ——改这个值要重启服务才生效(池大小不该在运行中变化,那会让已经在跑的任务失去并发保证)。
+   */
+  private static int maxConcurrency() {
+    return positiveInt(ChromeBrowser.config("browser.jobs.maxConcurrency"), DEFAULT_MAX_CONCURRENCY);
+  }
+
+  private static final int DEFAULT_MAX_CONCURRENCY = 2;
+
+  private static int positiveInt(String configured, int fallback) {
+    if (configured == null || configured.isBlank()) {
+      return fallback;
+    }
+    try {
+      int parsed = Integer.parseInt(configured.trim());
+      return parsed > 0 ? parsed : fallback;
+    } catch (NumberFormatException e) {
+      return fallback;
+    }
+  }
 
   /** 单个任务的运行状态 */
   public static final class Job {
@@ -83,7 +109,7 @@ public final class JobRegistry {
   private static final Map<String, Job> JOBS = new ConcurrentHashMap<>();
   private static final AtomicLong SEQ = new AtomicLong();
 
-  private static final ExecutorService POOL = Executors.newFixedThreadPool(MAX_CONCURRENCY, new ThreadFactory() {
+  private static final ExecutorService POOL = Executors.newFixedThreadPool(maxConcurrency(), new ThreadFactory() {
     private final AtomicLong seq = new AtomicLong();
 
     @Override
@@ -160,7 +186,8 @@ public final class JobRegistry {
 
   /** 超出上限时,从最老的**已结束**任务开始丢 */
   private static void trim() {
-    if (JOBS.size() <= MAX_JOBS) {
+    int maxJobs = maxJobs();
+    if (JOBS.size() <= maxJobs) {
       return;
     }
     List<Job> finished = new ArrayList<>();
@@ -171,7 +198,7 @@ public final class JobRegistry {
     }
     finished.sort(Comparator.comparingLong(job -> job.startedAt));
     for (Job job : finished) {
-      if (JOBS.size() <= MAX_JOBS) {
+      if (JOBS.size() <= maxJobs) {
         break;
       }
       JOBS.remove(job.id);
@@ -183,8 +210,4 @@ public final class JobRegistry {
     JOBS.clear();
   }
 
-  /** 把「检查取消 + 记录进度」包成一个可传进批次的回调 */
-  public static Supplier<Boolean> cancelFlag(Job job) {
-    return () -> job != null && job.cancelRequested;
-  }
 }

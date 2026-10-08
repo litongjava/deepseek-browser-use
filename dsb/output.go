@@ -64,6 +64,10 @@ type Printer struct {
 	Out    io.Writer
 	ErrOut io.Writer
 	Select *string
+	// SelectLenient 为真时,--select 的路径不存在就退回打印整封(旧行为)。
+	SelectLenient bool
+	// SelectMissed 记录「这次 --select 打偏了」,由 report() 翻成退出码 3。
+	SelectMissed bool
 }
 
 // NewPrinter 按命令行开关造一个 Printer(对应 Python 的 printer_for)。
@@ -75,10 +79,11 @@ func NewPrinter(args *Args) *Printer {
 		mode = "compact"
 	}
 	return &Printer{
-		Mode:   mode,
-		Out:    newTextSink(os.Stdout),
-		ErrOut: newTextSink(os.Stderr),
-		Select: args.Select,
+		Mode:          mode,
+		Out:           newTextSink(os.Stdout),
+		ErrOut:        newTextSink(os.Stderr),
+		Select:        args.Select,
+		SelectLenient: args.SelectLenient,
 	}
 }
 
@@ -138,8 +143,18 @@ func (p *Printer) JSON(value Value) {
 		// 才退回整封,并在 stderr 说明是退回去了,免得调用方以为投影生效了。
 		picked, err := selectField(value, *p.Select)
 		if err != nil {
-			p.Warn(fmt.Sprintf("--select %s 在这条响应里不存在,改印完整信封", *p.Select))
-			p.printLine(EncodeJSON(value, encIndent2))
+			if p.SelectLenient {
+				// 调用方明确要了宽松模式:照旧退回整封,退出码也照旧是 0
+				p.Warn(fmt.Sprintf("--select %s 在这条响应里不存在,改印完整信封(--select-lenient)", *p.Select))
+				p.printLine(EncodeJSON(value, encIndent2))
+				return
+			}
+			p.SelectMissed = true
+			// 默认:路径不存在是**用法错**,不是成功。stdout 打 null(仍是合法 JSON,
+			// 管道不会炸),退出码由 report() 翻成 3 —— 让「你取的东西没了」变成调用方
+			// 看得见的事实,而不是悄悄换成一个形状完全不同的东西还报成功。
+			p.Warn(fmt.Sprintf("--select %s 在这条响应里不存在,stdout 打 null(要整封加 --select-lenient)", *p.Select))
+			p.printLine("null")
 			return
 		}
 		p.printLine(EncodeJSON(picked, encIndent2))
@@ -220,7 +235,9 @@ func emitSideOutput(printer *Printer, args *Args, value Value) (bool, error) {
 			return false, usageErrorf("写不了文件 %s:%v", *args.Out, err)
 		}
 		lines := len(strings.Split(text, "\n"))
-		printer.printLine(fmt.Sprintf("已写入 %s（%d 字符，%d 行）", *args.Out, len(text), lines))
+		// 走 Line 而不是 printLine:--json 时 stdout 必须是纯 JSON,
+		// 否则管道那头收到的是一句中文而不是 JSON。
+		printer.Line(fmt.Sprintf("已写入 %s（%d 字符，%d 行）", *args.Out, len(text), lines))
 	}
 	if args.Grep != nil {
 		expression, err := regexp.Compile(*args.Grep)
@@ -235,9 +252,9 @@ func emitSideOutput(printer *Printer, args *Args, value Value) (bool, error) {
 			}
 		}
 		for _, line := range hits {
-			printer.printLine(line)
+			printer.Line(line)
 		}
-		printer.printLine(fmt.Sprintf("--grep %s:共 %d 行,命中 %d 行",
+		printer.Line(fmt.Sprintf("--grep %s:共 %d 行,命中 %d 行",
 			pyRepr(*args.Grep), len(allLines), len(hits)))
 	}
 	return true, nil

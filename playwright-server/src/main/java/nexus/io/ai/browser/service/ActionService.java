@@ -3,10 +3,13 @@ package nexus.io.ai.browser.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -17,6 +20,7 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.jfinal.kit.Kv;
 
+import nexus.io.ai.browser.actions.registry.CommandFlags;
 import nexus.io.ai.browser.actions.registry.CommandTable;
 import nexus.io.ai.browser.actions.registry.TrackedArgs;
 
@@ -43,32 +47,9 @@ import nexus.io.model.body.RespBodyVo;
  */
 public class ActionService {
 
-  public static final Set<String> PAGE_CHANGING = Set.of(
-      // 导航
-      "navigate", "go_to_url", "go_back", "go_forward", "reload",
-      // 点击与交互
-      "click_element_by_index", "double_click_element_by_index", "click_element_by_selector", "click_element_by_text",
-      "click_element_by_role", "hover_and_click", "hover_element_by_index", "focus_element_by_index",
-      "check_element_by_index", "uncheck_element_by_index", "input_text", "input_text_by_selector",
-      "input_text_by_label", "type_text", "clear_text", "send_keys", "key_down", "key_up", "select_dropdown_option",
-      "upload_file", "drag_element_by_index",
-      // 滚动与鼠标
-      "scroll", "scroll_to_text", "mouse_move", "mouse_down", "mouse_up", "mouse_wheel",
-      // 按坐标点击:技能手册把它当兜底方案推荐,而它**一定会改变页面** ——
-      // 漏掉的代价是「退到兜底路径之后自动留证完全消失」,排查时最需要图的时候偏偏没有
-      "mouse_click", "mouse_click_by_selector",
-      // 页签
-      "new_tab", "switch_tab", "switch_tab_by_url", "close_tab", "close_other_tabs", "bring_to_front",
-      // 等待(等到了页面往往就变了)
-      "wait", "wait_for_element", "wait_for_text", "wait_for_url", "wait_for_load", "wait_for_function",
-      "wait_for_idle", "wait_for_stable",
-      // 弹窗与存储:关掉一个遮挡弹窗、写一条 cookie/localStorage,页面都可能因此变化
-      "close_modal", "set_cookie", "set_local_storage",
-      // 脚本与设置
-      "execute_js", "set_viewport", "set_media", "set_credentials");
+public static final Set<String> PAGE_CHANGING = CommandFlags.namesWith(CommandFlags.Flag.PAGE_CHANGING);
 
-  /** 命令数组里最多允许多少条,挡住一次请求塞进上万个动作 */
-  private static final int MAX_COMMANDS = 200;
+  // 命令数组的上限移到 PlaywrightService.commandMaxPerBatch()(可配,见 browser.command.maxPerBatch)
 
   /**
    * 遇到 Playwright 事件泵的「伪故障」时可以**放心重发**的命令
@@ -86,37 +67,38 @@ public class ActionService {
    * 「不在名单里」不等于「永远不会重发」:调用方可以用 {@code retryOnSpurious:true} **按调用点**声明
    * 这一次重发无害(见 {@link #retrySafeFor}),这是给「伪故障其实发生在命令发出去之前」那一支留的口子。
    */
-  public static final Set<String> SPURIOUS_RETRY_SAFE = Set.of(
-      // 只读:页面状态
-      "get_browser_state", "get_page_snapshot", "diff_dom_text", "get_interactive_map", "get_form_state",
-      "list_frames", "extract_structured_data", "extract_markdown", "find_text", "list_tables",
-      // 只读:页签与地址
-      "get_tabs", "get_url", "get_title",
-      // 只读:元素
-      "get_element_text", "get_element_html", "get_element_value", "get_element_attribute",
-      "get_element_listeners", "get_element_count", "get_element_box", "is_visible", "is_enabled", "is_checked",
-      // 只读:下拉选项(读 el.options,不改页面)
-      "get_dropdown_options",
-      // 只读:弹窗、日志、网络、存储
-      "get_modals", "get_console_logs", "get_dialog", "get_js_dialog", "get_requests", "get_response_body",
-      "get_cookies", "get_local_storage",
-      // 只读:服务自省
-      "list_methods", "get_config", "list_tasks", "list_recipes", "get_job", "list_jobs",
-      // 覆盖式落盘:重发只是把同一个文件再写一遍
-      "screenshot", "get_element_screenshot", "pdf",
-      // 覆盖式读取:ocr_image 只读一张图/一屏,重发读的还是同一个画面
-      "ocr_image",
-      // 幂等导航
-      "go_to_url", "navigate", "reload", "go_back", "go_forward", "bring_to_front",
-      // 等待:再等一次没有副作用
-      "wait", "wait_for_element", "wait_for_text", "wait_for_url", "wait_for_load", "wait_for_function",
-      "wait_for_idle", "wait_for_stable", "wait_for_count", "wait_for_response",
-      // 幂等设置与清理
-      "set_viewport", "set_media", "set_offline", "set_headers", "set_dialog_behavior",
-      "clear_dialog", "clear_console_logs");
+public static final Set<String> SPURIOUS_RETRY_SAFE = CommandFlags.namesWith(CommandFlags.Flag.RETRY_SAFE);
 
-  /** 伪故障最多重发几次(含首次):3 次以内,再多就是别的问题了 */
-  private static final int SPURIOUS_MAX_ATTEMPTS = 3;
+  /**
+   * 伪故障最多重发几次(含首次),可配 {@code browser.command.spuriousMaxAttempts}
+   *
+   * <p>
+   * 默认 3 次:3 次以内是「消息泵里正在派发的那一条」,再多就是别的问题了。写法与其它上限一致,
+   * 免得同一类数字有的能配、有的只能改代码。
+   */
+  private static int spuriousMaxAttempts() {
+    return positiveInt(ChromeBrowser.config("browser.command.spuriousMaxAttempts"), DEFAULT_SPURIOUS_MAX_ATTEMPTS);
+  }
+
+  private static final int DEFAULT_SPURIOUS_MAX_ATTEMPTS = 3;
+
+  /** 两次重发之间的间隔(毫秒),可配 {@code browser.command.spuriousRetryDelayMs} */
+  private static long spuriousRetryDelayMs() {
+    return positiveInt(ChromeBrowser.config("browser.command.spuriousRetryDelayMs"),
+        (int) DEFAULT_SPURIOUS_RETRY_DELAY_MS);
+  }
+
+  private static int positiveInt(String configured, int fallback) {
+    if (configured == null || configured.isBlank()) {
+      return fallback;
+    }
+    try {
+      int parsed = Integer.parseInt(configured.trim());
+      return parsed > 0 ? parsed : fallback;
+    } catch (NumberFormatException e) {
+      return fallback;
+    }
+  }
 
   /**
    * 伪故障之后**效果可以直接读回来核对**的命令
@@ -126,9 +108,9 @@ public class ActionService {
    * 不必把结论留给调用方猜(见 {@link #verifyTabsAfterSpurious})。其余动作类命令(点击 / 输入 / 提交)
    * 的效果只能靠页面语义判断,不属于这里。
    */
-  static final Set<String> SPURIOUS_VERIFIABLE = Set.of("new_tab");
-  /** 两次重发之间的间隔:伪故障是「消息泵里正在派发的那一条」引起的,挪开一点点就够了 */
-  private static final long SPURIOUS_RETRY_DELAY_MS = 120;
+static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFlags.Flag.VERIFIABLE);
+  /** 两次重发之间的间隔默认值:伪故障是「消息泵里正在派发的那一条」引起的,挪开一点点就够了 */
+  private static final long DEFAULT_SPURIOUS_RETRY_DELAY_MS = 120;
 
   private final PlaywrightService svc;
 
@@ -220,7 +202,7 @@ public class ActionService {
    */
   static RespBodyVo dispatchWithSpuriousRetry(String method, JSONObject params,
       java.util.function.Supplier<RespBodyVo> call) {
-    int maxAttempts = retrySafeFor(method, params) ? SPURIOUS_MAX_ATTEMPTS : 1;
+    int maxAttempts = retrySafeFor(method, params) ? spuriousMaxAttempts() : 1;
     if ((method.equals("screenshot") || method.equals("get_element_screenshot"))
         && params != null && Boolean.TRUE.equals(params.getBoolean("force"))) maxAttempts = 1;
     // 这次重发的起因:伪故障(事件泵噪声)还是页面正在导航。两者都只对**重发无害**的命令重发,
@@ -324,7 +306,7 @@ public class ActionService {
   private static void sleepBeforeRetry(String message) {
     long ms = ActionError.isPageNavigating(message)
         ? Math.max(200, Math.min(ActionError.retryAfterMs(ActionError.PAGE_NAVIGATING), 1_000))
-        : SPURIOUS_RETRY_DELAY_MS;
+        : spuriousRetryDelayMs();
     try {
       Thread.sleep(ms);
     } catch (InterruptedException e) {
@@ -349,6 +331,45 @@ public class ActionService {
    * @param params 命令参数,可以为空
    */
   public RespBodyVo execute(Long id, String method, JSONObject params) {
+    BrowserInstance instance = id == null ? null : svc.getInstance(id);
+    if (instance == null || TASK_SCOPE.get() == instance) {
+      // 没有实例(例如 start 本身)或已经在同一任务的执行域里(批量中的一步):直接跑
+      return executeLocked(id, method, params);
+    }
+
+    // 同一任务的命令串行执行:HTTP 线程池会把同一个 id 的请求并发送进来,而 Playwright 的
+    // Connection 事件泵不能被并发驱动(见 BrowserInstance#commandLock 的注释)。
+    boolean acquired;
+    try {
+      acquired = instance.commandLock.tryLock(SERIALIZE_WAIT_MS, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      acquired = false;
+    }
+    if (!acquired) {
+      return commandBusyFailure(method);
+    }
+    TASK_SCOPE.set(instance);
+    try {
+      return executeLocked(id, method, params);
+    } finally {
+      TASK_SCOPE.remove();
+      instance.commandLock.unlock();
+    }
+  }
+
+  /** 同一个任务上已有命令在跑:这条没开始执行,重发是安全的。 */
+  static RespBodyVo commandBusyFailure(String method) {
+    RespBodyVo busy = RespBodyVo.fail(method + " 未执行：同一个任务上已有命令正在执行，等满 "
+        + SERIALIZE_WAIT_MS + " 毫秒仍未轮到（[" + ActionError.COMMAND_TIMEOUT + "]）");
+    busy.setData(Kv.by("errorCode", ActionError.COMMAND_TIMEOUT).set("retryable", true)
+        .set("started", false).set("retryAfterMs", 1000).set("serialized", true)
+        .set("note", "同一个任务的命令是**串行**执行的（Playwright 的 Connection 不能被并发驱动）。"
+            + "这条命令没有开始执行，稍后重发即可；长批量进行中时，轮询类命令会排在它后面"));
+    return busy;
+  }
+
+  private RespBodyVo executeLocked(Long id, String method, JSONObject params) {
     RespBodyVo result = runBounded(id, method, params);
     if (result != null && !result.isOk()) {
       // 超时回执**不要再补页面上下文**:补它要再发一次 Playwright 调用,而此刻正是「底层调不动」
@@ -396,16 +417,10 @@ public class ActionService {
    * OCR 自己的超时就是 120 秒。这些命令改用一个宽松得多的天花板
    * ({@code browser.command.hardTimeoutMs},默认 15 分钟)—— 目的是「不永远挂死」,不是「快」。
    */
-  private static final Set<String> LONG_RUNNING = Set.of(
-      // 批次与配方：一次调用里包含很多步
-      "commands", "run_recipe",
-      // 等待类：时间由 timeoutSeconds 决定
-      "wait", "wait_for_element", "wait_for_text", "wait_for_url", "wait_for_load",
-      "wait_for_function", "wait_for_idle", "wait_for_stable", "wait_for_count", "wait_for_response",
-      // 人机协同：等人答复本来就可能很久
-      "request_human_input", "ask_user", "submit_human_input", "get_human_input",
-      // 单次就可能很慢的取证/导出
-      "pdf", "download_image", "ocr_image");
+  // 包级可见是为了让 CommandSetInvariantsTest 能断言「这些名字都还在命令表里」——
+  // 这类集合是逐条手写的,漏改一条就是静默的行为变化(某命令不再自动截图/不再重试),
+  // 而命令表本身看起来完全正常。改成 CommandSpec 派生之前,这条不变式必须先立起来。
+static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag.LONG_RUNNING);
 
   private RespBodyVo runBounded(Long id, String method, JSONObject params) {
     long limit = LONG_RUNNING.contains(method)
@@ -420,6 +435,30 @@ public class ActionService {
    * <p>从 {@link #runBounded} 里抽出来是为了能直接单测这个机制(见 {@code CommandTimeoutTest}):
    * 要验证「超时会回来」「返回体字段对不对」,不必真的让一个浏览器卡住 90 秒。
    */
+  /**
+   * 标记「当前线程已经在命令池里跑」。
+   *
+   * <p>
+   * 批量({@code commands})本身是池里的一个任务,它每一步又会经过这里。照旧再往同一个池里提交的话,
+   * 一个在飞的批量要占两个线程:池默认 24 线程,12 个并发批量就吃满;池满时所有外层任务都堵在
+   * {@code future.get()} 上,而它们的内层步骤在队列里排在外层后面 —— 全体一起等满 15 分钟硬超时,
+   * 回执还写着「结果未知、不要重发」,可队列里那些步骤**之后照样会跑**(外层超时并不取消它们)。
+   */
+  private static final ThreadLocal<Boolean> IN_COMMAND_POOL = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+  /**
+   * 「当前线程正在为哪个任务执行命令」。
+   *
+   * <p>
+   * 批量整批持有该任务的串行锁,而它内部的每一步可能跑在**派生线程**上(见 {@link #awaitWithLimit}),
+   * 派生线程并不"重入"外层线程的锁。靠这个标记把"同一任务的执行域"传下去,步骤才不会被自己的外层
+   * 挡在锁外面等成一条「服务端忙」。
+   */
+  private static final ThreadLocal<BrowserInstance> TASK_SCOPE = new ThreadLocal<>();
+
+  /** 同一个任务的命令最多等多久再放弃(毫秒):占着 HTTP 工作线程干等,比明说「忙」更糟。 */
+  private static final long SERIALIZE_WAIT_MS = 5000;
+
   static RespBodyVo awaitWithLimit(long limitMs, String method,
       java.util.function.Supplier<RespBodyVo> body) {
     if (limitMs <= 0) {
@@ -427,14 +466,54 @@ public class ActionService {
     }
     AtomicBoolean started = new AtomicBoolean(false);
     Future<RespBodyVo> future;
-    try {
-      future = commandPool().submit(() -> {
+    if (Boolean.TRUE.equals(IN_COMMAND_POOL.get())) {
+      // 已经在池里(批量中的一步):改用一次性线程。
+      // 既不占共享池(不会和外层互相堵死),又保留「这一步自己的超时兜底」——
+      // 直接内联跑会丢掉内层超时,等于悄悄改变了每一步的语义。
+      //
+      // 任务执行域要跟着传下去:派生线程不重入外层线程的锁,不传的话每一步都会在
+      // 「同一任务串行锁」外面等到超时,整批全废。
+      BrowserInstance inheritedScope = TASK_SCOPE.get();
+      FutureTask<RespBodyVo> step = new FutureTask<>(() -> {
         started.set(true);
-        return body.get();
+        if (inheritedScope != null) {
+          TASK_SCOPE.set(inheritedScope);
+        }
+        try {
+          return body.get();
+        } finally {
+          TASK_SCOPE.remove();
+        }
       });
-    } catch (RuntimeException rejected) {
-      // 池已关闭等极端情况:退回同步执行,宁可没有兜底也不要让命令发不出去
-      return body.get();
+      Thread thread = new Thread(step, "dsb-command-step");
+      thread.setDaemon(true);
+      thread.start();
+      future = step;
+    } else {
+      try {
+        BrowserInstance inheritedScope = TASK_SCOPE.get();
+        future = commandPool().submit(() -> {
+          started.set(true);
+          IN_COMMAND_POOL.set(Boolean.TRUE);
+          if (inheritedScope != null) {
+            TASK_SCOPE.set(inheritedScope);
+          }
+          try {
+            return body.get();
+          } finally {
+            TASK_SCOPE.remove();
+            IN_COMMAND_POOL.remove();
+          }
+        });
+      } catch (RejectedExecutionException overloaded) {
+        // 池与队列都满了:明确回一条「没开始执行、可以重发」的回执。
+        // 以前池是无界队列、永远不会走到这里 —— 也正因为无界,过载时调用方只会一直干等,
+        // 连一点「服务端忙不过来了」的信号都拿不到。
+        return commandOverloadedFailure(method, limitMs);
+      } catch (RuntimeException rejected) {
+        // 池已关闭等极端情况:退回同步执行,宁可没有兜底也不要让命令发不出去
+        return body.get();
+      }
     }
     try {
       return future.get(limitMs, TimeUnit.MILLISECONDS);
@@ -451,6 +530,17 @@ public class ActionService {
       }
       throw new IllegalStateException(cause == null ? failed.getMessage() : cause.getMessage(), cause);
     }
+  }
+
+  /** 过载(池与队列都满):这条命令没开始执行,重发是安全的。 */
+  static RespBodyVo commandOverloadedFailure(String method, long limit) {
+    RespBodyVo busy = RespBodyVo.fail(method + " 未执行：服务端并发已满（线程与排队都已满），"
+        + "这条命令没有开始执行（[" + ActionError.COMMAND_TIMEOUT + "]）");
+    busy.setData(Kv.by("errorCode", ActionError.COMMAND_TIMEOUT).set("retryable", true)
+        .set("started", false).set("retryAfterMs", 500).set("commandTimeoutMs", limit)
+        .set("note", "这条命令没有开始执行，重发是安全的。持续出现说明有命令卡住了浏览器会话，"
+            + "可用 browser.command.maxStuck 放宽并发，或先确认那些任务还活着"));
+    return busy;
   }
 
   static RespBodyVo commandTimeoutFailure(String method, long limit, boolean started) {
@@ -474,7 +564,13 @@ public class ActionService {
     return timeout;
   }
 
-  /** 有界命令池:大小即「允许多少条命令同时卡住」,线程是守护线程,服务退出不需要额外收尾 */
+  /**
+   * 有界命令池:大小即「允许多少条命令同时卡住」,线程是守护线程,服务退出不需要额外收尾。
+   *
+   * <p>
+   * 队列也是有界的(见 {@link #commandPool()}):无界队列会让过载表现为「一直等」而不是
+   * 「明确告知忙」,调用方拿不到任何可判断的信号。
+   */
   private static volatile ExecutorService COMMAND_POOL;
 
   private static ExecutorService commandPool() {
@@ -491,7 +587,11 @@ public class ActionService {
           thread.setDaemon(true);
           return thread;
         };
-        COMMAND_POOL = Executors.newFixedThreadPool(size, factory);
+        // 队列有界:池满 + 队列满 → 拒绝 → 回一条「没开始执行、可重发」的回执。
+        // 用无界队列时过载只会表现为「一直等」,调用方半点信号都拿不到。
+        int queueCapacity = Math.max(8, size);
+        COMMAND_POOL = new ThreadPoolExecutor(size, size, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(queueCapacity), factory);
       }
       return COMMAND_POOL;
     }
@@ -710,9 +810,16 @@ public class ActionService {
       attachUnknownParams(result, args, method);
       return result;
     } catch (IllegalArgumentException e) {
-      // 参数校验错(CommandTable 的 reqInt/reqStr 等):命令**根本没发出去**,不存在「可能已生效」的问题,
-      // 照旧给一句干脆的失败信息即可
-      return RespBodyVo.fail(method + " 失败：" + e.getMessage());
+      // 参数校验错(CommandTable 的 reqInt/reqStr 等):命令**根本没发出去**,不存在「可能已生效」的问题。
+      //
+      // 单独给一个错误码:以前这类失败与「站点/引擎拒绝了这次动作」共用 ACTION_FAILED + retryable:false,
+      // 调用方分不出「我参数写错了」(改了再来)和「页面/引擎不让做」(重试也没有不同结果)——
+      // 而这两件事该采取的行动完全不同。
+      RespBodyVo invalid = RespBodyVo.fail(method + " 失败：" + e.getMessage());
+      invalid.setData(Kv.by("errorCode", ActionError.INVALID_ARGUMENT).set("retryable", false)
+          .set("invalidArgument", true).set("started", false)
+          .set("note", "这条命令的参数不合法,服务端没有执行它;按提示改正参数后重发即可"));
+      return invalid;
     } catch (Exception e) {
       // 执行器抛到这里的异常,处理不了「动作到底生效没有」——实测点下载按钮时底层抛
       // object-does-not-exist(artifact@/response@),文件其实已经落盘。老写法只说「失败」,
@@ -969,8 +1076,10 @@ public class ActionService {
     if (commands.isEmpty()) {
       return RespBodyVo.fail("命令数组为空");
     }
-    if (commands.size() > MAX_COMMANDS) {
-      return RespBodyVo.fail("命令数组最多 " + MAX_COMMANDS + " 条,当前 " + commands.size() + " 条");
+    int maxCommands = PlaywrightService.commandMaxPerBatch();
+    if (commands.size() > maxCommands) {
+      return RespBodyVo.fail("命令数组最多 " + maxCommands + " 条,当前 " + commands.size()
+          + " 条(browser.command.maxPerBatch 可调)");
     }
     if (browserId == null) {
       return RespBodyVo.fail("缺少参数 id");

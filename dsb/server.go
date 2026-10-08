@@ -27,11 +27,6 @@ func cmdServer(args *Args, out *Printer) (int, error) {
 		return 0, usageErrorf("server 需要一个动作:init / build / start / stop / restart / status / logs / target")
 	}
 
-	port := DefaultPort
-	if args.Port != nil {
-		port = *args.Port
-	}
-
 	switch action {
 	case "init":
 		return cmdServerInit(args, out)
@@ -39,19 +34,37 @@ func cmdServer(args *Args, out *Printer) (int, error) {
 		return cmdServerBuild(args, out)
 	case "target":
 		return cmdServerTarget(args, out)
+	}
+
+	// start / stop / restart / status / logs 都作用于「某个端口上的后端」,端口一律以
+	// resolveEndpoint 的解析结果为准 —— 与 tasks / state / run 等所有命令共用同一套优先级:
+	//
+	//	--base-url > --use <名字> > --host/--port > DSB_BASE_URL/DSB_HOST/DSB_PORT > 配置文件 > 默认
+	//
+	// 以前这里只看命令行字面上的 --port(不认 --use、不认环境变量、不认配置文件里的端口),
+	// 于是在「多后端」这种正是要按端口区分实例的用法下:
+	// server start 起在 10049、server stop 停 10049、server logs 读 10049 的日志,
+	// 而 tasks / state / run 连的是配置文件里的另一个端口 —— 两个后端、两套任务表,
+	// 不需要任何竞态就能同时存在。
+	endpoint, err := resolveEndpoint(args)
+	if err != nil {
+		return 0, err
+	}
+
+	switch action {
 	case "start":
-		return cmdServerStart(args, out, port)
+		return cmdServerStart(args, out, endpoint)
 	case "stop":
-		return cmdServerStop(args, out, port)
+		return cmdServerStop(args, out, endpoint)
 	case "restart":
-		if code, err := cmdServerStop(args, out, port); err != nil || code != ExitOK {
-			return code, err
+		if code, stopErr := cmdServerStop(args, out, endpoint); stopErr != nil || code != ExitOK {
+			return code, stopErr
 		}
-		return cmdServerStart(args, out, port)
+		return cmdServerStart(args, out, endpoint)
 	case "status":
-		return cmdServerStatus(args, out, port)
+		return cmdServerStatus(args, out, endpoint)
 	case "logs":
-		return cmdServerLogs(args, out, port)
+		return cmdServerLogs(args, out, endpoint)
 	}
 	return 0, usageErrorf("server 不认识这个动作:%s(要 init / build / start / stop / restart / status / logs / target)", action)
 }
@@ -243,7 +256,7 @@ func cmdServerInit(args *Args, out *Printer) (int, error) {
 	}
 
 	// 保留已有配置(尤其是 targets),只改这几个字段 —— 别把用户登记过的目标冲掉
-	config, path, err := loadConfig()
+	config, _, err := loadConfig()
 	if err != nil {
 		return 0, err
 	}
@@ -264,7 +277,6 @@ func cmdServerInit(args *Args, out *Printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	_ = path
 	out.Line(fmt.Sprintf("已写入 %s", written))
 	out.Line(fmt.Sprintf("  repoDir=%s", config.RepoDir))
 	if config.Jar != "" {
@@ -280,9 +292,12 @@ func cmdServerInit(args *Args, out *Printer) (int, error) {
 }
 
 // cmdServerStart 起服务(已在跑就复用)。
-func cmdServerStart(args *Args, out *Printer, port int) (int, error) {
+//
+// endpoint 由 cmdServer 统一解析后传进来:端口不在这里另算一遍,
+// 免得 start 和 stop / logs / tasks 各算各的,落到不同实例上。
+func cmdServerStart(args *Args, out *Printer, endpoint Endpoint) (int, error) {
 	// 远端目标起不了:进程在别人机器上
-	if endpoint, err := resolveEndpoint(args); err == nil && !endpoint.Local {
+	if !endpoint.Local {
 		return 0, usageErrorf("目标 %s 不是本机,dsb 只能在本地拉起后端。\n"+
 			"提示:远端服务需要在那台机器上自己起(把 dsb 和仓库放到那边,或手工 java -jar)",
 			endpoint.BaseURL)
@@ -293,6 +308,7 @@ func cmdServerStart(args *Args, out *Printer, port int) (int, error) {
 		return 0, err
 	}
 	out.Line(fmt.Sprintf("仓库目录:%s(来源:%s)", repoDir, source))
+	out.Line(fmt.Sprintf("服务地址:%s(来源:%s)", endpoint.BaseURL, endpoint.Origin))
 
 	// 配置文件不存在但探测到了仓库,顺手记一份:下次在别的目录也能直接用
 	if config, path, err := loadConfig(); err == nil && path != "" {
@@ -308,7 +324,7 @@ func cmdServerStart(args *Args, out *Printer, port int) (int, error) {
 	if args.Timeout > 0 {
 		timeout = args.Timeout
 	}
-	if _, err := startBackend(repoDir, port, derefOr(args.Engine, ""), derefOr(args.Jar, ""), timeout, out); err != nil {
+	if _, err := startBackend(repoDir, endpoint.Port, derefOr(args.Engine, ""), derefOr(args.Jar, ""), timeout, out); err != nil {
 		if _, ok := asTransport(err); ok {
 			out.Warn("ERROR " + err.Error())
 			return ExitTransport, nil
@@ -319,9 +335,11 @@ func cmdServerStart(args *Args, out *Printer, port int) (int, error) {
 }
 
 // cmdServerStop 停服务。
-func cmdServerStop(args *Args, out *Printer, port int) (int, error) {
+//
+// endpoint 同上:停的必须是 start 起的那个实例,否则会停错端口上的后端。
+func cmdServerStop(args *Args, out *Printer, endpoint Endpoint) (int, error) {
 	// 远端进程停不了(和 start 一样的道理)
-	if endpoint, err := resolveEndpoint(args); err == nil && !endpoint.Local {
+	if !endpoint.Local {
 		return 0, usageErrorf("目标 %s 不是本机,dsb 只能停本机的后端。\n"+
 			"提示:远端服务需要在那台机器上停(HTTP shutdown 也可以:POST %s/playwright/command {\"method\":\"shutdown\"})",
 			endpoint.BaseURL, endpoint.BaseURL)
@@ -330,22 +348,18 @@ func cmdServerStop(args *Args, out *Printer, port int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := stopBackend(repoDir, port, args.KeepBrowser, out); err != nil {
+	if err := stopBackend(repoDir, endpoint.Port, args.KeepBrowser, out); err != nil {
 		return 0, err
 	}
 	return ExitOK, nil
 }
 
 // cmdServerStatus 打印服务状态。
-func cmdServerStatus(args *Args, out *Printer, port int) (int, error) {
-	// 目标可能是远端:地址以 resolveEndpoint 为准,而 pid/jar 这类本机信息只在本地目标才有意义
-	endpoint, endpointErr := resolveEndpoint(args)
-	if endpointErr != nil {
-		return 0, endpointErr
-	}
-	if endpoint.Port != 0 {
-		port = endpoint.Port
-	}
+//
+// endpoint 由 cmdServer 解析后传进来:地址以它为准,
+// 而 pid/jar 这类本机信息只在本地目标才有意义。
+func cmdServerStatus(args *Args, out *Printer, endpoint Endpoint) (int, error) {
+	port := endpoint.Port
 
 	repoDir, source, err := resolveRepoDir(derefOr(args.RepoDir, ""))
 	if err != nil {
@@ -461,7 +475,10 @@ func cmdServerStatus(args *Args, out *Printer, port int) (int, error) {
 }
 
 // cmdServerLogs 打印该端口日志的尾部。
-func cmdServerLogs(args *Args, out *Printer, port int) (int, error) {
+//
+// 端口同样来自统一解析:读的必须是这个实例的日志(每个端口的日志文件是分开的)。
+func cmdServerLogs(args *Args, out *Printer, endpoint Endpoint) (int, error) {
+	port := endpoint.Port
 	repoDir, _, err := resolveRepoDir(derefOr(args.RepoDir, ""))
 	if err != nil {
 		return 0, err

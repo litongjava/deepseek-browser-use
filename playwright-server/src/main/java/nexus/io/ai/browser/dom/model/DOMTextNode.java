@@ -23,10 +23,6 @@ public class DOMTextNode extends DOMBaseNode {
     return false;
   }
 
-  public boolean isParentInViewport() {
-    return parent != null && parent.isInViewport();
-  }
-
   public boolean isParentTopElement() {
     return parent != null && parent.isTopElement();
   }

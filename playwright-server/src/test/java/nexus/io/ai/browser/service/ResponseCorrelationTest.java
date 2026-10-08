@@ -44,14 +44,14 @@ public class ResponseCorrelationTest {
       reads.incrementAndGet();
       reader.set(Thread.currentThread());
       read.countDown();
-      return "x".repeat(ResponseBodyCache.MAX_CHARS + 1);
+      return "x".repeat(ResponseBodyCache.maxChars() + 1);
     }), 0, Kv.by("resourceType", "fetch"));
     ResponseBodyCache.capture(recorded);
     assertTrue(read.await(2, TimeUnit.SECONDS));
     assertSame("响应体读取不能在后台线程驱动 Playwright", caller, reader.get());
     assertTrue(recorded.bodyCaptured);
     assertTrue(recorded.bodyTruncated);
-    assertEquals(ResponseBodyCache.MAX_CHARS, recorded.body.length());
+    assertEquals(ResponseBodyCache.maxChars(), recorded.body.length());
     ResponseBodyCache.capture(recorded);
     assertEquals(1, reads.get());
   }

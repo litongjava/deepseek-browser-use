@@ -70,10 +70,25 @@ dsb --port 10049 --id 1001 close
 
 动作错误的 `data.errorCode` 区分 ELEMENT_READ_ONLY、ELEMENT_DISABLED、ELEMENT_HIDDEN、ELEMENT_OBSCURED、ELEMENT_NOT_EDITABLE、STALE_ELEMENT、ACTION_TIMEOUT 和 ACTION_FAILED；另有两个瞬时状态码：SPURIOUS_DISPATCH 标「异常来自 Playwright 的事件分发、与本次命令无关」（见 `pitfalls.md` 第 47 条），PAGE_NAVIGATING 标「页面正在导航/整页重建，这一刻拿不到 DOM」（主 frame 为 null；只读命令会由服务端自己重试，动作类命令仍是「不确定」）。错误原因来自完整调用日志；没有充分证据的超时只报 ACTION_TIMEOUT。
 
+另有一个**参数类**码：`INVALID_ARGUMENT`。命令表的参数校验没过（缺参、类型不对）时用它，并带 `started:false`。
+它和「站点/引擎拒绝了这次动作」是两回事：前者要**改命令**，后者要**换思路或换路径** —— 以前两者共用
+`ACTION_FAILED`，调用方分不出来。
+
 **另外两个超时码要单独认**（它们**不可重试**，与 `ACTION_TIMEOUT` 的「元素在、只是暂时不可点」是两回事）：
 
 - `EVAL_TIMEOUT`：`execute_js` 的脚本在自己的预算内没有结束（页内 `Promise.race` 兜底生效，见 `commands.md` 的 `execute_js`）。`data.outcomeUnknown:true`、`data.evalTimeoutMs` 给出生效的预算。脚本可能仍在页面里跑、也可能只改了一半状态 —— 先用 `get_browser_state` / `diff_dom_text` 确认，别直接重发。
 - `COMMAND_TIMEOUT`：命令在服务端的 wall-clock 兜底内没有返回（渲染进程卡死 / CDP 半死，页内定时器也跑不了）。`data.started` 区分两种情形：`true` = 已经开始执行（**结果未知，别重发**，必要时 `close` + `start` 重建任务）；`false` = 池子被卡满、**这次没有开始执行**，此时 `retryable:true`，重发是安全的。旋钮：`browser.command.timeoutMs`（普通命令，默认 90000）、`browser.command.hardTimeoutMs`（批次/等待类，默认 900000）、`browser.command.maxStuck`（默认 24）。
+
+**另外两种「没有开始执行」也用同一个码回报**，同样带 `retryable:true` / `started:false`，看到就直接（稍后）重发：
+
+- **同一任务上已有命令在跑**（回执带 `data.serialized:true`）。同一个任务的命令是**串行**执行的：
+  HTTP 线程池会把同一个 id 的请求并发送进来（一边发 `commands`、一边轮询 `get_page_snapshot`，
+  或者两个智能体共用一个 id），而 Playwright 的 Connection 事件泵**不能被并发驱动** ——
+  并发驱动会造成「响应早于请求登记、对象找不到、响应归属错位」那一族噪声。
+  所以第二条命令最多等 5 秒，等不到就如实回这条。
+  **「长批量进行中，轮询命令排在它后面」是正常现象**，不是服务端坏了，稍后重发即可。
+- **服务端并发已满**（线程与排队都满）。命令池的队列现在是**有界**的：过载表现为明确的一条「未执行」，
+  而不是让你一直干等、半点信号都拿不到。
 
 四个「出问题时最该看」的旋钮现在都能从 `get_config` 直接读到：`data.capture.*`（`enabled`/`timeoutMs`/`failThreshold`/`cooldownMs`/`spuriousCooldownMs`）、`data.eval.timeoutMs`、`data.command.*`、`data.network.record`（`on`/`lazy`/`off`）。
 

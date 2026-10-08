@@ -1,6 +1,6 @@
 ---
 name: wechat-channels-video-upload
-description: 用 deepseek-browser-use 把本地一个视频发布到微信「视频号」（视频号助手 channels.weixin.qq.com）的实操手册：登录页二维码 iframe 反复「加载失败」，正解是把 qrconnect 的 URL 单独在新页签打开、把二维码图给人扫；扫码后停在 oauth-callback 空白页是正常的（登录态已进 cookie），直接 go_to_url 到平台首页即可；发表页整页套在 micro-app 的**跨域子 frame**（`https://channels.weixin.qq.com/micro/content/post/create`）里——**传 frame 参数反而匹配不到，不传 frame 才命中**；上传视频后表单才渲染出来；封面由视频帧自动生成、不必须自己传。同时写透三件坑：截图整页熔断（`capture_degraded`）、发表按钮点击回执 `changed:false` 但实际已提交（URL 会跳到 `post/list`）、以及视频号**没有公开的视频链接**（只能在手机微信打开），回读凭证是稿件列表第一行 + 「视频 (N)」计数加一。
+description: 用 deepseek-browser-use 把本地一个视频发布到微信「视频号」（视频号助手 channels.weixin.qq.com）的实操手册：登录页二维码 iframe 反复「加载失败」，正解是把 qrconnect 的 URL 单独在新页签打开、把二维码图给人扫；扫码后停在 oauth-callback 空白页是正常的（登录态已进 cookie），直接 go_to_url 到平台首页即可；发表页整页套在 micro-app 的**跨域子 frame**（`https://channels.weixin.qq.com/micro/content/post/create`）里——**传 frame 参数反而匹配不到，不传 frame 才命中**；上传视频后表单才渲染出来；封面由视频帧自动生成、不必须自己传。同时写透三件坑：截图整页熔断（``capture_degraded``）、发表按钮点击回执 `changed:false` 但实际已提交（URL 会跳到 `post/list`）、以及视频号**没有公开的视频链接**（只能在手机微信打开），回读凭证是稿件列表第一行 + 「视频 (N)」计数加一。
 whenToUse: 需要把一个本地视频文件投稿到微信视频号（视频号助手网页版），包括扫码登录、上传视频、填描述、发表并回读确认时。站点是 channels.weixin.qq.com（Vue + micro-app 微前端）。
 ---
 
@@ -188,7 +188,7 @@ dsb --id 5001 run execute_js -p frame=1 \
 
 ## 三、这个站点特有的坑
 
-### 坑 1：整页截图熔断（`capture_degraded`）
+### 坑 1：整页截图熔断（``capture_degraded``）
 
 实测发表页上 `screenshot` 会超时并在若干次失败后**熔断**，回执里出现：
 

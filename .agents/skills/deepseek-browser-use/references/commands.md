@@ -78,6 +78,14 @@
 
 `upload_file` 的 `path` 是**服务端**能打开的路径，不是 URL。`index` 与 `selector` 传一个即可，**优先用 `selector`**：真实站点上的 file input 基本都是隐藏的（`display:none` 或 `visibility:hidden`），既没有操作索引，也要先想办法把它显出来才能用索引定位——用选择器就不需要这一套。
 
+> **传大文件必须用 `selector`（`index` 不行）**。服务用 `connectOverCDP` 附着浏览器，Playwright 把这类浏览器视为「不与本机同址」，它的 `setInputFiles` 对这类浏览器有 **50MB 上限且不可配置**。超过 50MB 时服务会自动改走 CDP 的 `DOM.setFileInputFiles`（把**本地路径**直接交给浏览器，不经那次「传输」）—— 但这条兜底需要 CSS 选择器定位元素。
+>
+> - 传 `selector`：>50MB 也能传，走 CDP 兜底。
+> - 传 `index`：>50MB 会被拒，报错里会让你改用 `selector`（并列出别的出路：改走页面自身的上传接口、或让站点接受分片/远程地址）。
+> - **≤50MB 的文件两条路完全一样**，放心照旧用 `index`。
+>
+> 抓过一次真实情形：要往 EdgeOne 控制台上传一个 63MB 的站点压缩包，卡在 `upload_file 失败：[ACTION_FAILED] Cannot transfer files larger than 50Mb to a browser not co-located with the server` —— 那句话是引擎抛的，既不是我们的 `errorCode` 也没说怎么办。现在这条上限在服务端就被识别，并给出可行动的提示。
+
 ```bash
 # 把 file input 的选择器喂给它（不需要元素可见，也不需要索引）
 {"id":"1001","method":"upload_file","params":{"selector":"#form_item_imageAttJson","path":"图样.jpg"}}

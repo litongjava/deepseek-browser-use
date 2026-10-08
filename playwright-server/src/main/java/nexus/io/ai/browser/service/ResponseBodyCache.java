@@ -24,7 +24,7 @@ import com.microsoft.playwright.PlaywrightException;
  * <ul>
  * <li>只抄 {@code xhr} / {@code fetch} —— 页面、脚本、图片的 body 又大又不是「接口返回」,
  * 抄它们只会把内存和带宽吃光;</li>
- * <li>单条最多留 {@link #MAX_CHARS} 个字符,超出部分丢掉并标 {@code bodyTruncated};</li>
+ * <li>单条最多留 {@link #maxChars()} 个字符,超出部分丢掉并标 {@code bodyTruncated};</li>
  * <li>读取必须留在当前 Playwright 调用线程。独立线程会并发驱动共享 Connection 的事件泵,
  * 造成响应早于请求登记、对象找不到、响应归属错位。requestfinished 时下载已完成,
  * 不需要在 response(只有响应头)回调里等待整个下载。</li>
@@ -32,8 +32,28 @@ import com.microsoft.playwright.PlaywrightException;
  */
 public final class ResponseBodyCache {
 
-  /** 单条响应最多缓存多少字符(get_response_body 默认只回 2 万,留 5 倍余量) */
-  public static final int MAX_CHARS = 100_000;
+  /** 单条响应最多缓存多少字符的默认值(get_response_body 默认只回 2 万,留 5 倍余量) */
+  public static final int DEFAULT_MAX_CHARS = 100_000;
+
+  /**
+   * 单条响应最多缓存多少字符,可配({@code browser.network.bodyChars})
+   *
+   * <p>
+   * 原来写死 10 万:配合「每个任务保留 100 条响应」就是约 1000 万字符/任务,想压内存只能改代码。
+   * 与其它上限一样走配置之后,「文本多、任务多」的场景可以自己调小。
+   */
+  public static int maxChars() {
+    String configured = ChromeBrowser.config("browser.network.bodyChars");
+    if (configured == null || configured.isBlank()) {
+      return DEFAULT_MAX_CHARS;
+    }
+    try {
+      int parsed = Integer.parseInt(configured.trim());
+      return parsed > 0 ? parsed : DEFAULT_MAX_CHARS;
+    } catch (NumberFormatException e) {
+      return DEFAULT_MAX_CHARS;
+    }
+  }
 
   /** 只有取数接口的响应体才值得留 */
   private static final Set<String> CACHEABLE_TYPES = Set.of("xhr", "fetch");
@@ -46,12 +66,13 @@ public final class ResponseBodyCache {
     return resourceType != null && CACHEABLE_TYPES.contains(resourceType.trim().toLowerCase(Locale.ROOT));
   }
 
-  /** 超长只留前缀(截断与否由调用方按 {@link #MAX_CHARS} 判断并回报) */
+  /** 超长只留前缀(截断与否由调用方按 {@link #maxChars()} 判断并回报) */
   public static String clip(String body) {
-    if (body == null || body.length() <= MAX_CHARS) {
+    int max = maxChars();
+    if (body == null || body.length() <= max) {
       return body;
     }
-    return body.substring(0, MAX_CHARS);
+    return body.substring(0, max);
   }
 
   /**
@@ -70,7 +91,7 @@ public final class ResponseBodyCache {
     }
     try {
       String body = recorded.response.text();
-      recorded.bodyTruncated = body != null && body.length() > MAX_CHARS;
+      recorded.bodyTruncated = body != null && body.length() > maxChars();
       recorded.body = clip(body);
     } catch (PlaywrightException e) {
       recorded.bodyCaptureError = brief(e.getMessage());

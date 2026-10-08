@@ -21,11 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -101,7 +101,6 @@ type Client struct {
 	Diagnostics  bool
 	RecordDir    string
 	Counter      int
-	LastResponse *Response
 	httpClient   *http.Client
 	// AutoStart:连不上服务时是否按配置文件把后端拉起来(见 backend.go)。
 	AutoStart bool
@@ -185,6 +184,20 @@ func newHTTPClient() *http.Client {
 // 再重试一次。业务失败与服务超时都不触发 —— 超时说明服务在跑,只是慢。
 func (c *Client) Request(path string, method string, body []byte, contentType string,
 	query *Obj, timeout float64) (*Response, error) {
+	return c.requestWithBody(path, method, bytesBody(body), contentType, query, timeout)
+}
+
+// RequestStream 与 Request 相同,但请求体是流(用于上传大文件:不把整个文件读进内存)。
+//
+// open 会被调用多次(自动拉起后重试一次),必须每次都能返回一个从头开始的新读取器。
+func (c *Client) RequestStream(path string, method string,
+	open func() (io.ReadCloser, int64, error), contentType string,
+	query *Obj, timeout float64) (*Response, error) {
+	return c.requestWithBody(path, method, streamBody(open), contentType, query, timeout)
+}
+
+func (c *Client) requestWithBody(path string, method string, body *requestBody, contentType string,
+	query *Obj, timeout float64) (*Response, error) {
 	response, err := c.requestOnce(path, method, body, contentType, query, timeout)
 	if err == nil {
 		return response, nil
@@ -196,10 +209,17 @@ func (c *Client) Request(path string, method string, body []byte, contentType st
 		}
 		return c.requestOnce(path, method, body, contentType, query, timeout)
 	}
+	if note := autoStartRefusal(err, c); note != "" {
+		return nil, transportErrorf("%s(%s)", err.Error(), note)
+	}
 	return nil, err
 }
 
-// shouldAutoStart 判断这次失败该不该触发自动拉起:只在「连不上」这一类,且只触发一次。
+// shouldAutoStart 判断这次失败该不该触发自动拉起:只在「确定请求还没发出去」的失败上,且只触发一次。
+//
+// 以前是「凡是连不上就拉起,然后把同一个请求原样重发」。问题在于 httpClient.Do 的失败里
+// 有一类是「请求已经写出去、服务端可能已经执行完」之后才断的(连接被重置、读响应时 EOF)。
+// 对那类失败重发,等于把 click / submit / execute_js 再执行一遍 —— 而协议里没有幂等键。
 func (c *Client) shouldAutoStart(err error) bool {
 	if !c.AutoStart || c.autoStarted {
 		return false
@@ -209,19 +229,81 @@ func (c *Client) shouldAutoStart(err error) bool {
 	if !c.LocalTarget {
 		return false
 	}
+	return isPreDeliveryFailure(err)
+}
+
+// autoStartRefusal 在「本来会触发自动拉起、但因为不确定请求是否已送达而放弃」时补一句说明。
+// 不说明的话,使用者只会看到「没自动拉起」,以为这个功能坏了。
+func autoStartRefusal(err error, c *Client) string {
+	if !c.AutoStart || c.autoStarted || !c.LocalTarget {
+		return ""
+	}
 	transport, ok := asTransport(err)
-	if !ok {
-		return false
+	if !ok || !strings.Contains(transport.Message, "连不上") {
+		return ""
 	}
-	// 超时不算「没起」:服务在跑,只是慢;这时再拉一个只会更糟
-	if strings.Contains(transport.Message, "请求超时") {
-		return false
+	if isPreDeliveryFailure(err) {
+		return ""
 	}
-	return strings.Contains(transport.Message, "连不上")
+	return "这次失败可能发生在请求已经送达之后,不自动重试:重发会把动作再做一遍"
+}
+
+// isPreDeliveryFailure 判断这次传输失败是不是「确定还没把请求发出去」。
+//
+// 只有这一类才敢自动拉起后端并重发。判据是网络栈的错误类型,而不是我们自己拼的错误文本:
+//   - dial 阶段出错(连接被拒绝、主机/网络不可达、dial 超时)与 DNS 解析失败 —— 连都没连上,
+//     服务端不可能收到过,重发是安全的;
+//   - 连接重置、读响应中断、整个请求超时 —— 都可能是「命令已经执行完」之后才发生的,
+//     重发会把动作再做一遍。
+func isPreDeliveryFailure(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	return false
 }
 
 // requestOnce 是一次真正的 HTTP 往返,不含自动拉起。
-func (c *Client) requestOnce(path string, method string, body []byte, contentType string,
+// requestBody 是请求体:要么是一段内存字节,要么是「每次尝试都重新打开」的流。
+//
+// 上传大文件走流:以前整个文件读进内存(还额外算一遍 sha256),几百 MB 的视频直接把客户端
+// 的内存顶满;流式之后峰值内存与文件大小无关,重试也能重新打开文件从头发。
+type requestBody struct {
+	bytes []byte
+	open  func() (io.ReadCloser, int64, error)
+}
+
+func bytesBody(data []byte) *requestBody {
+	if data == nil {
+		return nil
+	}
+	return &requestBody{bytes: data}
+}
+
+func streamBody(open func() (io.ReadCloser, int64, error)) *requestBody {
+	return &requestBody{open: open}
+}
+
+// reader 每次调用都返回新的读取器(重试要能重头再来);返回的长度 -1 表示未知。
+func (b *requestBody) reader() (io.Reader, int64, error) {
+	if b == nil {
+		return nil, 0, nil
+	}
+	if b.open != nil {
+		handle, size, err := b.open()
+		if err != nil {
+			return nil, 0, err
+		}
+		return handle, size, nil
+	}
+	return bytes.NewReader(b.bytes), int64(len(b.bytes)), nil
+}
+
+func (c *Client) requestOnce(path string, method string, body *requestBody, contentType string,
 	query *Obj, timeout float64) (*Response, error) {
 	target := c.BaseURL + path
 	if query != nil && query.Len() > 0 {
@@ -241,13 +323,20 @@ func (c *Client) requestOnce(path string, method string, body []byte, contentTyp
 		timeout = c.Timeout
 	}
 
-	var reader io.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
+	reader, contentLength, bodyErr := body.reader()
+	if bodyErr != nil {
+		return nil, usageErrorf("读不了请求体:%v", bodyErr)
+	}
+	if closer, ok := reader.(io.Closer); ok {
+		defer closer.Close()
 	}
 	request, err := http.NewRequest(method, target, reader)
 	if err != nil {
 		return nil, usageErrorf("请求地址不合法:%s(%v)", target, err)
+	}
+	// 显式给出长度:否则 http 会改成分块传输,而服务端不一定认
+	if contentLength >= 0 {
+		request.ContentLength = contentLength
 	}
 	// 逐请求超时:Python 版把 timeout 交给 urllib,这里交给 context
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout*float64(time.Second)))
@@ -266,10 +355,11 @@ func (c *Client) requestOnce(path string, method string, body []byte, contentTyp
 	started := time.Now()
 	httpResponse, err := c.httpClient.Do(request)
 	if err != nil {
+		// 两种都保留底层错误:调用方要靠它区分「连都没连上」与「发出去以后才断的」
 		if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
-			return nil, transportErrorf("请求超时 %s(超过 %.0f 秒)", target, timeout)
+			return nil, transportErrorCause(err, "请求超时 %s(超过 %.0f 秒)", target, timeout)
 		}
-		return nil, transportErrorf("连不上 %s:%v(服务起了吗?地址对吗?)", target, unwrapURLError(err))
+		return nil, transportErrorCause(err, "连不上 %s:%v(服务起了吗?地址对吗?)", target, unwrapURLError(err))
 	}
 	defer httpResponse.Body.Close()
 
@@ -357,66 +447,6 @@ func flateDecompress(raw []byte) []byte {
 
 // ------------------------------------------------------------------ 记录
 
-// recordCall 把这一次调用落盘:NNN.req.json / NNN.res.json + 一行 steps.log。
-func (c *Client) recordCall(label string, payload Value, response *Response, sendError string) {
-	if !c.Record {
-		return
-	}
-	index := c.Counter
-	c.Counter++
-	if err := os.MkdirAll(c.RecordDir, 0o755); err != nil {
-		if c.Verbose {
-			fmt.Fprintf(os.Stderr, "[warn] 记录失败:%v\n", err)
-		}
-		return
-	}
-	writeErr := func() error {
-		requestText := EncodeJSON(payload, encIndent2)
-		// 用 writeTextFile 而不是 os.WriteFile:它与旧 Python 版一样按文本模式把 \n 翻成 \r\n,
-		// 换掉客户端之后留档文件的字节不变(实测旧记录就是 CRLF)。
-		if err := writeTextFile(filepath.Join(c.RecordDir, fmt.Sprintf("%03d.req.json", index)),
-			requestText); err != nil {
-			return err
-		}
-		var responseText string
-		if response != nil {
-			responseText = EncodeJSON(response.Envelope, encIndent2)
-		} else {
-			responseText = EncodeJSON(ObjOf("sendFailed", true, "error", sendError), encIndent2)
-		}
-		if err := writeTextFile(filepath.Join(c.RecordDir, fmt.Sprintf("%03d.res.json", index)),
-			responseText); err != nil {
-			return err
-		}
-		stamp := time.Now().Format("2006-01-02 15:04:05")
-		var line string
-		if response == nil {
-			line = fmt.Sprintf("%s #%03d id=%d %s SEND-FAILED %s", stamp, index, c.TaskID, label, sendError)
-		} else {
-			verdict := "FAIL"
-			if response.Ok() {
-				verdict = "OK"
-			}
-			line = fmt.Sprintf("%s #%03d id=%d %s %s %dms%s", stamp, index, c.TaskID, label,
-				verdict, response.ElapsedMs, summarize(response.Data()))
-			if !response.Ok() {
-				line += " msg=" + response.Msg()
-			}
-		}
-		handle, err := os.OpenFile(filepath.Join(c.RecordDir, "steps.log"),
-			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		defer handle.Close()
-		_, err = handle.WriteString(line + "\n")
-		return err
-	}()
-	if writeErr != nil && c.Verbose {
-		fmt.Fprintf(os.Stderr, "[warn] 记录失败:%v\n", writeErr)
-	}
-}
-
 // mask 已移除:这份客户端不做脱敏,留档与输出都是原样。
 
 // ------------------------------------------------------------------ 命令接口
@@ -461,7 +491,6 @@ func (c *Client) Command(method string, params Value, taskID *int, timeout float
 		c.recordCall(label, envelope, nil, err.Error())
 		return nil, err
 	}
-	c.LastResponse = response
 	c.recordCall(label, envelope, response, "")
 	return response, nil
 }
@@ -525,27 +554,49 @@ func (c *Client) Upload(path string, filename string) (*Response, error) {
 	if err != nil || info.IsDir() {
 		return nil, usageErrorf("找不到要上传的文件:%s", path)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, usageErrorf("读不了要上传的文件 %s:%v", path, err)
-	}
 	name := filename
 	if name == "" {
 		name = filepath.Base(path)
 	}
-	digest := sha256.Sum256(data)
-	payload := ObjOf("file", path, "filename", name, "size", json.Number(itoa(len(data))),
-		"sha256", hex.EncodeToString(digest[:]))
+	// 先流式算一遍 sha256(常量内存),再把文件**流式**发出去。
+	// 以前是 os.ReadFile 把整个文件读进内存再算摘要:几百 MB 的视频会把客户端顶爆。
+	digest, err := fileDigest(path)
+	if err != nil {
+		return nil, usageErrorf("读不了要上传的文件 %s:%v", path, err)
+	}
+	size := info.Size()
+	payload := ObjOf("file", path, "filename", name, "size", json.Number(strconv.FormatInt(size, 10)),
+		"sha256", digest)
 	query := ObjOf("filename", name)
 
-	response, err := c.Request(pathUpload, http.MethodPost, data, "application/octet-stream", query, 0)
+	response, err := c.RequestStream(pathUpload, http.MethodPost,
+		func() (io.ReadCloser, int64, error) {
+			handle, openErr := os.Open(path)
+			if openErr != nil {
+				return nil, 0, openErr
+			}
+			return handle, size, nil
+		}, "application/octet-stream", query, 0)
 	if err != nil {
 		c.recordCall("upload", payload, nil, err.Error())
 		return nil, err
 	}
-	c.LastResponse = response
 	c.recordCall("upload", payload, response, "")
 	return response, nil
+}
+
+// fileDigest 流式算文件的 sha256:内存占用与文件大小无关。
+func fileDigest(path string) (string, error) {
+	handle, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer handle.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, handle); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // Uploads 列出暂存文件。
@@ -617,111 +668,5 @@ func asTaskID(value any) (int, error) {
 	return 0, usageErrorf("任务 id 必须是数字(例如 1001 或雪花 ID),收到的是:%v", value)
 }
 
-// defaultRecordDir 记录目录:与 PowerShell 客户端保持一致,落在仓库的 logs/agent/<会话>/ 下。
-func defaultRecordDir(session string) string {
-	if session == "" {
-		return filepath.Join("logs", "agent", "dsb")
-	}
-	if base := os.Getenv("DSB_RECORD_DIR"); base != "" {
-		return filepath.Join(base, session)
-	}
-	return filepath.Join("logs", "agent", session)
-}
-
 // taskIDValue 把任务 id 变成请求体里的 JSON 数字。
-func taskIDValue(taskID int) json.Number { return json.Number(itoa(taskID)) }
-
-// nextIndex 接着已有的编号往下记,不覆盖上一轮的记录。
-func nextIndex(directory string) int {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return 1
-	}
-	highest := 0
-	pattern := regexp.MustCompile(`^(\d+)\.(?:req|res)\.json$`)
-	for _, entry := range entries {
-		if match := pattern.FindStringSubmatch(entry.Name()); match != nil {
-			if value, err := strconv.Atoi(match[1]); err == nil && value > highest {
-				highest = value
-			}
-		}
-	}
-	return highest + 1
-}
-
-// summarize 把回执里的关键字段压成一行,便于 steps.log 里一眼看出发生了什么。
-//
-// 只挑「一眼能判断这一步成不成」的标量字段;挑不出任何字段时返回空串,由调用方决定退化成什么。
-func summarize(data Value) string {
-	object := asObj(data)
-	if object == nil {
-		return ""
-	}
-	order := []string{"count", "countBlocking", "countStrict", "succeeded", "failed", "expectFailed",
-		"seq", "status", "mode", "matched", "stable", "closed", "elementCount", "jobId", "step",
-		"title", "url", "value", "visible", "enabled", "checked", "result", "actionStatus",
-		"retrySafe", "observationComplete", "snapshotConsistent", "indicesUsable"}
-	parts := make([]string, 0, 8)
-	for _, key := range order {
-		item, exists := object.Get(key)
-		if !exists || isEmptyJSON(item) {
-			continue
-		}
-		// 只收标量:字符串、布尔、数字。对象/数组不是「一眼能判断成不成」的字段。
-		switch typed := item.(type) {
-		case string:
-			runes := []rune(typed)
-			if len(runes) > 40 {
-				typed = string(runes[:40]) + "…"
-			}
-			parts = append(parts, key+"="+typed)
-		case bool:
-			parts = append(parts, key+"="+pyStr(typed))
-		case json.Number:
-			parts = append(parts, key+"="+string(typed))
-		}
-	}
-	if shot, ok := object.Get("screenshot"); ok {
-		parts = append(parts, "shot="+pyStr(shot))
-	}
-	if results := asArray(objGet(data, "results")); results != nil {
-		marks := make([]string, 0, 12)
-		for position, step := range results {
-			if position >= 12 {
-				break
-			}
-			stepObj := asObj(step)
-			if stepObj == nil {
-				continue
-			}
-			okValue, _ := stepObj.Get("ok")
-			mark := "fail"
-			if flag, isBool := okValue.(bool); isBool && flag {
-				mark = "ok"
-			}
-			// 与 Python 一致:expectResult 是个对象、且里面的 passed 不是真值时,标成 expect-fail
-			// (passed 缺失也算没过 —— Python 的 `not None` 就是 True)
-			if expectResult := asObj(objGet(step, "expectResult")); expectResult != nil {
-				passedValue, exists := expectResult.Get("passed")
-				passed, isBool := passedValue.(bool)
-				if !exists || !isBool || !passed {
-					mark = "expect-fail"
-				}
-			}
-			index, indexExists := stepObj.Get("index")
-			command, commandExists := stepObj.Get("command")
-			if !indexExists {
-				index = nil
-			}
-			if !commandExists {
-				command = nil
-			}
-			marks = append(marks, pyStr(index)+":"+pyStr(command)+"="+mark)
-		}
-		parts = append(parts, "| "+strings.Join(marks, " "))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return " " + strings.Join(parts, " ")
-}
+func taskIDValue(taskID int) json.Number { return json.Number(strconv.Itoa(taskID)) }

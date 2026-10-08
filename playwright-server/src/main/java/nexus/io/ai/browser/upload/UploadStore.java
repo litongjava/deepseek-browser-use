@@ -35,7 +35,10 @@ import nexus.io.tio.utils.snowflake.SnowflakeIdUtils;
  * <tr><th>键</th><th>默认值</th><th>说明</th></tr>
  * <tr><td>{@code browser.upload.enabled}</td><td>{@code true}</td><td>关掉后 {@code /playwright/upload} 一律拒绝</td></tr>
  * <tr><td>{@code browser.upload.dir}</td><td>{@code <启动目录>/upload}</td><td>暂存目录,不存在会自动创建</td></tr>
- * <tr><td>{@code browser.upload.maxBytes}</td><td>{@code 67108864}(64MB)</td><td>单文件上限,{@code 0} 表示不限</td></tr>
+ * <tr><td>{@code browser.upload.maxBytes}</td><td>{@code 52428800}(50MB)</td><td>单文件上限,{@code 0} 表示不限。
+ * 默认值等于 {@link #ENGINE_MAX_BYTES}:本服务用 {@code connectOverCDP} 附着浏览器,Playwright 把它当作
+ * 「不与本机同址」的浏览器,对这类浏览器的 {@code setInputFiles} 有 50MB 上限 —— 把这里配得比引擎大,
+ * 只会让文件过了我们的闸门、然后死在引擎里,而且给出一句不带 errorCode 的英文报错。</td></tr>
  * <tr><td>{@code browser.upload.overwrite}</td><td>{@code true}</td><td>同名文件是覆盖还是自动改名</td></tr>
  * </table>
  *
@@ -51,8 +54,19 @@ public final class UploadStore {
   public static final String KEY_MAX_BYTES = "browser.upload.maxBytes";
   public static final String KEY_OVERWRITE = "browser.upload.overwrite";
 
-  /** 默认单文件上限 64MB:浏览器自动化要传的图样、PDF、证件照都远小于这个量级 */
-  private static final long DEFAULT_MAX_BYTES = 64L * 1024 * 1024;
+  /**
+   * 引擎自身的传输上限:50MB。
+   *
+   * <p>
+   * Playwright 对「不与服务器同址」的浏览器({@code connectOverCDP} 附着的一律算)有这条硬限制,
+   * 超了会回 {@code Cannot transfer files larger than 50Mb to a browser not co-located with the
+   * server} —— 既不是我们自己的 errorCode,也不告诉调用方该怎么办。所以这里把它作为默认值,
+   * 让可配置的上限永远不会比引擎能给的多。
+   */
+  public static final long ENGINE_MAX_BYTES = 50L * 1024 * 1024;
+
+  /** 默认单文件上限:与引擎上限一致(见 {@link #ENGINE_MAX_BYTES}) */
+  private static final long DEFAULT_MAX_BYTES = ENGINE_MAX_BYTES;
 
   /** 文件名长度上限(含扩展名),防止把文件系统写崩 */
   private static final int MAX_NAME_CHARS = 120;

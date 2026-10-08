@@ -72,10 +72,6 @@ public class DOMState {
     return pageHeight;
   }
 
-  public Map<Integer, Integer> getIndexToFrame() {
-    return indexToFrame;
-  }
-
   public List<FrameSnapshot> getFrames() {
     return frames;
   }

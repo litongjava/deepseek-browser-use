@@ -78,12 +78,6 @@ public final class CdpConnection implements AutoCloseable {
     this.timeoutMs = timeoutMs;
   }
 
-  /** 挂一个调试输出落点(排查用);传 null 恢复为丢弃 */
-  public static void setDebugSink(Consumer<String> sink) {
-    debugSink = sink == null ? message -> {
-    } : sink;
-  }
-
   /**
    * 连到一个已经在跑的 Chrome
    *

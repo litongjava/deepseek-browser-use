@@ -16,13 +16,10 @@ package main
 import (
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -103,187 +100,6 @@ type JarCandidate struct {
 	Size    int64
 }
 
-// collectJarCandidates 按优先级列出全部可用 jar。
-//
-// 顺序是「先分组、组内再排序」:
-//   - 显式指定(配置里的 jar)单独一组,它一旦存在就是唯一候选;
-//   - **release 排在 target 前面**:releases/<commit>/ 是「按 commit 存档、可复现」的产物,
-//     而 target/ 是随便哪次本地构建的产物(可能来自半路中断的构建、也可能改了代码没提交),
-//     日常启动应该优先用前者;想用最新的代码构建出来的,显式 `dsb server build` 或 --jar 指定;
-//   - dist/(发行包)放最后,它通常是几周前的快照。
-func collectJarCandidates(repoDir string, explicit string) []JarCandidate {
-	if explicit != "" && fileExists(explicit) {
-		return []JarCandidate{candidateFor(explicit, "explicit", "")}
-	}
-
-	out := []JarCandidate{}
-
-	// 1) .dsb-backend/releases/<commit>/backend.jar —— 多个 release 时新的排前面
-	releasesDir := filepath.Join(repoDir, ".dsb-backend", "releases")
-	if entries, err := os.ReadDir(releasesDir); err == nil {
-		releases := []JarCandidate{}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			jarPath := filepath.Join(releasesDir, entry.Name(), "backend.jar")
-			if info, err := os.Stat(jarPath); err == nil {
-				releases = append(releases, candidateFor(jarPath, "releases", shortCommit(entry.Name())))
-				_ = info
-			}
-		}
-		sort.Slice(releases, func(i, j int) bool {
-			return releases[i].ModTime.After(releases[j].ModTime)
-		})
-		out = append(out, releases...)
-	}
-
-	// 2) playwright-server/target/playwright-server-*.jar —— 本地 mvn 构建的直接产物
-	targetDir := filepath.Join(repoDir, "playwright-server", "target")
-	for _, match := range globJars(targetDir, "playwright-server-*.jar", "sources", "javadoc") {
-		out = append(out, candidateFor(match, "target", ""))
-	}
-
-	// 3) dist/*-windows-x64.jar 之类发行包 —— 取 playwright 版本号最高的那份
-	distDir := filepath.Join(repoDir, "dist")
-	platform := fmt.Sprintf("-%s-%s.jar", runtime.GOOS, mapArch(runtime.GOARCH))
-	distMatches := globJars(distDir, "*"+platform, "sources", "javadoc")
-	if len(distMatches) > 0 {
-		best := preferHighestPlaywright(distMatches)
-		detail := ""
-		if rev := playwrightRev(best); rev > 0 {
-			detail = "playwright " + playwrightVersion(best)
-		}
-		out = append(out, candidateFor(best, "dist", detail))
-	}
-
-	return out
-}
-
-// candidateFor 读一个 jar 的元信息。
-func candidateFor(path string, source string, detail string) JarCandidate {
-	candidate := JarCandidate{Path: path, Source: source, Detail: detail}
-	if info, err := os.Stat(path); err == nil {
-		candidate.ModTime = info.ModTime()
-		candidate.Size = info.Size()
-	}
-	return candidate
-}
-
-// locateJar 取第一个候选;一个都没有时报用法错,并把找过的地方列出来。
-func locateJar(repoDir string, explicit string) (string, error) {
-	candidates := collectJarCandidates(repoDir, explicit)
-	if len(candidates) > 0 {
-		return candidates[0].Path, nil
-	}
-	return "", usageErrorf("在 %s 里找不到后端 jar,找过这些地方:\n  - %s\n"+
-		"提示:跑一次 `dsb server build` 构建一份,或用 `dsb server init --jar <jar>` 指定",
-		repoDir, strings.Join(triedJarLocations(repoDir, explicit), "\n  - "))
-}
-
-// triedJarLocations 列出「找过但没找到」的位置,给报错文案用。
-func triedJarLocations(repoDir string, explicit string) []string {
-	tried := []string{}
-	if explicit != "" {
-		tried = append(tried, explicit+"(配置里指定的,不存在)")
-	}
-	tried = append(tried,
-		filepath.Join(repoDir, ".dsb-backend", "releases", "<commit>", "backend.jar")+"(没有)",
-		filepath.Join(repoDir, "playwright-server", "target", "playwright-server-*.jar")+"(没有)",
-		filepath.Join(repoDir, "dist", fmt.Sprintf("*-%s-%s.jar", runtime.GOOS, mapArch(runtime.GOARCH)))+"(没有)")
-	return tried
-}
-
-// shortCommit 把 commit SHA 截成 8 位,够辨认又不至于把表格撑开。
-func shortCommit(commit string) string {
-	if len(commit) > 8 {
-		return commit[:8]
-	}
-	return commit
-}
-
-// playwrightVersion 从文件名里抠出 playwright 的版本号字符串(1.63.0)。
-func playwrightVersion(path string) string {
-	name := filepath.Base(path)
-	marker := "-playwright-"
-	at := strings.Index(name, marker)
-	if at < 0 {
-		return ""
-	}
-	return strings.TrimSuffix(name[at+len(marker):], ".jar")
-}
-
-// mapArch 把 Go 的 GOARCH 映射成发行包命名里的架构段。
-func mapArch(arch string) string {
-	switch arch {
-	case "amd64":
-		return "x64"
-	case "arm64":
-		return "arm64"
-	case "386":
-		return "x86"
-	}
-	return arch
-}
-
-// globJars 在一个目录里按模式找 jar,并排除名字里带 exclude 词的(如 sources/javadoc)。
-func globJars(directory string, pattern string, exclude ...string) []string {
-	matches, err := filepath.Glob(filepath.Join(directory, pattern))
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(matches))
-	for _, match := range matches {
-		info, err := os.Stat(match)
-		if err != nil || info.IsDir() {
-			continue
-		}
-		lowered := strings.ToLower(filepath.Base(match))
-		skip := false
-		for _, word := range exclude {
-			if strings.Contains(lowered, word) {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			out = append(out, match)
-		}
-	}
-	return out
-}
-
-// preferHighestPlaywright 在多个发行包里挑 playwright 版本号最高的那个;
-// 文件名里带 playwright-<rev> 的比不带的新,同带时比 rev 大小。
-func preferHighestPlaywright(paths []string) string {
-	best := paths[0]
-	bestRev := playwrightRev(best)
-	for _, path := range paths[1:] {
-		rev := playwrightRev(path)
-		if rev > bestRev {
-			best, bestRev = path, rev
-		}
-	}
-	return best
-}
-
-// playwrightRev 从文件名里抠出 playwright 版本号;-playwright-1.63.0 → 1630,不带 → 0。
-func playwrightRev(path string) int {
-	name := filepath.Base(path)
-	marker := "-playwright-"
-	at := strings.Index(name, marker)
-	if at < 0 {
-		return 0
-	}
-	rest := strings.TrimSuffix(name[at+len(marker):], ".jar")
-	digits := strings.ReplaceAll(rest, ".", "")
-	rev, err := strconv.Atoi(digits)
-	if err != nil {
-		return 0
-	}
-	return rev
-}
-
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
@@ -314,111 +130,25 @@ func (l ServerLayout) baseURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", l.Port)
 }
 
-// autoStartBackend 在「连不上服务」时按配置文件把后端拉起来(见 Client.Request)。
-func (c *Client) autoStartBackend() error {
-	c.autoStarted = true
-	repoDir, source, err := resolveRepoDir("")
-	if err != nil {
-		return err
-	}
-	port := portFromBaseURL(c.BaseURL)
-	fmt.Fprintf(os.Stderr, "服务没起,正在按%s拉起后端(仓库:%s,端口:%d)…\n", source, repoDir, port)
-	// 这里的输出走 stderr,避免污染 stdout 上的 JSON / 文本结果
-	quiet := &Printer{Mode: "json", Out: os.Stderr, ErrOut: os.Stderr}
-	_, err = startBackend(repoDir, port, DefaultEngine, "", DefaultStartupTimout, quiet)
-	return err
-}
-
-// portFromBaseURL 从 base URL 里抠出端口(自动拉起时要用同一个端口)。
-func portFromBaseURL(baseURL string) int {
-	parsed, err := url.Parse(baseURL)
-	if err != nil {
-		return DefaultPort
-	}
-	if parsed.Port() == "" {
-		if parsed.Scheme == "https" {
-			return 443
-		}
-		return 80
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil {
-		return DefaultPort
-	}
-	return port
-}
-
-// probeHealth 探一次 /playwright/health,返回是否健康。
+// 探活的次数、单次超时与退避。
 //
-// 单独用一个短超时的客户端:探活不该等 300 秒,也不该触发自动拉起(它自己就是拉起流程的一部分)。
-func probeHealth(baseURL string) bool {
-	client, err := NewClient(ClientOptions{BaseURL: baseURL, TaskID: DefaultTaskID,
-		Timeout: 2, Session: "", Record: false, AutoStart: false})
-	if err != nil {
-		return false
-	}
-	response, err := client.Health()
-	return err == nil && response.Ok()
-}
+// 以前只探一次、超时硬编码 2 秒:一个正在跑长命令或正在 GC 的后端,只要应答慢过 2 秒
+// 就会被判成「服务没起」,然后往**同一个端口**再拉一个 JVM —— 调用方手里那份内存里的
+// 任务表就此作废,而它只会看到后续命令报「没有找到对应的浏览器实例」。
+const (
+	healthProbeAttempts       = 3
+	healthProbeTimeoutSeconds = 5.0
+	healthProbeBackoffMillis  = 400
+)
 
-// findJava 找一个可用的 java 可执行文件。
-func findJava() (string, error) {
-	if home := os.Getenv("JAVA_HOME"); home != "" {
-		candidate := filepath.Join(home, "bin", "java"+exeSuffix())
-		if fileExists(candidate) {
-			return candidate, nil
-		}
-	}
-	if found, err := exec.LookPath("java"); err == nil {
-		return found, nil
-	}
-	return "", usageErrorf("找不到 java。装一个 JDK 21+,或把 java 放进 PATH,或设 JAVA_HOME")
-}
-
-func exeSuffix() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
-}
-
-// describeJar 把「这份 jar 是什么」写成一行:来源、commit/版本、时间、大小。
-func describeJar(repoDir string, explicit string, jarPath string) string {
-	for _, candidate := range collectJarCandidates(repoDir, explicit) {
-		if candidate.Path == jarPath {
-			return describeCandidate(candidate)
-		}
-	}
-	// 不在候选表里(理论上不会发生)——至少把路径报出来
-	return jarPath
-}
-
-// describeCandidate 渲染一个候选的一行描述。
-func describeCandidate(candidate JarCandidate) string {
-	parts := []string{candidate.Source}
-	if candidate.Detail != "" {
-		parts = append(parts, candidate.Detail)
-	}
-	if !candidate.ModTime.IsZero() {
-		parts = append(parts, candidate.ModTime.Format("2006-01-02 15:04"))
-	}
-	if candidate.Size > 0 {
-		parts = append(parts, humanSize(candidate.Size))
-	}
-	return fmt.Sprintf("%s(%s)", candidate.Path, strings.Join(parts, ", "))
-}
-
-// humanSize 把字节数写成 MB/GB。
-func humanSize(bytes int64) string {
-	switch {
-	case bytes >= 1<<30:
-		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(1<<30))
-	case bytes >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(1<<20))
-	case bytes >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(1<<10))
-	}
-	return fmt.Sprintf("%d B", bytes)
+// HealthInfo 是 /playwright/health 回的实例身份。
+//
+// 老版本服务端没有除 name 以外的字段,取不到就是零值 —— 调用方必须容忍零值(见 startBackend)。
+type HealthInfo struct {
+	Name      string
+	PID       int
+	Port      int
+	StartedAt string
 }
 
 // ------------------------------------------------------------------ 构建
@@ -529,36 +259,6 @@ func buildBackend(repoDir string, out *Printer) (string, error) {
 	return artifact, nil
 }
 
-// newestCandidatePath 从一组路径里挑 mtime 最新的(构建会同时留下多个 jar 时用)。
-func newestCandidatePath(paths []string) string {
-	best := paths[0]
-	var bestTime time.Time
-	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if bestTime.IsZero() || info.ModTime().After(bestTime) {
-			best, bestTime = path, info.ModTime()
-		}
-	}
-	return best
-}
-
-// currentCommit 取仓库当前 HEAD 的 commit SHA;取不到就是用法错(构建产物没法归位)。
-func currentCommit(repoDir string) (string, error) {
-	command := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD")
-	output, err := command.Output()
-	if err != nil {
-		return "", usageErrorf("取不到当前 commit(git rev-parse HEAD 失败):%v", err)
-	}
-	commit := strings.TrimSpace(string(output))
-	if commit == "" {
-		return "", usageErrorf("git rev-parse HEAD 返回了空值")
-	}
-	return commit, nil
-}
-
 // copyFile 复制文件(先写临时文件再改名,避免半截文件被当成可用的 jar)。
 func copyFile(source string, target string) error {
 	input, err := os.Open(source)
@@ -583,146 +283,15 @@ func copyFile(source string, target string) error {
 	return os.Rename(temporary, target)
 }
 
-// startBackend 拉起后端服务;已经在跑就直接复用。
+// PidRecord 是 pid 文件的内容:不止一个数字。
 //
-// 返回 (是否复用了已有的, 错误)。
-func startBackend(repoDir string, port int, engine string, jar string, timeout float64, out *Printer) (bool, error) {
-	layout := ServerLayout{RepoDir: repoDir, Port: port, Jar: jar}
-	baseURL := layout.baseURL()
-
-	if probeHealth(baseURL) {
-		out.Line(fmt.Sprintf("服务已在运行:%s(端口 %d)", baseURL, port))
-		return true, nil
-	}
-
-	java, err := findJava()
-	if err != nil {
-		return false, err
-	}
-	jarPath, err := locateJar(repoDir, jar)
-	if err != nil {
-		return false, err
-	}
-	layout.Jar = jarPath
-	// 明确说清用的是哪一份 —— 三处候选含义不同,「跑的是哪份」是排查的第一个问题
-	out.Line("用的是:" + describeJar(repoDir, jar, jarPath))
-	if err := os.MkdirAll(filepath.Dir(layout.pidFile()), 0o755); err != nil {
-		return false, usageErrorf("建不了日志目录:%v", err)
-	}
-	if err := os.MkdirAll(layout.profileDir(), 0o755); err != nil {
-		return false, usageErrorf("建不了 profile 目录:%v", err)
-	}
-	// 运行目录:放 JVM 的内部 loopback socket 与临时文件。
-	// **这条必须给**:不给 -Djdk.net.unixdomain.tmpdir 时,JDK 21 建 Selector 会去连一个
-	// 默认位置的 unix domain socket,在 Windows 上直接 `Invalid argument: connect` /
-	// `Unable to establish loopback connection`,服务起不来(实测踩过)。
-	// plugins 的 backend.ps1 也是这么做的,原因相同。
-	runDir := filepath.Join(layout.RepoDir, "logs", "server", fmt.Sprintf("run-%d", port))
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return false, usageErrorf("建不了运行目录:%v", err)
-	}
-
-	arguments := []string{
-		fmt.Sprintf("-Dserver.port=%d", port),
-		"-Djdk.net.unixdomain.tmpdir=" + runDir,
-		"-Dbrowser.profileDir=" + layout.profileDir(),
-		"-Dbrowser.chrome.cdpProfileDir=" + layout.profileDir(),
-		"-Dbrowser.chrome.useUserProfile=false",
-	}
-	if engine != "" {
-		arguments = append(arguments, "-Dbrowser.engine="+engine)
-	}
-	arguments = append(arguments, "-jar", jarPath)
-
-	out.Line(fmt.Sprintf("启动后端:%s %s", java, strings.Join(arguments, " ")))
-	handle, err := launchDetached(java, arguments, repoDir, layout.outLog(), layout.errLog())
-	if err != nil {
-		return false, transportErrorf("启动后端失败:%v", err)
-	}
-	if err := writeTextFile(layout.pidFile(), itoa(handle.Pid)+"\n"); err != nil {
-		out.Warn(fmt.Sprintf("[warn] 写 pid 文件失败:%v", err))
-	}
-
-	// 轮询到健康为止。进程中途退出就立刻放弃(不干等满超时);超时也附上日志尾部,免得只拿到一句「没就绪」。
-	deadline := time.Now().Add(time.Duration(timeout * float64(time.Second)))
-	for time.Now().Before(deadline) {
-		if probeHealth(baseURL) {
-			out.Line(fmt.Sprintf("服务已就绪:%s(pid %d,jar %s)", baseURL, handle.Pid, jarPath))
-			return false, nil
-		}
-		if !processAlive(handle.Pid) {
-			_ = os.Remove(layout.pidFile())
-			return false, transportErrorf("后端进程启动后很快退出(pid %d)。日志尾部:\n%s",
-				handle.Pid, tailFile(layout.outLog(), 20))
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	_ = os.Remove(layout.pidFile())
-	return false, transportErrorf("后端在 %.0f 秒内没有就绪。日志尾部(%s):\n%s",
-		timeout, layout.outLog(), tailFile(layout.outLog(), 20))
-}
-
-// stopBackend 停掉后端:先走 HTTP shutdown(与现有 stop 脚本同序),再按进程结束。
-func stopBackend(repoDir string, port int, keepBrowser bool, out *Printer) error {
-	layout := ServerLayout{RepoDir: repoDir, Port: port}
-	baseURL := layout.baseURL()
-
-	if !keepBrowser && probeHealth(baseURL) {
-		// 先让服务自己关掉共享浏览器,再杀进程 —— 反过来会留下孤儿浏览器
-		client, err := NewClient(ClientOptions{BaseURL: baseURL, TaskID: DefaultTaskID,
-			Timeout: 15, Session: "", Record: false, AutoStart: false})
-		if err == nil {
-			if response, err := client.Command("shutdown", NewObj(), nil, 15, "shutdown"); err == nil && response.Ok() {
-				out.Line("已让服务关掉浏览器与任务")
-			} else {
-				out.Warn("HTTP shutdown 没成功,继续按进程结束")
-			}
-		}
-	}
-
-	pid, err := readPid(layout.pidFile())
-	if err != nil {
-		if probeHealth(baseURL) {
-			return usageErrorf("服务在运行,但没有 pid 文件 %s —— 找不到进程,请手工结束", layout.pidFile())
-		}
-		out.Line("服务没在运行")
-		return nil
-	}
-	if !processAlive(pid) {
-		out.Line(fmt.Sprintf("进程 %d 已经不在了", pid))
-		_ = os.Remove(layout.pidFile())
-		return nil
-	}
-	if err := killProcessTree(pid); err != nil {
-		return transportErrorf("结束进程 %d 失败:%v", pid, err)
-	}
-	out.Line(fmt.Sprintf("已结束进程 %d", pid))
-	_ = os.Remove(layout.pidFile())
-	return nil
-}
-
-// readPid 读 pid 文件。
-func readPid(path string) (int, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, usageErrorf("pid 文件内容不是数字:%s", path)
-	}
-	return pid, nil
-}
-
-// tailFile 读文件最后几行(给 server logs 与启动失败时附日志用)。
-func tailFile(path string, lines int) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	all := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	if len(all) > lines {
-		all = all[len(all)-lines:]
-	}
-	return strings.Join(all, "\n")
+// 只记 pid 的话,这个 pid 被系统回收给别的进程之后,dsb server stop / restart 会照着
+// 这个数字强杀一整棵无辜的进程树(Windows 上是 taskkill /T /F)。多记两行,就能在动手前核对身份。
+//
+// 第一行仍是裸 pid,老版本的 readPid 与外部脚本照旧能读。
+type PidRecord struct {
+	PID       int
+	Port      int
+	StartedAt string
+	Jar       string
 }

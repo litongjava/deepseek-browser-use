@@ -59,10 +59,6 @@ public class DOMElementNode extends DOMBaseNode {
     return highlightIndex;
   }
 
-  public boolean isInteractive() {
-    return isInteractive;
-  }
-
   public boolean isTopElement() {
     return isTopElement;
   }

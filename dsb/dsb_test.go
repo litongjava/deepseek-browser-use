@@ -7,8 +7,13 @@ package main
 // 两份客户端必须在同一份输入上给出同一份输出,否则换客户端的意义就没了。
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -352,17 +357,40 @@ func TestSelectionDoesNotHideFailures(t *testing.T) {
 		t.Errorf("失败响应上路径存在时应照常投影,得到 %s", got)
 	}
 
-	// 路径不存在才退回整封,并在 stderr 说明
+	// 路径不存在:默认打 null,并记下「打偏了」由 report() 翻成退出码 3。
+	// 不再悄悄换成整封 —— 那会让按路径取值的调用方拿到完全不同的形状却看不到失败。
 	missing := "data.nope"
 	buffer = &strings.Builder{}
 	errBuffer := &strings.Builder{}
 	printer = &Printer{Mode: "json", Out: buffer, ErrOut: errBuffer, Select: &missing}
 	printer.JSON(failed)
-	if !strings.HasPrefix(strings.TrimSpace(buffer.String()), "{") {
-		t.Errorf("路径不存在时应退回整封: %s", buffer.String())
+	if got := strings.TrimSpace(buffer.String()); got != "null" {
+		t.Errorf("路径不存在时 stdout 应是 null,得到: %s", got)
+	}
+	if !printer.SelectMissed {
+		t.Error("路径不存在时应记下 SelectMissed,好让 report() 把退出码报成用法错")
 	}
 	if !strings.Contains(errBuffer.String(), "不存在") {
-		t.Errorf("退回应在 stderr 说明: %q", errBuffer.String())
+		t.Errorf("打偏了应在 stderr 说明: %q", errBuffer.String())
+	}
+	if code := report(ExitOK, nil, printer); code != ExitUsage {
+		t.Errorf("--select 打偏时应报用法错(3),得到 %d", code)
+	}
+
+	// 显式要宽松模式时,才退回整封(旧行为),退出码不受影响
+	lenientBuffer := &strings.Builder{}
+	lenientErr := &strings.Builder{}
+	lenient := &Printer{Mode: "json", Out: lenientBuffer, ErrOut: lenientErr, Select: &missing,
+		SelectLenient: true}
+	lenient.JSON(failed)
+	if !strings.HasPrefix(strings.TrimSpace(lenientBuffer.String()), "{") {
+		t.Errorf("--select-lenient 时应退回整封: %s", lenientBuffer.String())
+	}
+	if lenient.SelectMissed {
+		t.Error("宽松模式是兼容行为,不该记 SelectMissed")
+	}
+	if code := report(ExitOK, nil, lenient); code != ExitOK {
+		t.Errorf("--select-lenient 不该改变退出码,得到 %d", code)
 	}
 }
 
@@ -921,16 +949,30 @@ func TestIsLocalHost(t *testing.T) {
 	}
 }
 
+// dialFailure 造一个「dial 阶段失败」的传输错:确定请求没发出去。
+func dialFailure() error {
+	return transportErrorCause(&url.Error{Op: "Post", URL: "http://127.0.0.1:10049/playwright/command",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}},
+		"连不上 http://127.0.0.1:10049:x(服务起了吗?地址对吗?)")
+}
+
+// afterDeliveryFailure 造一个「命令可能已经执行完才断」的传输错(读响应时被重置)。
+func afterDeliveryFailure() error {
+	return transportErrorCause(&url.Error{Op: "Post", URL: "http://127.0.0.1:10049/playwright/command",
+		Err: &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}},
+		"连不上 http://127.0.0.1:10049:x(服务起了吗?地址对吗?)")
+}
+
 // TestRemoteTargetNeverAutoStarts:远端目标不自动拉起 —— 否则会把「地址写错了」
 // 变成「在本机起了个没用的服务,然后照样失败」。
 func TestRemoteTargetNeverAutoStarts(t *testing.T) {
 	remote := &Client{AutoStart: true, LocalTarget: false}
-	if remote.shouldAutoStart(transportErrorf("连不上 http://10.0.0.5:10049:x(服务起了吗?地址对吗?)")) {
+	if remote.shouldAutoStart(dialFailure()) {
 		t.Error("远端目标不该触发自动拉起")
 	}
 	local := &Client{AutoStart: true, LocalTarget: true}
-	if !local.shouldAutoStart(transportErrorf("连不上 http://127.0.0.1:10049:x(服务起了吗?地址对吗?)")) {
-		t.Error("本机目标应当触发自动拉起")
+	if !local.shouldAutoStart(dialFailure()) {
+		t.Error("本机目标 + dial 阶段失败应当触发自动拉起")
 	}
 }
 
@@ -969,27 +1011,212 @@ func TestPortFromBaseURL(t *testing.T) {
 	}
 }
 
-// TestShouldAutoStart:只有「本机 + 连不上」才触发自动拉起;超时与业务失败都不触发。
+// TestShouldAutoStart:只有「本机 + 确定没发出去」才触发自动拉起。
+//
+// 判据是网络栈的错误类型,不是错误文本:连接被拒绝 / DNS 失败 / dial 超时都算「没发出去」;
+// 而连接重置、读响应中断、整体超时都可能是命令已经执行完之后才发生的 ——
+// 对那类失败重发,等于把 click / submit / execute_js 再做一遍,所以一律不重发。
 func TestShouldAutoStart(t *testing.T) {
 	client := &Client{AutoStart: true, LocalTarget: true}
-	if !client.shouldAutoStart(transportErrorf("连不上 http://x:connection refused(服务起了吗?地址对吗?)")) {
-		t.Error("连不上时应触发自动拉起")
+	if !client.shouldAutoStart(dialFailure()) {
+		t.Error("dial 阶段被拒绝说明服务没起,应触发自动拉起")
 	}
-	if client.shouldAutoStart(transportErrorf("请求超时 http://x(超过 300 秒)")) {
-		t.Error("超时说明服务在跑,不该触发自动拉起")
+	if !client.shouldAutoStart(transportErrorCause(
+		&net.DNSError{Err: "no such host", Name: "nope.invalid"},
+		"连不上 http://nope.invalid:10049(服务起了吗?地址对吗?)")) {
+		t.Error("DNS 解析失败同样是没发出去")
+	}
+	if !client.shouldAutoStart(transportErrorCause(
+		&url.Error{Op: "Post", URL: "http://127.0.0.1:10049/x",
+			Err: &net.OpError{Op: "dial", Net: "tcp", Err: context.DeadlineExceeded}},
+		"请求超时 http://127.0.0.1:10049(超过 300 秒)")) {
+		t.Error("dial 阶段超时同样是没发出去")
+	}
+
+	if client.shouldAutoStart(afterDeliveryFailure()) {
+		t.Error("请求发出去之后才断的不该重发:会把动作再做一遍")
+	}
+	if client.shouldAutoStart(transportErrorCause(context.DeadlineExceeded, "请求超时 http://x(超过 300 秒)")) {
+		t.Error("整体超时不代表没发出去,不该重发")
 	}
 	if client.shouldAutoStart(usageErrorf("参数写错了")) {
 		t.Error("用法错不该触发自动拉起")
 	}
 	// --no-auto-start
 	off := &Client{AutoStart: false, LocalTarget: true}
-	if off.shouldAutoStart(transportErrorf("连不上 http://x")) {
+	if off.shouldAutoStart(dialFailure()) {
 		t.Error("关掉自动拉起后不该触发")
 	}
 	// 只触发一次
 	once := &Client{AutoStart: true, LocalTarget: true, autoStarted: true}
-	if once.shouldAutoStart(transportErrorf("连不上 http://x")) {
+	if once.shouldAutoStart(dialFailure()) {
 		t.Error("已经自动拉起过一次,不该再来一次")
+	}
+	// 因为「可能已送达」而放弃重试时必须说明原因,否则看起来像自动拉起坏了
+	if note := autoStartRefusal(afterDeliveryFailure(), client); note == "" {
+		t.Error("放弃重试时应补一句说明")
+	}
+	if note := autoStartRefusal(dialFailure(), client); note != "" {
+		t.Error("该重试的情况不该出现放弃说明")
+	}
+}
+
+// TestIsNegativeNumber:与 argparse 的 _negative_number_matcher 同口径。
+//
+// -1-2 / -+1 / -1. 这些不是负数,而是**写错的选项**:必须按用法错报出来,不能被吞成一个值。
+func TestIsNegativeNumber(t *testing.T) {
+	for _, token := range []string{"-1", "-123", "-1.5", "-.5", "-0"} {
+		if !isNegativeNumber(token) {
+			t.Errorf("%q 应算负数", token)
+		}
+	}
+	for _, token := range []string{"-", "-x", "-1-2", "-+1", "-1.", "-.", "--1", "1", "-1.2.3"} {
+		if isNegativeNumber(token) {
+			t.Errorf("%q 不该算负数", token)
+		}
+	}
+}
+
+// TestTailFileReadsTailOnly:tailFile 从尾部读,并且要处理 CRLF 与「从中间截断」的半行。
+//
+// 这条钉的是它从「整个文件读进内存」改成 Seek 到尾部之后的语义:日志可能几百 MB,
+// 而这里只要最后几行 —— 但截断点落在行中间时,不能把半行当成一行返回。
+func TestTailFileReadsTailOnly(t *testing.T) {
+	folder := t.TempDir()
+
+	// 小于窗口:整份都读得到,不该被「丢掉第一行」的逻辑误伤
+	small := filepath.Join(folder, "small.log")
+	if err := os.WriteFile(small, []byte("l1\r\nl2\r\nl3\r\nl4\r\nl5"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := tailFile(small, 3); got != "l3\nl4\nl5" {
+		t.Errorf("tailFile(3) = %q,期望 %q", got, "l3\nl4\nl5")
+	}
+	if got := tailFile(small, 10); got != "l1\nl2\nl3\nl4\nl5" {
+		t.Errorf("行数超过文件总行数时应全给,得到 %q", got)
+	}
+
+	// 大于 256KB 窗口:必须只读尾部,且返回的每一行都必须是完整的
+	big := filepath.Join(folder, "big.log")
+	var builder strings.Builder
+	for i := 0; i < 40000; i++ {
+		builder.WriteString(fmt.Sprintf("row-%06d\n", i))
+	}
+	if err := os.WriteFile(big, []byte(builder.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := tailFile(big, 3)
+	if !strings.Contains(got, "row-039999") {
+		t.Errorf("尾部应包含最后一行,得到 %q", got)
+	}
+	for _, line := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
+		if line != "" && !strings.HasPrefix(line, "row-") {
+			t.Errorf("从中间截断时第一行是半行,必须丢掉,却返回了 %q", line)
+		}
+	}
+
+	// 文件不存在不该炸(启动失败时附带日志尾部会走到这里)
+	if got := tailFile(filepath.Join(folder, "missing.log"), 5); got != "" {
+		t.Errorf("缺失文件应返回空串,得到 %q", got)
+	}
+}
+
+// TestCmdLastPicksHighestIndex:记录编号要按**数字**取最大,不是字典序。
+//
+// 文件名是 %03d.res.json,而 %03d 只是最小宽度:第 1000 条叫 1000.res.json,
+// 字典序排在 999.res.json **前面**。改之前 sort.Strings 取最后一个,会让会话超过 999 条记录后
+// 永远重放第 999 条,而且退出码是 0 —— 从外面完全看不出来。
+func TestCmdLastPicksHighestIndex(t *testing.T) {
+	folder := t.TempDir()
+	for _, item := range []struct {
+		index int
+		mark  string
+	}{{999, "old-999"}, {1000, "new-1000"}} {
+		text := EncodeJSON(ObjOf("ok", true, "data", ObjOf("mark", item.mark)), encIndent2)
+		name := filepath.Join(folder, fmt.Sprintf("%03d.res.json", item.index))
+		if err := os.WriteFile(name, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client, err := NewClient(ClientOptions{BaseURL: "http://x", TaskID: 1001, Session: "test",
+		Record: true, RecordDir: folder, Timeout: 300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := &strings.Builder{}
+	printer := &Printer{Mode: "json", Out: buffer, ErrOut: buffer}
+	if code, err := cmdLast(client, &Args{}, printer); err != nil || code != ExitOK {
+		t.Fatalf("cmdLast = %d, %v", code, err)
+	}
+	if !strings.Contains(buffer.String(), "new-1000") {
+		t.Errorf("应取第 1000 条(数字最大),得到:%s", buffer.String())
+	}
+}
+
+// TestHealthInfoFrom:health 的身份字段要能解析出来,顺带兼容老服务端(只有 name)。
+//
+// 解析走字符串而不是数字类型:jsonval 把数字保留成 json.Number,数字若被写成字符串
+// (或反过来)也不该让身份判断失效 —— 身份判断失效的后果是「认不出换了个实例」。
+func TestHealthInfoFrom(t *testing.T) {
+	response := &Response{Envelope: ObjOf("ok", true, "data", ObjOf(
+		"name", "playwright-server",
+		"pid", numberFromInt(4321),
+		"port", numberFromInt(10049),
+		"startedAt", "2026-10-08T12:00:00Z"))}
+	info := healthInfoFrom(response)
+	if info.PID != 4321 || info.Port != 10049 || info.StartedAt != "2026-10-08T12:00:00Z" ||
+		info.Name != "playwright-server" {
+		t.Errorf("身份字段没解析对: %+v", info)
+	}
+
+	// 老版本服务端只回 name:取不到就是零值,调用方必须容忍,不能当成「pid 不匹配」
+	old := &Response{Envelope: ObjOf("ok", true, "data", ObjOf("name", "playwright-server"))}
+	legacy := healthInfoFrom(old)
+	if legacy.PID != 0 || legacy.Port != 0 {
+		t.Errorf("老服务端应留零值,得到 %+v", legacy)
+	}
+}
+
+// TestPidRecordRoundTrip:pid 文件记的是「哪个端口上的哪个进程」,并且兼容只有一行裸 pid 的老格式。
+func TestPidRecordRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server-10049.pid")
+	if err := writePidRecord(path, PidRecord{PID: 4321, Port: 10049,
+		StartedAt: "2026-10-08T12:00:00+08:00", Jar: "D:/x/backend.jar"}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := readPidRecord(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.PID != 4321 || record.Port != 10049 || record.Jar != "D:/x/backend.jar" ||
+		record.StartedAt != "2026-10-08T12:00:00+08:00" {
+		t.Errorf("pid 记录没读全: %+v", record)
+	}
+	// 第一行仍是裸 pid:老版本的 readPid 与外部脚本照旧能读
+	if pid, err := readPid(path); err != nil || pid != 4321 {
+		t.Errorf("readPid 应仍能读到裸 pid,得到 %d, %v", pid, err)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy.pid")
+	if err := os.WriteFile(legacyPath, []byte("777\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := readPidRecord(legacyPath)
+	if err != nil || legacy.PID != 777 || legacy.Port != 0 {
+		t.Errorf("老格式 pid 文件应能读: %+v, %v", legacy, err)
+	}
+}
+
+// TestPidRecordMatchesPort:停服务前用它挡住「按另一个实例的 pid 动手」。
+func TestPidRecordMatchesPort(t *testing.T) {
+	if !pidRecordMatchesPort(PidRecord{PID: 1, Port: 10049}, 10049) {
+		t.Error("端口一致时应当放行")
+	}
+	if pidRecordMatchesPort(PidRecord{PID: 1, Port: 10050}, 10049) {
+		t.Error("pid 文件属于另一个端口上的实例时必须拦住,否则会停错后端")
+	}
+	if !pidRecordMatchesPort(PidRecord{PID: 1}, 10049) {
+		t.Error("老格式没有 port 字段时不该拦(只能靠服务自报的 pid 兜底)")
 	}
 }
 
@@ -1017,7 +1244,10 @@ func TestServerStatusJSONShape(t *testing.T) {
 	build := &strings.Builder{}
 	args := &Args{JSON: true, Port: &port}
 	printer := &Printer{Mode: "json", Out: build, ErrOut: build}
-	if code, err := cmdServerStatus(args, printer, port); err != nil || code != ExitOK {
+	// cmdServer 会先把端口解析成 Endpoint 再交给 status,这里照同样的形状构造
+	endpoint := Endpoint{BaseURL: baseURLFor(DefaultHost, port), Host: DefaultHost, Port: port,
+		Local: true, Origin: "命令行 --port"}
+	if code, err := cmdServerStatus(args, printer, endpoint); err != nil || code != ExitOK {
 		t.Fatalf("cmdServerStatus = %d, %v", code, err)
 	}
 	value, err := DecodeJSON(build.String())

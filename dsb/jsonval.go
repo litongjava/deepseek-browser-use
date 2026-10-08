@@ -100,7 +100,7 @@ func objBool(v Value, key string) (bool, bool) {
 }
 
 // numberFromInt 把整数包成 json.Number(保持整数字面量,不引入 .0)。
-func numberFromInt(value int) json.Number { return json.Number(itoa(value)) }
+func numberFromInt(value int) json.Number { return json.Number(strconv.Itoa(value)) }
 
 // stringsToValues 把字符串切片转成 Value 数组。
 func stringsToValues(items []string) []Value {

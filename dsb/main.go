@@ -18,8 +18,9 @@ func main() {
 func run(argv []string) int {
 	args, err := parseArgs(argv)
 	if err != nil {
-		if _, ok := err.(*helpRequested); ok {
-			printHelp("")
+		if help, ok := err.(*helpRequested); ok {
+			// 带上子命令:dsb state --help 打 state 的用法,dsb --help 才打全局
+			printHelp(help.Command)
 			return ExitOK
 		}
 		if _, ok := err.(*versionRequested); ok {
@@ -59,6 +60,14 @@ func run(argv []string) int {
 // report 把「命令的返回值 + 错误」翻成退出码与 stderr 文案。
 func report(code int, err error, out *Printer) int {
 	if err == nil {
+		// --select 的路径在这条响应里不存在:这是用法错,不是成功。
+		// 以前只往 stderr 提一句、stdout 改印整封,退出码还是 0 —— 按路径取值的调用方
+		// 会拿到形状完全不同的东西,却看不到任何失败信号。
+		if out != nil && out.SelectMissed && code == ExitOK {
+			out.Warn(fmt.Sprintf("--select %s 在这条响应里不存在;stdout 已是 null。加 --select-lenient 可退回打印完整信封",
+				derefOr(out.Select, "")))
+			return ExitUsage
+		}
 		return code
 	}
 	if usage, ok := asUsage(err); ok {

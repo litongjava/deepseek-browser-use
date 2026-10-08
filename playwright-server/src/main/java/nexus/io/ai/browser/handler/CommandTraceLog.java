@@ -131,17 +131,69 @@ public final class CommandTraceLog {
       redactJson(responseJson);
 
       Path dir = dayDir();
-      Files.createDirectories(dir);
       String base = String.format("%06d-%s-%s", seq, taskId == null ? "na" : taskId, safeName(method));
-      writeFile(dir.resolve(base + ".json"),
-          fullRecord(redactedBody, responseJson, startedAtMillis, now, seq, method, taskId));
-      append(dir.resolve("calls.jsonl"), summaryLine(request, responseJson, startedAtMillis, now, seq, method, taskId,
-          base));
-      append(dir.resolve("steps.log"), humanLine(responseJson, startedAtMillis, now, seq, method, taskId));
-    } catch (RuntimeException | IOException | OutOfMemoryError e) {
-      if (WARNED.compareAndSet(false, true)) {
-        log.warn("写调用追踪日志失败(后续同类错误不再重复提示):{}", e.toString());
+      String full = fullRecord(redactedBody, responseJson, startedAtMillis, now, seq, method, taskId);
+      String summary = summaryLine(request, responseJson, startedAtMillis, now, seq, method, taskId, base);
+      String human = humanLine(responseJson, startedAtMillis, now, seq, method, taskId);
+      // 落盘挪到写线程:record 跑在**响应路径**上(handler 发响应之前调用),而它一次要写三个文件 ——
+      // 磁盘一慢,这个开销就直接加在每一次调用的往返时间上(200 步的批量 = 600 次文件打开)。
+      // 序列化留在原地:它只碰我们自己刚构造出来的对象,交给别的线程反而多了并发风险。
+      enqueue(() -> {
+        try {
+          Files.createDirectories(dir);
+          writeFile(dir.resolve(base + ".json"), full);
+          append(dir.resolve("calls.jsonl"), summary);
+          append(dir.resolve("steps.log"), human);
+        } catch (IOException e) {
+          warnOnce(e);
+        }
+      });
+    } catch (RuntimeException | OutOfMemoryError e) {
+      warnOnce(e);
+    }
+  }
+
+  /**
+   * 追踪日志的写盘队列。
+   *
+   * <p>
+   * 队列有界:磁盘跟不上的时候宁可丢记录,也不反过来把业务调用堵住 —— 追踪日志是取证,不是主流程。
+   */
+  private static final java.util.concurrent.BlockingQueue<Runnable> WRITES =
+      new java.util.concurrent.LinkedBlockingQueue<>(10000);
+
+  static {
+    Thread writer = new Thread(CommandTraceLog::drainWrites, "dsb-trace-writer");
+    writer.setDaemon(true);
+    writer.start();
+  }
+
+  private static void drainWrites() {
+    while (true) {
+      Runnable task;
+      try {
+        task = WRITES.take();
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return;
       }
+      try {
+        task.run();
+      } catch (RuntimeException ignored) {
+        // 单条写失败不该让写线程退出,否则后面的记录全部丢失
+      }
+    }
+  }
+
+  private static void enqueue(Runnable task) {
+    if (!WRITES.offer(task)) {
+      warnOnce(new IllegalStateException("追踪日志写入队列已满(10000),这条记录被丢弃"));
+    }
+  }
+
+  private static void warnOnce(Throwable error) {
+    if (WARNED.compareAndSet(false, true)) {
+      log.warn("写调用追踪日志失败(后续同类错误不再重复提示):{}", error.toString());
     }
   }
 
@@ -199,15 +251,41 @@ public final class CommandTraceLog {
     }
     String mask = mask();
     String result = text;
-    for (String pattern : patterns()) {
+    for (java.util.regex.Pattern pattern : compiledPatterns()) {
+      result = pattern.matcher(result).replaceAll(java.util.regex.Matcher.quoteReplacement(mask));
+    }
+    return result;
+  }
+
+  /**
+   * 编译好的脱敏规则,按「配置原文」缓存。
+   *
+   * <p>
+   * 原来是每次 {@code String.replaceAll(pattern, …)}:那是**每条规则每个字符串都重新编译一次正则**,
+   * 而脱敏是递归走完整个响应 JSON 的每个字符串值 —— 一次快照回执要编译几百上千次。
+   * 缓存键用配置原文,所以改了 {@code browser.trace.redact} 仍然立刻生效(与其它配置的语义一致)。
+   */
+  private static java.util.List<java.util.regex.Pattern> compiledPatterns() {
+    java.util.List<String> source = patterns();
+    String key = String.join("\u0000", source);
+    if (key.equals(cachedPatternKey)) {
+      return cachedPatterns;
+    }
+    java.util.List<java.util.regex.Pattern> compiled = new java.util.ArrayList<>(source.size());
+    for (String pattern : source) {
       try {
-        result = result.replaceAll(pattern, java.util.regex.Matcher.quoteReplacement(mask));
+        compiled.add(java.util.regex.Pattern.compile(pattern));
       } catch (RuntimeException e) {
         // 单条规则非法不该让整条日志丢掉
       }
     }
-    return result;
+    cachedPatterns = java.util.List.copyOf(compiled);
+    cachedPatternKey = key;
+    return cachedPatterns;
   }
+
+  private static volatile String cachedPatternKey;
+  private static volatile java.util.List<java.util.regex.Pattern> cachedPatterns = java.util.List.of();
 
   /** 递归脱敏一个 JSON 结构里的所有字符串值(键名不动,免得看不出请求长什么样) */
   private static void redactJson(Object node) {

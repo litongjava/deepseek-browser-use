@@ -123,6 +123,17 @@ public final class ActionError {
   public static final String NETWORK_ERROR = "NETWORK_ERROR";
 
   /**
+   * 参数本身不合法:命令**没有开始执行**,改正参数重发即可
+   *
+   * <p>
+   * 以前这类失败(命令表里的 {@code reqInt}/{@code reqStr} 校验)与「站点/引擎拒绝了这次动作」
+   * 共用 {@code ACTION_FAILED} + {@code retryable:false}:调用方分不出「我参数写错了」和
+   * 「页面不让做」——前者要改命令,后者要改思路,行动方向完全不同。现在单独给码,
+   * 并且明确带上 {@code started:false}。
+   */
+  public static final String INVALID_ARGUMENT = "INVALID_ARGUMENT";
+
+  /**
    * Chrome 的网络错误码,例如 {@code net::ERR_NETWORK_CHANGED} 里的 {@code ERR_NETWORK_CHANGED}
    *
    * <p>

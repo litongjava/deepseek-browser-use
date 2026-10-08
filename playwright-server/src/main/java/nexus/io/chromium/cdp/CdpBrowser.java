@@ -219,10 +219,6 @@ public final class CdpBrowser implements AutoCloseable {
     connection.send("Browser.grantPermissions", params);
   }
 
-  public void resetPermissions() {
-    connection.send("Browser.resetPermissions");
-  }
-
   @Override
   public void close() {
     if (ownsConnection) {

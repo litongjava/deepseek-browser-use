@@ -329,24 +329,4 @@ public final class ListenerProbe {
         + "或先点击它的可见父元素 / 触发框架自己的入口";
   }
 
-  /** 供批量探测(元素清单)复用的容器:把启发路的结果整理成和 {@link #probe} 一致的字段 */
-  public static Kv fromTraces(Map<?, ?> raw) {
-    Kv kv = new Kv();
-    if (raw == null) {
-      return kv;
-    }
-    kv.putAll(raw);
-    List<String> traces = stringList(kv.get("traces"));
-    kv.set("listeners", traces);
-    // 批量路径上不能对每个元素都开一次 CDP 会话,所以只能说「有痕迹」或「未知」——
-    // 这里绝不把「没探到」写成 false(那是假阴性,正是这个坑最危险的地方)
-    kv.set("hasListeners", traces.isEmpty() ? null : Boolean.TRUE);
-    kv.set("detection", "heuristic");
-    return kv;
-  }
-
-  /** 给 {@code listeners} 字段用的空表(避免各调用点自己 new) */
-  public static Map<String, Object> emptyListenerMap() {
-    return new LinkedHashMap<>();
-  }
 }

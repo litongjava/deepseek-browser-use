@@ -6,10 +6,10 @@ package main
 // `--params @file.json`,避开 PowerShell/cmd 吃引号的坑;长脚本用 `js @脚本.js`。
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -254,17 +254,8 @@ func jsonNumberInt(text string) (int, error) {
 	if _, err := fmt.Sscanf(trimmed, "%d", &parsed); err != nil {
 		return 0, err
 	}
-	if itoa(parsed) != trimmed {
+	if strconv.Itoa(parsed) != trimmed {
 		return 0, fmt.Errorf("不是整数")
 	}
 	return parsed, nil
-}
-
-// unmarshalToValue 把任意 Go 结构转成 Value 树(借道 JSON),给「构造一个固定载荷」这类场景用。
-func unmarshalToValue(payload any) (Value, error) {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	return DecodeJSON(string(encoded))
 }

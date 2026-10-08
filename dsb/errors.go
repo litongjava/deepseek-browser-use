@@ -14,7 +14,6 @@ const (
 	ExitTransport = 1 // 传输或协议错
 	ExitBusiness  = 2 // 业务失败(服务端回了 ok:false)
 	ExitUsage     = 3 // 用法错
-	ExitInterrupt = 130
 )
 
 // UsageError 是用法错:参数写错了、本地文件不存在、没有可重放的记录。
@@ -30,12 +29,26 @@ func usageErrorf(format string, args ...any) error {
 }
 
 // TransportError 是连不上、超时、响应不是合法 JSON —— 都属于这一类。
-type TransportError struct{ Message string }
+//
+// Cause 保留网络栈的原始错误,供「这次失败到底发生在请求发出去之前还是之后」这类判断使用:
+// 只有确定没发出去的失败,才允许自动拉起后端并把请求重发一次(见 client.go 的 isPreDeliveryFailure)。
+type TransportError struct {
+	Message string
+	Cause   error
+}
 
 func (e *TransportError) Error() string { return e.Message }
 
+// Unwrap 让 errors.Is / errors.As 能穿透到网络栈的原始错误。
+func (e *TransportError) Unwrap() error { return e.Cause }
+
 func transportErrorf(format string, args ...any) error {
 	return &TransportError{Message: fmt.Sprintf(format, args...)}
+}
+
+// transportErrorCause 与 transportErrorf 相同,但额外保留底层错误。
+func transportErrorCause(cause error, format string, args ...any) error {
+	return &TransportError{Message: fmt.Sprintf(format, args...), Cause: cause}
 }
 
 // asUsage 判断是不是用法错。
@@ -54,27 +67,4 @@ func asTransport(err error) (*TransportError, bool) {
 		return target, true
 	}
 	return nil, false
-}
-
-// itoa 是 strconv.Itoa 的短别名,避免在一堆字符串拼接处反复 import strconv。
-func itoa(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	negative := value < 0
-	if negative {
-		value = -value
-	}
-	var buffer [20]byte
-	index := len(buffer)
-	for value > 0 {
-		index--
-		buffer[index] = byte('0' + value%10)
-		value /= 10
-	}
-	if negative {
-		index--
-		buffer[index] = '-'
-	}
-	return string(buffer[index:])
 }

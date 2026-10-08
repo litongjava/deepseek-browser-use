@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // cmdHealth 健康检查。
@@ -19,11 +18,7 @@ func cmdHealth(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	value, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -40,11 +35,7 @@ func cmdMethods(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	value, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -98,11 +89,7 @@ func cmdConfig(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	value, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -118,11 +105,7 @@ func cmdTasks(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	value, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -189,11 +172,8 @@ func cmdStart(client CommandAPI, args *Args, out *Printer) (int, error) {
 			out.Warn("注意:engineHonored=false —— 这个服务实例没有按 browser 参数切浏览器(常见于旧发布包)")
 		}
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	// --index 投影出来的 value 在这里用不上(打印的是整封回执),所以第一个返回值丢掉
+	_, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -217,11 +197,8 @@ func cmdClose(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	// 同 cmdStart:这里打印的是整封回执,投影出来的 value 用不上
+	_, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -502,11 +479,7 @@ func cmdState(client CommandAPI, args *Args, out *Printer) (int, error) {
 		return 0, err
 	}
 	warnObservation(out, response.Data())
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	value, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -586,11 +559,7 @@ func cmdJS(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	handled, err := emitSideOutput(out, args, value)
+	value, handled, err := prepare(response, args, out)
 	if err != nil {
 		return 0, err
 	}
@@ -610,6 +579,9 @@ func cmdJS(client CommandAPI, args *Args, out *Printer) (int, error) {
 	return verdict(response), nil
 }
 
+// recordIndexPattern 从记录文件名(000001.res.json 这种)里抠出序号。
+var recordIndexPattern = regexp.MustCompile("^([0-9]+)")
+
 // cmdLast 重放本会话最近一次的响应(与 PowerShell 客户端的 -Last 一致)。
 func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 	entries, err := os.ReadDir(client.RecordDir)
@@ -625,8 +597,25 @@ func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 	if len(files) == 0 {
 		return 0, usageErrorf("还没有任何记录:%s", client.RecordDir)
 	}
-	sort.Strings(files)
-	latest := files[len(files)-1]
+	// 记录文件名是 %03d.res.json,而 %03d 只是「最小宽度」:第 1000 条叫 1000.res.json,
+	// 字典序排在 999.res.json **前面**。所以不能 sort.Strings 之后取最后一个 ——
+	// 一个会话里记录超过 999 条以后,dsb last 会一直重放第 999 条,而且退出码是 0,
+	// 从外面完全看不出来。这里按数字前缀取最大。
+	latest, index := "", -1
+	for _, name := range files {
+		current := -1
+		if match := recordIndexPattern.FindStringSubmatch(name); match != nil {
+			current, _ = strconv.Atoi(match[1])
+		}
+		if current > index {
+			latest, index = name, current
+		}
+	}
+	if index < 0 {
+		// 一个数字前缀都没有:退回字典序取最后一个(正常不会走到,但别在这里崩)
+		sort.Strings(files)
+		latest, index = files[len(files)-1], 0
+	}
 	text, readErr := readLocalFile(filepath.Join(client.RecordDir, latest))
 	if readErr != nil {
 		return 0, readErr
@@ -634,10 +623,6 @@ func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 	envelope, parseErr := DecodeJSON(text)
 	if parseErr != nil {
 		return 0, usageErrorf("最近一份记录不是合法 JSON:%v", parseErr)
-	}
-	index := 0
-	if match := regexp.MustCompile(`^(\d+)`).FindStringSubmatch(latest); match != nil {
-		index, _ = strconv.Atoi(match[1])
 	}
 	if flag, ok := objGet(envelope, "sendFailed").(bool); ok && flag {
 		out.Warn(fmt.Sprintf("#%03d 这次是发送失败:%s", index, pyStr(objGet(envelope, "error"))))
@@ -652,6 +637,26 @@ func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 }
 
 // ------------------------------------------------------------------ 小工具
+
+// prepare 取这次要打印的值,并处理 --out / --grep。
+//
+// 顺序是有讲究的:先按 --index 投影,再交给侧输出(--out 写文件 / --grep 筛行);
+// 返回的 handled=true 表示输出已经由侧输出完成,调用方不必再打整封。
+//
+// 这段原来在 10 个命令里各抄了一遍(含两处一模一样的错误处理)。抄多遍的代价不是行数,
+// 而是**顺序会慢慢漂移**:实测有的命令先 --out 再 --select,有的反过来 —— 同一组参数
+// 在不同子命令上行为不同,是这类重复最典型的后果。
+func prepare(response *Response, args *Args, out *Printer) (Value, bool, error) {
+	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
+	if err != nil {
+		return nil, false, err
+	}
+	handled, err := emitSideOutput(out, args, value)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, handled, nil
+}
 
 // verdict 把「服务端 ok」翻成退出码。
 func verdict(response *Response) int {
@@ -681,6 +686,3 @@ func waitTimeoutValue(args *Args) float64 {
 	}
 	return *args.WaitTimeout
 }
-
-// nowStamp 给自检与调试用。
-func nowStamp() string { return time.Now().Format("2006-01-02 15:04:05") }

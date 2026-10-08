@@ -99,7 +99,9 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | 模型读不了图，但要读验证码 / 维护图 | `ocr_image`（Windows 自带 OCR，支持中文） |
 | 长批次怕 HTTP 超时 | `commands` 加 `async: true` + `get_job`；或客户端 `batch cmds.json --async --wait` |
 | 手拼 JSON 被引号 / 中文 / 编码坑了（Windows 尤其） | 别硬拼，用仓库里的 `dsb` 客户端：Windows 敲 `dsb`，macOS/Linux 敲 `dsb`，参数进文件用 `batch cmds.json` / `js @脚本.js`，见 `references/client.md` |
-| **`--select` 只挑一个字段，结果整封回执都打出来了** | 只有「路径在这条响应里不存在」才会退回整封（stderr 会说明）。批量回执里只要有一步失败、整批 `ok` 就是 `false`，但 `data.results[N]` 仍在 —— `--select data.results.N.…` 对失败批次**照常生效**，失败那一步也能直接挑出来看 |
+| **`--select` 挑的路径不存在，却拿到了整封回执** | 那是**旧行为**：现在路径不存在会打 `null` 并**以退出码 3（用法错）结束**（stderr 说明）。要旧行为加 `--select-lenient`。批量回执里只要有一步失败、整批 `ok` 就是 `false`，但 `data.results[N]` 仍在 —— `--select data.results.N.…` 对失败批次**照常生效**，失败那一步也能直接挑出来看 |
+| **同一任务上第二条命令回了「未执行 / 服务端忙」（`serialized:true`）** | 正常现象，不是坏了：**同一个任务的命令是串行执行的**（Playwright 的 Connection 不能被并发驱动），第二条最多等 5 秒。`retryable:true` / `started:false`，稍后重发即可；长批量进行中轮询命令排在它后面是意料之中（见 `references/protocol.md`） |
+| **`upload_file` 报「超过引擎上限 50MB」，或回一句英文的 `Cannot transfer files larger than 50Mb…`** | 用 `selector` 而不是 `index` 定位——超过 50MB 时服务会自动改走 CDP 直传本地路径，但那条兜底需要 CSS 选择器。≤50MB 的文件两条路一样（见 `references/commands.md` 的「上传文件」） |
 | **`execute_js` 老是撞 `Object doesn't exist: response@…`，只能自己手拼 `retryOnSpurious`** | 客户端已给开关：`js @脚本.js --retry-on-spurious`（只给**只读**脚本加；会点按钮/提交表单的脚本不要加，重发等于再执行一次） |
 | **`--params @文件.json` 报「缺少参数 xxx」，可文件里明明写着** | 文件里写**整个请求体**（`{"id":…,"method":…,"params":{…}}`）也认，会自动只取 `params`；`batch` 同样认整个请求体。留档文件与文档示例可以直接原样存下来喂进去 |
 | 索引老是失效 | 「一次快照只做一个动作」，或全程用选择器；报错里已经带上快照的年龄与元素范围 |

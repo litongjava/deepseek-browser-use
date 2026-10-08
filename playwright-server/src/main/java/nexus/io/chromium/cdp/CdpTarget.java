@@ -18,11 +18,6 @@ public record CdpTarget(String targetId, String type, String url, String title, 
     return "page".equals(type);
   }
 
-  /** 是不是跨域 iframe 对应的独立 target(OOPIF) */
-  public boolean isOutOfProcessFrame() {
-    return "iframe".equals(type);
-  }
-
   public static CdpTarget from(JSONObject info) {
     return new CdpTarget(info.getString("targetId"), info.getString("type"), info.getString("url"),
         info.getString("title"), info.getString("browserContextId"), Boolean.TRUE.equals(info.get("attached")),
