@@ -234,6 +234,15 @@ func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if args.Method != nil {
 		method = *args.Method
 	}
+	// 常见别名容错: press_key -> send_keys(key 与 keys 二选一,统一成 keys 后再发,
+	// 并把 key 从参数里摘掉,避免服务端回 unknownParams:["key"] 的噪音)
+	if method == "press_key" {
+		method = "send_keys"
+		if val, ok := params.Get("key"); ok {
+			params.Set("keys", val)
+			params.Delete("key")
+		}
+	}
 	response, err := client.Command(method, params, nil, 0, "")
 	if err != nil {
 		return 0, err

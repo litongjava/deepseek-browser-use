@@ -43,7 +43,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 - **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物，实测有一版连 `list_methods` / `get_config` / `shutdown` 都不支持，拿它开工会在半路撞「不支持的方法」。**开工第一条命令永远是 `list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
 - **只有一个业务端点**：`POST http://localhost:10049/playwright/command`
 - 另有 `GET /playwright/health`（健康检查）与 `GET /data/**`（读取截图与结构化文本）
-- 共 120 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测
+- 共 122 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测（`send_keys` 有别名 `press_key`，`key` 与 `keys` 参数通用）
 - **调客户端一律写 `dsb ...`（装在 `PATH` 上，任何目录直接敲），不要用 `curl`/`Invoke-WebRequest` 手拼 JSON。**
   它是这个仓库对外的客户端入口：子命令式传参、统一退出码、每次调用留档、服务没起时自动拉起后端。
   细节见 [客户端分册](references/client.md)。
@@ -61,7 +61,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | `references/human-in-loop.md` | 验证码 / 扫码 / 短信码 / 人工登录、`ocr_image`、多步 `steps` |
 | `references/payment-onboarding.md` | 商户申请、多层弹窗、短信验证、密钥上传、审核状态及资料脱敏 |
 | `references/browsers.md` | 选浏览器与引擎、profile 与登录态、实例生命周期、残留进程 |
-| `references/pitfalls.md` | 78 条坑与限制（下面「症状表」与「最常踩的坑」里说的「第 N 条」都指它） |
+| `references/pitfalls.md` | 81 条坑与限制（下面「症状表」与「最常踩的坑」里说的「第 N 条」都指它） |
 
 > ## 省 token 铁律：非必要不要读图
 >
@@ -353,7 +353,7 @@ dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时�
 
 其余要点：同一个 `id` 不能重复 `start`；每个任务有自己的一组页签（别的任务的页签看不见也点不到）；`close` 只关这个任务的页签，**最后一个任务关闭时**浏览器才退出；实例只在内存里，服务重启后 id 失效（登录态在 profile 里，仍在）；服务没有鉴权，默认只监听本机。各引擎的差异表、profile 目录按端口分开、强杀服务留下孤儿浏览器怎么处理，见 `references/browsers.md`。
 
-## 四、命令速查（全部 120 个方法）
+## 四、命令速查（全部 122 个方法）
 
 下面的名字就是 `method` 的取值，也是 `params` 里的参数名。**参数与返回字段的全量表**见 `references/commands.md`；下列各表里省略了每个方法都要带的 `id`（任务 ID）。
 

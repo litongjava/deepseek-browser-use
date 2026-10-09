@@ -31,6 +31,7 @@ PAGE_CHANGING
   mouse_wheel
   navigate
   new_tab
+  press_key
   reload
   scroll
   scroll_to_text

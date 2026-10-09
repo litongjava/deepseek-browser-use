@@ -47,6 +47,7 @@ public class CommandTableTest {
     cases.put("upload_file", "path");
     cases.put("drag_element_by_index", "index");
     cases.put("send_keys", "keys");
+    cases.put("press_key", "keys");
     cases.put("key_down", "keys");
     cases.put("key_up", "keys");
     cases.put("get_dropdown_options", "index");

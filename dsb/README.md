@@ -65,7 +65,7 @@ dsb --id 1001 close                           # 关掉任务
 | `health` / `config` / `tasks` / `methods [过滤词]` | 运维自省:健康检查、生效配置、活着的任务、命令清单 |
 | `start [--browser chrome] [--headful]` | 起任务;`--browser` 支持 auto/chromium/chrome/edge/firefox |
 | `close` / `shutdown` | 关掉本任务 / 关掉所有任务与共享浏览器 |
-| `run <method> [-p k=v] [--params @文件]` | 发一条命令 |
+| `run <method> [-p k=v] [--params @文件]` | 发一条命令;带别名容错:`press_key` 会自动映射成 `send_keys`(`key` 与 `keys` 参数通用) |
 | `batch [文件\|-] [--async] [--wait] [--keep-going] [--stop-on-expect-failure]` | 批量命令(数组 JSON,默认读标准输入) |
 | `job <jobId> [--wait]` | 查/等异步批次 |
 | `recipes [--run 名字] [--var k=v]` | 列配方 / 跑配方(显式点名才跑) |

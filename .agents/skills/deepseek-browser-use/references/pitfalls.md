@@ -1,4 +1,4 @@
-# 坑与限制（78 条）
+# 坑与限制（81 条）
 
 > 本文是 [SKILL.md](../SKILL.md) 的分册，按需阅读。SKILL.md 开头的「症状 → 命令」表里提到的「第 N 条」就是本文的编号。
 
@@ -668,6 +668,35 @@
     `ACTION_UNCERTAIN`（「无法判断是否生效，别重试」—— 方向正好相反）。动作类命令仍是「不确定」，
     不会因为「页面在导航」就被自动重发。
 
+
+79. **带自动播放视频或高频 Canvas 的页面容易导致截图 8000ms 超时并触发熔断。**
+
+    在抖音、B站、YouTube 等视频/直播页面上，视频画面持续渲染、弹幕不断刷新，Playwright 等待渲染静止超时 8 秒，
+    报错 `CAPTURE_FAILED: Timeout 8000ms exceeded`，随后触发全局熔断 `stage: circuit-open`。
+    
+    处置办法：
+    - 熔断仅针对截图机制，底层的 DOM 操作、导航、页面状态读取与 JS 执行完全不受影响；
+    - 遇到视频流页面，一律走 `dsb state --text-only` 读取纯文本，或用 `dsb js` 直接抓取 DOM；
+    - 不需要画面时忽略熔断提示，切忌将截图超时误判为页面宕机或导航失败。
+
+80. **现代 SPA 的虚拟列表（如抖音评论区）仅修改 `scrollTop` 不会渲染新数据：必须派发 `scroll` 事件。**
+
+    许多单页应用（React / Vue 虚拟列表，如抖音 `.route-scroll-container`）将滚动监听挂在顶层路由或容器上，
+    直接赋 `container.scrollTop += 1000` 页面不会触发虚拟列表的数据重绘，导致评论数卡死在首屏 15 条。
+    
+    处置办法：
+    - 累加 `scrollTop` 后，必须显式派发标准事件：`container.dispatchEvent(new Event('scroll', { bubbles: true }))` 和 `window.dispatchEvent(new Event('scroll', { bubbles: true }))`；
+    - 配合适度的 `await sleep(800)` 等待后端接口推流与前端 DOM 渲染，即可稳定突破虚拟列表加载 300+ 条评论。
+
+81. **富文本编辑器（contenteditable）无法使用常规 `input_text`：采用 `insertText` + `send_keys`。**
+
+    现代 Web IM（如抖音私信、飞书、企业微信在线沟通）的输入区是自定义富文本组件（如 `<div contenteditable="true">`），
+    原生 `input_text` 无法触发其内部的 React/Vue 状态模型。
+    
+    处置办法：
+    1. 聚焦输入框：`editor.focus()`；
+    2. 底层插入文本：`document.execCommand('insertText', false, text)`；
+    3. 派发回车按键：`dsb run send_keys -p keys=Enter`（或使用新支持的别名 `press_key -p key=Enter`）。
 
 ## 截图与重试补充（2026-10-05）
 

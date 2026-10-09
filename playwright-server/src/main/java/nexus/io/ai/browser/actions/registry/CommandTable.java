@@ -130,6 +130,7 @@ public class CommandTable {
     put("drag_element_by_index",
         (svc, id, a) -> svc.dragElementByIndex(id, reqInt(a, "index"), reqInt(a, "targetIndex")));
     put("send_keys", (svc, id, a) -> svc.sendKeys(id, reqStr(a, "keys")));
+    put("press_key", (svc, id, a) -> svc.sendKeys(id, a.containsKey("key") ? reqStr(a, "key") : reqStr(a, "keys")));
     put("key_down", (svc, id, a) -> svc.keyDown(id, reqStr(a, "keys")));
     put("key_up", (svc, id, a) -> svc.keyUp(id, reqStr(a, "keys")));
     put("get_dropdown_options", (svc, id, a) -> svc.getDropdownOptions(id, reqInt(a, "index")));

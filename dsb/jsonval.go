@@ -44,6 +44,20 @@ func (o *Obj) Set(key string, value Value) {
 // Get 读一个键。
 func (o *Obj) Get(key string) (Value, bool) { v, ok := o.vals[key]; return v, ok }
 
+// Delete 删一个键(存在才动 keys 顺序表,不存在是空操作)。
+func (o *Obj) Delete(key string) {
+	if _, ok := o.vals[key]; !ok {
+		return
+	}
+	delete(o.vals, key)
+	for i, k := range o.keys {
+		if k == key {
+			o.keys = append(o.keys[:i], o.keys[i+1:]...)
+			return
+		}
+	}
+}
+
 // Has 判断键在不在。
 func (o *Obj) Has(key string) bool { _, ok := o.vals[key]; return ok }
 

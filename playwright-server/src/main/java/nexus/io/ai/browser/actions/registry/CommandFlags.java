@@ -153,6 +153,7 @@ public final class CommandFlags {
     flag(map, "scroll_to_text", Flag.PAGE_CHANGING);
     flag(map, "select_dropdown_option", Flag.PAGE_CHANGING);
     flag(map, "send_keys", Flag.PAGE_CHANGING);
+    flag(map, "press_key", Flag.PAGE_CHANGING);
     flag(map, "set_cookie", Flag.PAGE_CHANGING);
     flag(map, "set_credentials", Flag.PAGE_CHANGING);
     flag(map, "set_dialog_behavior", Flag.RETRY_SAFE);
