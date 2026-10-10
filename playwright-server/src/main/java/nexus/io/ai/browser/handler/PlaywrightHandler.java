@@ -1,5 +1,7 @@
 package nexus.io.ai.browser.handler;
 
+import com.jfinal.kit.Kv;
+
 import java.util.Set;
 
 import com.alibaba.fastjson2.JSONObject;
@@ -67,6 +69,9 @@ public class PlaywrightHandler implements HttpRequestHandler {
     // 每一次「请求 → 响应」都落一份到 logs/trace/<日期>/ 下(见 CommandTraceLog)。
     // 它自己吞掉所有异常:磁盘满、目录没权限都不会让浏览器命令失败。
     CommandTraceLog.record(body, result, startedAt);
+    if (result.getData() instanceof Kv data && Boolean.TRUE.equals(data.get("invalidArgument"))) {
+      response.setStatus(400);
+    }
     response.body(result);
     return response;
   }

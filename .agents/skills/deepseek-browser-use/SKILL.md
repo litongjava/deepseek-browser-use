@@ -1,10 +1,10 @@
 ---
 name: deepseek-browser-use
-description: 通过 HTTP 接口驱动真实浏览器完成网页任务：默认使用本机安装的 Google Chrome 与一份共享的持久化 profile（所有任务共用一个浏览器进程，任务之间按页签隔离，登录一次长期有效），用 get_browser_state 取回可交互结构化页面文本与元素索引，按索引点击/输入/勾选/悬停/拖拽/双击，下拉框、上传文件、多标签页、等待、鼠标、截图与 PDF、Cookie 与本地存储、浏览器设置、弹窗与控制台、网络拦截、执行任意 JavaScript、批量指令；每次页面变化自动截图、每次取状态自动落盘截图与结构化文本（截图只留档，非必要不要读图，读文本即可，以节省 token）。当任务需要真实浏览器（JS 渲染、登录态、点击交互）而不是纯 HTTP 抓取时使用。
+description: 通过 dsb 命令行驱动真实浏览器完成网页任务：默认使用本机安装的 Google Chrome 与一份共享的持久化 profile（所有任务共用一个浏览器进程，任务之间按页签隔离，登录一次长期有效），用 get_browser_state 取回可交互结构化页面文本与元素索引，按索引点击/输入/勾选/悬停/拖拽/双击，下拉框、上传文件、多标签页、等待、鼠标、截图与 PDF、Cookie 与本地存储、浏览器设置、弹窗与控制台、网络拦截、执行任意 JavaScript、批量指令；每次页面变化自动截图、每次取状态自动落盘截图与结构化文本（截图只留档，非必要不要读图，读文本即可，以节省 token）。当任务需要真实浏览器（JS 渲染、登录态、点击交互）而不是纯 HTTP 抓取时使用。
 whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点击、勾选、滚动、截图、执行 JS 或提取页面内容时；服务默认地址 http://localhost:10049。读页面只用 get_browser_state 的文本字段，非必要不要读它返回的图片。
 ---
 
-# DeepSeek Browser Use（HTTP 浏览器自动化）
+# DeepSeek Browser Use（命令行浏览器自动化）
 
 测试验收、截图超时或留证时，读取 [testing-evidence.md](references/testing-evidence.md)：前置条件、业务断言、截图完整性分别记录。自动/手动截图共用熔断，``force:true``仅探测一次；全页回退图必须标注为视口证据。``state --text-only``仍通过stderr提示证据缺失。
 
@@ -36,7 +36,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 点击返回 ``actionStatus:unknown`` 时先读取业务结果，禁止自动重发。已完成的动作与后续观测错误分别报告，
 详见 [协议分册](references/protocol.md)。同一任务的依赖命令要等前一条返回后再执行。
 
-这是给智能体用的浏览器中间件：一个 tio-boot 服务，用 HTTP 驱动真实的浏览器（默认是**本机安装的 Google Chrome**，配一份**共享的持久化 profile**），把网页变成「可交互结构化文本 + 截图」。
+这是给智能体用的命令行浏览器自动化工具：通过 `dsb` 命令驱动真实的浏览器（默认是**本机安装的 Google Chrome**，配一份**共享的持久化 profile**），把网页变成「可交互结构化文本 + 截图」。
 
 - 默认地址：`http://localhost:10049`（端口来自 `playwright-server/src/main/resources/app.properties` 的 `server.port`）
 - 服务也可能在**别的机器**上，或本机同时开着好几个实例（不同端口 = 不同 profile / 登录态）：用 `--host`/`--port` 指定，或 `dsb server target add <名字> --host <主机> --port <端口>` 登记后 `--use <名字>`。远端目标不自动拉起（那台机器上的服务得自己起）。
@@ -138,9 +138,9 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **`get_form_state` 说某个必填项是空的，可页面上明明填好了**；或反过来：**报出来的值看着挺对，提交却说"必填"** | 都是**自定义下拉**（`ds-select` / `ant-select` 那类）：落库前 `input.value` 里是"你打的字"（看着像值、其实没落库），落库后它被清空、真值只在显示节点里。看 `valueFrom`：`display` 就是后者（第 56 条）。**判据要三样一起看**：值 / 显示节点文本 / 容器类名后缀（`--error` = 没落库） |
 | **`wait_for_idle` 等满超时（页面有轮询），而且批量里后面的步骤全没跑** | 改用 `wait_for_stable`；批量加 `--keep-going`（= `stopOnError:false`），否则一条等待超时会把后面全吃掉（第 57 条） |
 
-## 一、原理与最小可用：这是一个 HTTP 服务
+## 一、原理与最小可用：通过 dsb 命令操作浏览器
 
-**先记住一句话：这套中间件就是一个本地 HTTP 服务（tio-boot），浏览器跑在服务端进程里，智能体只跟 HTTP 打交道。**
+**操作入口是 `dsb` 命令行，智能体统一执行 `dsb ...`。底层由 tio-boot 服务管理浏览器，HTTP 是客户端与服务端之间的传输协议，不是智能体需要手写调用的入口。**
 
 理解这一点，后面所有现象都能对上：客户端与浏览器可以不在同一台机器上；所有能力（点击、读页面、
 执行 JS、截图、上传……）都收敛到**同一个端点**；超时、留档、重试都发生在这一层。
@@ -327,6 +327,20 @@ dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时�
 | `diff_dom_text` | 判断「页面到底动没动」：重新执行一次 buildDomTree 与上次快照按行做差，返回 `data.changed`/`added`/`removed`。**不产生新的截图/文本文件** |
 | `get_form_state` | **填完一屏表单后对一遍**：一次读回每个控件的标签/当前值/是否可见/是否禁用/校验错误，比逐个 `get_element_value` 省调用，也更容易发现「值填了但没进模型」的字段（`data.errors` 直接给「哪个字段、错在哪」）。每个字段还有一个 `valueFrom`：`dom` = 值取自控件本身，`display` = **值取自组件自己渲染的显示节点**（`ds-select` / `ant-select` 这类自定义下拉**落库之后** `input.value` 会被清空、真值只在显示节点里；别拿 `display` 的值去跟 DOM 的 `value` 比对） |
 | `get_interactive_map` | 补上快照里没有的 `id`/`class`/`href`，以及每个元素的 `hasListeners`（这个元素有没有挂事件监听器） |
+
+### 指定 profile 的命令行入口
+
+先用 `dsb methods` 确认服务支持 `list_profiles` 与 `clone_profile`，再执行：
+
+```powershell
+dsb profiles
+dsb profile clone --name litongjava --source-user-data-dir "<Chrome User Data>" --source-profile-directory Default
+dsb --id 1001 start --browser chrome --headful --profile litongjava
+```
+
+`dsb profile list` 与 `dsb profiles` 等价。路径属于服务端机器。复制前必须关闭使用源目录的 Chrome；命令不会覆盖已有目标。复制只保留一份独立数据，Cookie、密码与网站登录态不保证可用，遇到登录验证交由用户完成。
+
+具名 profile 必须已存在；显式选择失败不会回退到默认 profile。也可以用 `start --user-data-dir "<独立 User Data>" --profile-directory "Default"`，但不能与 `--profile` 混用。选择参数目前用于 Chrome；切换 profile 前先结束自己的任务，不要关闭其他人的任务。
 
 ### 一个浏览器，多个任务
 

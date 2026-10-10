@@ -1,5 +1,8 @@
 package nexus.io.ai.browser.actions.registry;
 
+import nexus.io.ai.browser.model.ProfileSelection;
+import nexus.io.ai.browser.model.CloneProfileRequest;
+
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,7 +47,9 @@ public class CommandTable {
       // 网络记录模式可选:true = 从一开始就记请求/响应;false = 这个任务不记;不传 = 按全局配置
       // (browser.network.record,默认 lazy:第一次要读网络数据时才挂监听器)
       Boolean networkRecording = a.getBoolean("networkRecording");
-      long newId = svc.start(id, headless == null || headless, requested, networkRecording);
+      long newId = svc.start(id, headless == null || headless, requested, networkRecording,
+          new ProfileSelection(a.getString("profile"), a.getString("userDataDir"),
+              a.getString("profileDirectory")));
       Kv data = Kv.by("id", newId);
       data.set("networkRecording", networkRecording == null
           ? PlaywrightService.networkRecordMode() + "(按全局配置)"
@@ -75,6 +80,9 @@ public class CommandTable {
       }
       return RespBodyVo.ok(data);
     });
+    put("list_profiles", (svc, id, a) -> svc.listProfiles());
+    put("clone_profile", (svc, id, a) -> svc.cloneProfile(new CloneProfileRequest(
+        a.getString("name"), a.getString("sourceUserDataDir"), a.getString("sourceProfileDirectory"))));
     put("close", (svc, id, a) -> svc.close(id));
     // 关掉所有任务与共享浏览器:比直接杀进程干净(不留占着 profile 的孤儿浏览器)
     put("shutdown", (svc, id, a) -> svc.shutdown());

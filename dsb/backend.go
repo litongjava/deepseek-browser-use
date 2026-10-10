@@ -215,7 +215,7 @@ func buildBackend(repoDir string, out *Printer) (string, error) {
 	}
 
 	arguments := []string{"-B", "-ntp", "-Pproduction", "-pl", "playwright-server", "-am",
-		"clean", "package", "-DskipTests"}
+		"clean", "package", "-DskipTests", "-Dgpg.skip"}
 	if platform := mavenDriverPlatform(); platform != "" {
 		arguments = append(arguments, "-Ddriver.platform="+platform)
 	}

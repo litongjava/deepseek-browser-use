@@ -35,6 +35,13 @@ public class CommandSetInvariantsTest {
   }
 
   @Test
+  public void profileCloneIsLongRunningWithoutAutomaticRetry() {
+    assertTrue(ActionService.LONG_RUNNING.contains("clone_profile"));
+    assertFalse(ActionService.SPURIOUS_RETRY_SAFE.contains("clone_profile"));
+    assertFalse(ActionService.PAGE_CHANGING.contains("clone_profile"));
+  }
+
+  @Test
   public void declaredFlagsOnlyNameRealCommands() {
     // CommandFlags 现在是四条标志名单的唯一声明处:里面写错一个名字,派生出来的名单就少一条命令,
     // 而命令表本身完全正常 —— 加这一条是为了让「写错名字」在测试里就露出来。

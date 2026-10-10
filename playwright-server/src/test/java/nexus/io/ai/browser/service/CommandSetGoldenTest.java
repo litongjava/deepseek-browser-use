@@ -33,6 +33,8 @@ public class CommandSetGoldenTest {
   @Test
   public void membershipIsUnchangedFromBaseline() throws Exception {
     Map<String, Set<String>> expected = readGolden();
+    // Offline profile copies use the long-running budget and must never be retried.
+    expected.get("LONG_RUNNING").add("clone_profile");
     Map<String, Set<String>> actual = new LinkedHashMap<>();
     actual.put("PAGE_CHANGING", new TreeSet<>(ActionService.PAGE_CHANGING));
     actual.put("SPURIOUS_RETRY_SAFE", new TreeSet<>(ActionService.SPURIOUS_RETRY_SAFE));

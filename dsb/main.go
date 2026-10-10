@@ -98,6 +98,8 @@ func dispatch(client *Client, args *Args, out *Printer) (int, error) {
 		return cmdLast(client, args, out)
 	case "recipes":
 		return cmdRecipes(client, args, out)
+	case "profiles", "profile":
+		return cmdProfiles(client, args, out)
 	case "start":
 		return cmdStart(client, args, out)
 	case "close":

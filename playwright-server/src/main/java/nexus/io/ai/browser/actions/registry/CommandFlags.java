@@ -79,6 +79,7 @@ public final class CommandFlags {
     flag(map, "close_modal", Flag.PAGE_CHANGING);
     flag(map, "close_other_tabs", Flag.PAGE_CHANGING);
     flag(map, "close_tab", Flag.PAGE_CHANGING);
+    flag(map, "clone_profile", Flag.LONG_RUNNING);
     flag(map, "commands", Flag.LONG_RUNNING);
     flag(map, "diff_dom_text", Flag.RETRY_SAFE);
     flag(map, "double_click_element_by_index", Flag.PAGE_CHANGING);

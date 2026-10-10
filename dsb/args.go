@@ -36,7 +36,7 @@ type argSpec struct {
 //
 // start / close 既是子命令**也是**服务端方法名,不能一律当成误用(见 subcommandMisuseHint)。
 var commandNames = []string{"health", "methods", "config", "tasks", "last", "recipes", "start", "close",
-	"shutdown", "run", "batch", "job", "upload", "uploads", "state", "js", "selftest", "server"}
+	"profiles", "profile", "shutdown", "run", "batch", "job", "upload", "uploads", "state", "js", "selftest", "server"}
 
 // subcommandAlsoMethod 这两个名字在服务端也是合法方法,`dsb run start` / `dsb run close` 是正常用法。
 var subcommandAlsoMethod = map[string]bool{"start": true, "close": true}
@@ -49,6 +49,8 @@ var commandHelp = map[string]string{
 	"tasks":    "当前活着的任务",
 	"last":     "重放本会话最近一次的响应",
 	"recipes":  "配方列表;--run 直接跑一个",
+	"profiles": "列出可用浏览器 profiles",
+	"profile":  "管理 profiles: list / clone",
 	"start":    "起一个任务",
 	"close":    "关掉这个任务",
 	"shutdown": "关掉所有任务与共享浏览器",
@@ -124,7 +126,16 @@ var subcommandSpecs = map[string][]argSpec{
 		{names: []string{"--var"}, dest: "var", takesValue: true, repeatable: true,
 			help: "配方变量,写成 k=v,可重复"},
 	},
+	"profile": {
+		{names: []string{"action"}, dest: "action", metavar: "ACTION", help: "list / clone"},
+		{names: []string{"--name"}, dest: "profile_name", takesValue: true, metavar: "NAME", help: "新托管 profile 的名称"},
+		{names: []string{"--source-user-data-dir"}, dest: "source_user_data_dir", takesValue: true, metavar: "PATH", help: "服务端上的源 Chrome User Data 目录"},
+		{names: []string{"--source-profile-directory"}, dest: "source_profile_directory", takesValue: true, metavar: "NAME", help: "源 profile 子目录(默认 Default);复制不保证登录态有效"},
+	},
 	"start": {
+		{names: []string{"--profile"}, dest: "profile", takesValue: true, metavar: "NAME", help: "使用已存在的具名 Chrome profile;不存在时失败,不回退"},
+		{names: []string{"--user-data-dir"}, dest: "user_data_dir", takesValue: true, metavar: "PATH", help: "服务端上的 Chrome User Data 目录;不能与 --profile 混用"},
+		{names: []string{"--profile-directory"}, dest: "profile_directory", takesValue: true, metavar: "NAME", help: "Chrome profile 子目录;需要 --user-data-dir"},
 		{names: []string{"--browser"}, dest: "browser", takesValue: true, metavar: "BROWSER",
 			help: "auto/chromium/chrome/edge/firefox"},
 		{names: []string{"--headful"}, dest: "headful", help: "弹出真实窗口(默认无头)"},
@@ -210,17 +221,19 @@ var subcommandSpecs = map[string][]argSpec{
 
 // commandsWithOutputSwitches 与 Python 版的循环一致。
 var commandsWithOutputSwitches = map[string]bool{
+	"profiles": true, "profile": true,
 	"health": true, "methods": true, "config": true, "tasks": true,
 	"start": true, "close": true, "state": true, "run": true, "js": true,
 }
 
 // requiredPositionals 是各子命令必填的位置参数。
 var requiredPositionals = map[string][]string{
-	"run":    {"method"},
-	"job":    {"job_id"},
-	"upload": {"file"},
-	"js":     {"script"},
-	"server": {"action"},
+	"run":     {"method"},
+	"job":     {"job_id"},
+	"upload":  {"file"},
+	"js":      {"script"},
+	"server":  {"action"},
+	"profile": {"action"},
 }
 
 // Args 是解析结果。指针字段的 nil 表示「命令行没给」,留给环境变量或内置默认值接管。
@@ -247,34 +260,40 @@ type Args struct {
 	Index         *int
 	Verbose       bool
 
-	Filter            *string
-	Run               *string
-	Var               []string
-	Browser           *string
-	Headful           bool
-	Params            *string
-	Param             []string
-	RetrySpur         bool
-	Method            *string
-	Script            *string
-	Out               *string
-	Grep              *string
-	File              *string
-	KeepGoing         bool
-	StopExpect        bool
-	AsyncMode         bool
-	Wait              bool
-	Poll              *float64
-	WaitTimeout       *float64
-	MaxDurationMs     *int
-	JobID             *string
-	Filename          *string
-	Delete            *string
-	MaxElements       *int
-	Full              bool
-	TextOnly          bool
-	ViewportExpansion *int
-	IncludeFrames     bool
+	Filter                 *string
+	Run                    *string
+	Var                    []string
+	Browser                *string
+	Profile                *string
+	UserDataDir            *string
+	ProfileDirectory       *string
+	ProfileName            *string
+	SourceUserDataDir      *string
+	SourceProfileDirectory *string
+	Headful                bool
+	Params                 *string
+	Param                  []string
+	RetrySpur              bool
+	Method                 *string
+	Script                 *string
+	Out                    *string
+	Grep                   *string
+	File                   *string
+	KeepGoing              bool
+	StopExpect             bool
+	AsyncMode              bool
+	Wait                   bool
+	Poll                   *float64
+	WaitTimeout            *float64
+	MaxDurationMs          *int
+	JobID                  *string
+	Filename               *string
+	Delete                 *string
+	MaxElements            *int
+	Full                   bool
+	TextOnly               bool
+	ViewportExpansion      *int
+	IncludeFrames          bool
 
 	// server 子命令
 	Action      *string
@@ -558,6 +577,9 @@ func parseArgs(argv []string) (*Args, error) {
 			}
 		}
 	}
+	if err := validateProfileArgs(args); err != nil {
+		return nil, err
+	}
 	return args, nil
 }
 
@@ -676,6 +698,12 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.ResponseMode = readString("response_mode")
 	args.Run = readString("run")
 	args.Browser = readString("browser")
+	args.Profile = readString("profile")
+	args.UserDataDir = readString("user_data_dir")
+	args.ProfileDirectory = readString("profile_directory")
+	args.ProfileName = readString("profile_name")
+	args.SourceUserDataDir = readString("source_user_data_dir")
+	args.SourceProfileDirectory = readString("source_profile_directory")
 	args.Params = readString("params")
 	args.Out = readString("out")
 	args.Grep = readString("grep")

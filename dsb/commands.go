@@ -163,7 +163,7 @@ func cmdRecipes(client CommandAPI, args *Args, out *Printer) (int, error) {
 // cmdStart 起一个任务。
 func cmdStart(client CommandAPI, args *Args, out *Printer) (int, error) {
 	browser := derefOr(args.Browser, "")
-	response, err := client.Start(browser, !args.Headful, nil)
+	response, err := startWithProfile(client, args, browser)
 	if err != nil {
 		return 0, err
 	}

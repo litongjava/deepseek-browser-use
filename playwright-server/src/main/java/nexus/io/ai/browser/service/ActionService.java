@@ -1,5 +1,7 @@
 package nexus.io.ai.browser.service;
 
+import nexus.io.tio.utils.validator.ParameterValidationException;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -809,6 +811,11 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
       }
       attachUnknownParams(result, args, method);
       return result;
+    } catch (ParameterValidationException e) {
+      RespBodyVo invalid = RespBodyVo.fail(400, e.getMessage());
+      invalid.setData(Kv.by("errorCode", ActionError.INVALID_ARGUMENT).set("retryable", false)
+          .set("invalidArgument", true).set("started", false));
+      return invalid;
     } catch (IllegalArgumentException e) {
       // 参数校验错(CommandTable 的 reqInt/reqStr 等):命令**根本没发出去**,不存在「可能已生效」的问题。
       //

@@ -5,6 +5,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import nexus.io.ai.browser.model.BrowserProfile;
+import nexus.io.jfinal.aop.Aop;
+import nexus.io.ai.browser.model.ProfileSelection;
+import nexus.io.ai.browser.model.CloneProfileRequest;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -416,6 +420,34 @@ public class PlaywrightService {
    * 让最清楚这一次要不要看流量的调用方决定,比全局一刀切合适。
    */
   public long start(Long id, boolean headless, String browser, Boolean networkRecording) {
+    return start(id, headless, browser, networkRecording, null);
+  }
+
+  public RespBodyVo listProfiles() {
+    return RespBodyVo.ok(Kv.by("profiles", Aop.get(BrowserProfileService.class).listProfiles().stream().map(BrowserProfile::toKv).toList()));
+  }
+
+  public RespBodyVo cloneProfile(CloneProfileRequest input) {
+    synchronized (PlaywrightService.class) {
+      return RespBodyVo.ok(Aop.get(BrowserProfileService.class).cloneProfile(input).toKv());
+    }
+  }
+
+  public long start(Long id, boolean headless, String browser, Boolean networkRecording, ProfileSelection selection) {
+    synchronized (PlaywrightService.class) {
+      BrowserProfile profile = Aop.get(BrowserProfileService.class).resolve(selection);
+      if (profile != null) {
+        BrowserChoice choice = browser == null || browser.isBlank() ? BrowserChoice.AUTO : BrowserChoice.parse(browser);
+        if (choice != BrowserChoice.AUTO && choice != BrowserChoice.CHROME) {
+          throw new IllegalArgumentException("Explicit Chrome profiles require browser=chrome (or auto)");
+        }
+        browser = "chrome";
+      }
+      return startSelected(id, headless, browser, networkRecording, profile);
+    }
+  }
+
+  private long startSelected(Long id, boolean headless, String browser, Boolean networkRecording, BrowserProfile profile) {
     BrowserChoice requested = null;
     if (browser != null && !browser.isBlank()) {
       requested = BrowserChoice.parse(browser);
@@ -430,7 +462,10 @@ public class PlaywrightService {
     long startedAt = System.currentTimeMillis();
     // 「这份 profile 之前用过吗」必须在启动**之前**判断:启动之后目录一定存在,再问就永远是「用过」
     java.util.Set<String> existedBefore = profileDirsExistingBeforeLaunch(requested);
-    SharedBrowser shared = sharedBrowser(headless, requested);
+    if (profile != null) {
+      existedBefore.add(Path.of(profile.userDataDir()).toAbsolutePath().normalize().toString());
+    }
+    SharedBrowser shared = sharedBrowser(headless, requested, profile);
     applyProfileHistory(shared, existedBefore);
     if (networkRecording != null) {
       // claimPage 会读这个字段决定「认领页签时挂不挂监听器」,所以必须在它之前写好
@@ -614,6 +649,7 @@ public class PlaywrightService {
   static final class SharedBrowser {
     /** 浏览器实际使用的 profile 目录 */
     final Path profileDir;
+    BrowserProfile selectedProfile;
     /** 实际使用的可执行文件;null 表示交给 Playwright 自己解析 */
     final Path executable;
     /** 用的是本机安装的 Google Chrome(而不是内嵌/Playwright 自带的 Chromium) */
@@ -711,6 +747,10 @@ public class PlaywrightService {
      * @param requested 这次请求的类型;null 表示没指定(按配置里的默认值算)
      */
     boolean matches(boolean requestedHeadless, BrowserChoice requested) {
+      return matches(requestedHeadless, requested, null);
+    }
+
+    boolean matches(boolean requestedHeadless, BrowserChoice requested, BrowserProfile selection) {
       BrowserChoice want = BrowserChoice.resolve(requested);
       if (resolvedType != want || engine != want.engine()) {
         return false;
@@ -720,6 +760,11 @@ public class PlaywrightService {
       }
       if (!Objects.equals(executable, want.executable())) {
         return false;
+      }
+      if (selection != null || selectedProfile != null) {
+        return selection != null && selectedProfile != null
+            && Path.of(selection.userDataDir()).equals(Path.of(selectedProfile.userDataDir()))
+            && selection.profileDirectory().equals(selectedProfile.profileDirectory());
       }
       Path configured = userProfile ? ChromeBrowser.userDataDir() : want.profileDir();
       return configured != null && configured.toAbsolutePath().normalize().equals(profileDir.toAbsolutePath().normalize());
@@ -745,9 +790,13 @@ public class PlaywrightService {
    * @param requested 这次请求的浏览器类型;null 表示没指定(按配置里的默认值算)
    */
   private static SharedBrowser sharedBrowser(boolean headless, BrowserChoice requested) {
+    return sharedBrowser(headless, requested, null);
+  }
+
+  private static SharedBrowser sharedBrowser(boolean headless, BrowserChoice requested, BrowserProfile selection) {
     SharedBrowser current = sharedBrowser;
     if (current != null) {
-      if (current.matches(headless, requested)) {
+      if (current.matches(headless, requested, selection)) {
         return current;
       }
       if (!INSTANCES.isEmpty()) {
@@ -767,7 +816,7 @@ public class PlaywrightService {
                 + "实测数百 MB、可能十几分钟,这一步不受 browser.launch.timeoutMs 约束,start 在它结束前不会返回;"
                 + "服务端日志里能看到 Downloading ... 进度");
         try {
-          sharedBrowser = launchSharedBrowser(headless, requested);
+          sharedBrowser = selection == null ? launchSharedBrowser(headless, requested) : launchSelectedProfile(headless, selection);
         } finally {
           launchState = null;
         }
@@ -798,6 +847,19 @@ public class PlaywrightService {
    *
    * @param requested 这次请求的浏览器类型;null 表示没指定(按配置里的默认值算)
    */
+  private static SharedBrowser launchSelectedProfile(boolean headless, BrowserProfile selection) {
+    Path root = Path.of(selection.userDataDir());
+    BrowserProfileService.requireIdle(root);
+    Path executable = ChromeBrowser.executablePath();
+    if (executable == null) {
+      throw new IllegalStateException(BrowserChoice.CHROME.notFoundMessage());
+    }
+    SharedBrowser result = launchOverCdp(executable, root, selection.source().equals("chrome"), headless,
+        "Explicit profile selection; fallback is disabled", BrowserChoice.CHROME, selection.profileDirectory());
+    result.selectedProfile = selection;
+    return result;
+  }
+
   private static SharedBrowser launchSharedBrowser(boolean headless, BrowserChoice requested) {
     BrowserChoice type = BrowserChoice.resolve(requested);
     if (type.isFirefox()) {
@@ -967,13 +1029,28 @@ public class PlaywrightService {
    */
   private static SharedBrowser launchOverCdp(Path executable, Path profileDir, boolean userProfile, boolean headless,
       String profileNote, BrowserChoice type) {
+    return launchOverCdp(executable, profileDir, userProfile, headless, profileNote, type, null);
+  }
+
+  private static SharedBrowser launchOverCdp(Path executable, Path profileDir, boolean userProfile, boolean headless,
+      String profileNote, BrowserChoice type, String explicitDirectory) {
     List<String> args = cdpArgs(headless, type);
     // --profile-directory 是**用户数据目录**里的概念:只有用用户自己那份 Chrome profile 时才传。
     // 托管 profile(Edge 那份、以及本机 Chrome 的 shared-default)下传它只会多一层同名子目录
-    if (userProfile) {
+    if (explicitDirectory != null) {
+      args.add("--profile-directory=" + explicitDirectory);
+    } else if (userProfile) {
       args.addAll(type.profileArgs());
     }
-    args.addAll(type.extraArgs());
+    List<String> extra = type.extraArgs();
+    if (explicitDirectory != null) {
+      for (String arg : extra) {
+        if (arg.startsWith("--user-data-dir") || arg.startsWith("--profile-directory")) {
+          throw new IllegalArgumentException("Extra browser arguments must not override an explicit profile");
+        }
+      }
+    }
+    args.addAll(extra);
     ChromeLauncher.Launched launched = ChromeLauncher.launch(executable, profileDir, args, CDP_LAUNCH_TIMEOUT_MS);
     try {
       Browser browser = playwright().chromium().connectOverCDP(launched.endpoint(),
@@ -1207,7 +1284,12 @@ public class PlaywrightService {
         .set("note", browser.viewport.note));
     if (browser.resolvedType.isGoogleChrome()) {
       // --profile-directory 是本机 Chrome 的概念:内置 Chromium 不传它,Edge 与 Firefox 也没有这一项
-      info.set("profileDirectory", ChromeBrowser.profileDirectory());
+      info.set("profileDirectory", browser.selectedProfile == null ? ChromeBrowser.profileDirectory()
+          : browser.selectedProfile.profileDirectory());
+      info.set("userDataDir", browser.profileDir.toAbsolutePath().toString());
+      if (browser.selectedProfile != null) {
+        info.set("profile", browser.selectedProfile.name());
+      }
     }
     if (browser.executable != null) {
       info.set("executable", browser.executable.toAbsolutePath().toString());
@@ -10831,8 +10913,10 @@ public class PlaywrightService {
     closeSharedBrowser();
     SharedBrowser fresh;
     synchronized (PlaywrightService.class) {
-      fresh = launch(browser.executable, browser.profileDir, browser.userProfile, browser.headless, browser.profileNote,
-          browser.opts, browser.resolvedType);
+      fresh = browser.selectedProfile == null
+          ? launch(browser.executable, browser.profileDir, browser.userProfile, browser.headless, browser.profileNote,
+              browser.opts, browser.resolvedType)
+          : launchSelectedProfile(browser.headless, browser.selectedProfile);
       sharedBrowser = fresh;
     }
     instance.detached = false;

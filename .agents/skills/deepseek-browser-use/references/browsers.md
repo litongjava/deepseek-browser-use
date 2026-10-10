@@ -6,7 +6,26 @@
 
 > 为什么不再一个任务一份 profile：用户数据目录天生是单例 —— 同一个目录同时只允许一个 Chrome 进程（第二个进程会把命令行交给已有实例然后自己退出），所以「共用一份 profile」和「一个任务一个浏览器」只能二选一。现在的取舍是：**共用浏览器与 profile，页签按任务隔离**。
 >
-> 想直接用用户日常那份 profile（现成的 Cookie 与登录态）？Chrome 136 起**不允许在默认用户数据目录上开启远程调试**（Playwright / Puppeteer / Selenium 一视同仁），所以默认不走这条路。只有在服务端把 `browser.chrome.useUserProfile` 打开、并且这台机器允许远程调试默认 profile（企业策略 `RemoteDebuggingAllowed=1`，或 Chrome 低于 136）时才会用上，这时 `data.browser.mode` 是 `cdp`。
+> Chrome 136 起不允许在默认用户数据目录上开启远程调试。`RemoteDebuggingAllowed` 允许远程调试不等于解除默认目录限制；不要通过降级浏览器或修改策略尝试绕过。需要独立 profile 时，先用 `dsb profile clone` 离线复制，再用 `dsb start --profile <名称>` 选择副本。复制不保证 Cookie、保存密码或网站登录态可用，必要时由用户重新登录。
+
+## 通过命令行列举、复制和选择 profile
+
+```powershell
+dsb profiles
+dsb profile list
+dsb --timeout 900 profile clone --name litongjava --source-user-data-dir "<Chrome User Data>" --source-profile-directory Default
+dsb --id 1001 start --browser chrome --headful --profile litongjava
+# 或指定服务端独立目录；不能与 --profile 混用
+dsb --id 1002 start --headful --user-data-dir "<独立 User Data>" --profile-directory Default
+```
+
+- `list_profiles` 返回 `data.profiles` 对象数组；`displayName` 优先取 Chrome Local State。只有命名托管项的 `name` 可供 `--profile` 使用，配置默认目录的 `name` 可能省略。本机 Chrome 子目录需显式选择或先复制。
+- 命名副本位于 `browser.profiles.dir` 下，默认 `~/.config/browseruse/profiles/named/<名称>`；子目录归一为 `Default`。路径均属于服务端机器。
+- 复制前关闭使用源目录的 Chrome。拒绝已存在目标、活跃源、符号链接及路径重叠；排除缓存和临时 LOCK 文件。`copiedFiles` / `copiedBytes` 在当前 JSON 配置下为十进制字符串。
+- 克隆使用 `browser.command.hardTimeoutMs` 硬期限；`--timeout` 只改变客户端等待。超时后先检查目标和回执，不要自动重发。
+- 显式选择目前只支持 Chrome。旧服务不声明 `list_profiles` 时 CLI 拒绝发送显式 start，未知名称不创建、不回退。
+- 相同 profile 可复用浏览器，不同 profile 不能在已有任务运行时切换。只关闭自己的任务，不用 shutdown 清除其他人的任务。
+- 用启动回执中的 `profile` / `userDataDir` / `profileDirectory` 与 `chrome://version` 的 Profile Path 交叉核验实际身份。`userProfile=false` 或 `profileSeenBefore=true` 均不能证明网站是否登录。复制后的凭据可能不可用，登录验证交给用户。
 
 ## 用哪个浏览器：`start` 时选（`browser` 参数）
 
@@ -60,7 +79,7 @@
 - **同一个 `id` 不能重复 `start`**：会返回 `start 失败：该 id 已经有正在运行的浏览器实例：1001，请先调用 close，或换一个 id`。要重来就先 `close` 再 `start`。
 - `close` 只关掉这个任务的页签；**最后一个任务关闭时**浏览器才会一起退出（profile 的占用也随之释放）。
 - 实例本身只在内存里，服务重启后 id 失效（登录态在 profile 里，仍在）。
-- `start` 的返回里有 `data.browser`：`type`（这次实际用的浏览器：`chrome`／`edge`／`chromium`／`firefox`）、`chrome`（是否用上了本机 Chrome）、`userProfile`（是否用上了用户自己的 profile）、`engine`、`mode`（`managed` = Playwright 的托管 profile，`cdp` = 服务自己拉进程再接上：用户自己的 Chrome profile 与 `edge` 都是这条）、`executable`、`profileDir`、`profileDirectory`、`headless`，以及服务替你做了退让时的 `note`。**看到 `userProfile=false` 就说明这次不是用户日常那份登录态**，需要登录的站点要重新走登录流程或请人协助；**看到 `type` 不是你要的那个，先看 `note`**（见上节「用哪个浏览器」）。
+- `start` 的返回里有 `data.browser`：`type`（这次实际用的浏览器：`chrome`／`edge`／`chromium`／`firefox`）、`chrome`（是否用上了本机 Chrome）、`userProfile`（是否用上了用户自己的 profile）、`engine`、`mode`（`managed` = Playwright 的托管 profile，`cdp` = 服务自己拉进程再接上：用户自己的 Chrome profile 与 `edge` 都是这条）、`executable`、`profileDir`、`profileDirectory`、`headless`，以及服务替你做了退让时的 `note`。**`userProfile=false` 不代表未登录**：命名副本也会返回 false；以目标网站的实际登录状态为准，必要时请用户完成登录；**看到 `type` 不是你要的那个，先看 `note`**（见上节「用哪个浏览器」）。
 - **`data.profileSeenBefore` 与 `data.profileNote` 回答的是另一件事**：`engineHonored:true` 只说明「浏览器参数被采纳了」，**不说明「这份 profile 里有登录态」**。这两个字段直接说清：
   - `profileSeenBefore:false` → 「该 profile 目录本次是**首次创建**，里面没有任何登录态：任何需要登录的站点都要重新登录一次」；
   - `profileNote` 里出现「引擎从 X 切到 Y，登录态不通用」→ 换过引擎（Chromium ↔ Firefox 的 profile 格式不通用），需要重新登录；
