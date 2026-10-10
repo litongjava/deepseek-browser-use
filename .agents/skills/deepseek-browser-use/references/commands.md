@@ -283,7 +283,7 @@ dsb run mouse_move -p x=990 -p y=280
 # 2) 按住
 dsb run mouse_down -p button=left
 # 3) 读那根自己的数值（脚本只读，可带重发开关）
-dsb js @读图例.js --retry-on-spurious
+dsb js '@读图例.js' --retry-on-spurious
 # 4) 一定要松开：忘了 mouse_up 会一直按着，后面每一次点击都会变成拖拽
 dsb run mouse_up -p button=left
 ```

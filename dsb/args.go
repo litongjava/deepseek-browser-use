@@ -472,6 +472,9 @@ func parseArgs(argv []string) (*Args, error) {
 				spec = nil
 			}
 			if spec == nil {
+				if args.Command == "js" && name == "--body" {
+					return nil, usageErrorf("unrecognized arguments: %s. js takes a positional SCRIPT, not --body. Use dsb js \"() => document.title\" or dsb js '@script.js'. In PowerShell, quote the entire @file argument. No request was sent.", name)
+				}
 				return nil, usageErrorf("unrecognized arguments: %s", token)
 			}
 			if !spec.takesValue {

@@ -33,7 +33,7 @@ func subcommandMisuseHint(argv []string) string {
 		return ""
 	}
 	return fmt.Sprintf("提示:%s 是子命令,不是 run 的方法名 —— 直接写成 `dsb %s ...`"+
-		"(例如 `dsb js @脚本.js`、`dsb batch cmds.json`、`dsb state --full`);"+
+		"(例如 `dsb js '@脚本.js'`、`dsb batch cmds.json`、`dsb state --full`);"+
 		"run 只用来调服务端方法,例如 `dsb run go_to_url -p url=https://example.com`", name, name)
 }
 
@@ -89,5 +89,17 @@ func printHelp(command string) {
 			defaultValue = " " + spec.metavar
 		}
 		fmt.Fprintf(writer, "  %-22s %s\n", strings.Join(spec.names, ", ")+defaultValue, spec.help)
+	}
+	if command == "js" {
+		fmt.Fprintln(writer, "\nSCRIPT is positional. --body is not a js option.")
+		fmt.Fprintln(writer, "Examples: dsb js \"() => document.title\" | dsb js '@script.js' | dsb js -")
+		fmt.Fprintln(writer, "PowerShell: quote the entire @file argument, including @: dsb js '@folder with spaces/script.js'.")
+		fmt.Fprintln(writer, "An unquoted @file can cause a PowerShell parser error before dsb starts.")
+	}
+	if command == "last" {
+		fmt.Fprintln(writer, "\nReads the latest recorded response locally. Does not send the original command again.")
+		fmt.Fprintln(writer, "Use the same --session and --record-dir as the original command. --id alone does not select records.")
+		fmt.Fprintln(writer, "After a --select error, use dsb last without --select to inspect the complete recorded response.")
+		fmt.Fprintln(writer, "A command with --no-record creates no new record. last may show an older response.")
 	}
 }

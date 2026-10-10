@@ -86,10 +86,37 @@ dsb --id 1001 close                           # 关掉任务
 | --- | --- | --- |
 | `--summary`(`--compact` 是同一个开关) | **只影响本地输出**:一行摘要 + 不打 JSON。摘要为空的方法(`get_tabs`/`get_console_logs`/`get_dialog`…)会自动退回打印一行 JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了 | 它**不会**给服务端发任何精简请求 |
 | `--response-mode compact` | 请求**信封**里的 `responseMode`(服务端的响应精简模式) | 它是信封级字段,不是 `params` 里的;与上面的 `--summary` 无关 |
-| `--select <路径>` | 本地按点分路径投影(如 `data.fields.0`),**失败响应同样投影** —— 批量里某一步失败时整批 `ok` 是 `false` 但 `data.results` 仍在,`--select data.results.N.…` 正是「只看失败那一步」 | 只有路径确实不存在(单条命令没有 `data.results`)才退回整封,并在 stderr 说明 |
+| `--select <路径>` | 本地按点分路径投影(如 `data.fields.0`),**失败响应同样投影** —— 批量里某一步失败时整批 `ok` 是 `false` 但 `data.results` 仍在,`--select data.results.N.…` 正是「只看失败那一步」 | 路径不存在时默认输出 `null`，成功响应转为退出码 3，业务失败仍为 2。加 `--select-lenient` 才退回整封并保留原退出码 |
 
 `--params @文件.json` 与 `batch` 都认**整个请求体**:文件里写 `{"id":1001,"method":…,"params":{…}}` 时
 按 `method` 字段识别、只取 `params` 那一层;`batch` 另认纯数组与 `{"commands":[…]}`。
+
+### 脚本参数与输出筛选恢复
+
+`js` 的脚本是位置参数，不支持 `--body`。较长脚本放到 UTF-8 文件中；带 BOM 的本地文件也可读取。
+
+```
+dsb js "() => document.title"
+dsb js '@script.js'
+dsb js '@folder with spaces/script.js'
+```
+
+PowerShell 中请给整个 `@文件` 参数加引号，包含 `@`。未引用时可能由 PowerShell 在启动 dsb 前报解析错误，CLI 无法捕获这个错误。
+也可用 `dsb js -` 从标准输入读取脚本。底层方法调用仍支持 `dsb run execute_js -p "body=() => document.title"`。
+
+- `--select data.url,data.title` 不是多字段语法，客户端会在发送请求前拒绝。选择共同父对象 `--select data` 即可。
+- `--select-lenient` 保留含逗号的字面字段名及缺失字段回退行为，不会把逗号解释成多字段选择。
+- 输出路径不存在发生在响应返回之后，原动作可能已经完成。**不要修改筛选参数后重新发送点击、提交等动作。**
+- 已启用记录时，用相同的 `--session` 和 `--record-dir` 执行 `last`。它只读取本地最近响应，不重发请求，单独指定 `--id` 不会选择对应任务的记录。
+
+```
+dsb --session checkout --record-dir './logs/agent' last
+dsb --session checkout --record-dir './logs/agent' last --select data
+```
+
+先不加 `--select` 查看完整响应，再选择已确认存在的路径。
+原调用如果使用了 `--no-record`，就没有本次新记录；此时 `last` 可能读到旧响应，不能作为本次动作的证据。
+`last` 的退出码 0 表示本地读取成功，不表示原动作成功，仍需检查记录中的 `ok`、`code` 和业务结果。
 
 ## 连哪台服务(多主机 / 多端口)
 

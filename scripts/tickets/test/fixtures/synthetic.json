@@ -1,0 +1,312 @@
+{
+  "schemaVersion": 1,
+  "queryDate": "2026-10-11",
+  "sources": [
+    {
+      "id": "rail-api",
+      "provider": "synthetic rail",
+      "url": "https://example.test/rail-api",
+      "capturedAt": "2026-10-10T06:00:00Z",
+      "method": "synthetic offline fixture"
+    },
+    {
+      "id": "rail-dom",
+      "provider": "synthetic rail",
+      "url": "https://example.test/rail-dom",
+      "capturedAt": "2026-10-10T06:00:00Z",
+      "method": "synthetic offline fixture"
+    },
+    {
+      "id": "rail-stations",
+      "provider": "synthetic rail",
+      "url": "https://example.test/rail-stations",
+      "capturedAt": "2026-10-10T06:00:00Z",
+      "method": "synthetic offline fixture"
+    },
+    {
+      "id": "flight-page",
+      "provider": "synthetic flight",
+      "url": "https://example.test/flight-page",
+      "capturedAt": "2026-10-10T06:00:00Z",
+      "method": "synthetic offline fixture"
+    },
+    {
+      "id": "flight-other",
+      "provider": "synthetic flight",
+      "url": "https://example.test/flight-other",
+      "capturedAt": "2026-10-10T06:00:00Z",
+      "method": "synthetic offline fixture"
+    }
+  ],
+  "rail": {
+    "queryDate": "2026-10-11",
+    "domDate": "2026-10-11",
+    "from": "北京",
+    "to": "上海",
+    "stationTable": "var station_names ='@bji|北京|BJP|beijing|bj|0|@bjn|北京南|VNP|beijingnan|bjn|1|@sha|上海|SHH|shanghai|sh|2|';",
+    "rawSourceId": "rail-api",
+    "domSourceId": "rail-dom",
+    "stationSourceId": "rail-stations",
+    "rawRows": [
+      [
+        "",
+        "",
+        "TESTG5",
+        "G5",
+        "",
+        "",
+        "BJP",
+        "SHH",
+        "23:30",
+        "00:30",
+        "01:00",
+        "Y",
+        "",
+        "20261010",
+        "",
+        "",
+        "01",
+        "09",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "有",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "无",
+        "",
+        "有",
+        "",
+        "",
+        ""
+      ],
+      [
+        "",
+        "",
+        "TESTG5",
+        "G5",
+        "",
+        "",
+        "VNP",
+        "SHH",
+        "23:40",
+        "00:30",
+        "00:50",
+        "Y",
+        "",
+        "20261010",
+        "",
+        "",
+        "02",
+        "09",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "有",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "有",
+        "",
+        "有",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "domRows": [
+      {
+        "rowId": "ticket_TESTG5_01_09",
+        "number": "G5",
+        "fromName": "北京",
+        "toName": "上海",
+        "departure": "23:30",
+        "arrival": "00:30",
+        "duration": "01:00",
+        "arrivalDate": "2026-10-12",
+        "seats": [
+          {
+            "code": "ZE",
+            "text": "候补",
+            "aria": "G5次列车，二等座票价2.30元，余票候补"
+          },
+          {
+            "code": "RW",
+            "text": "有",
+            "aria": "G5次列车，二等卧票价20.50元，余票有"
+          },
+          {
+            "code": "SWZ",
+            "text": "有",
+            "aria": "G5次列车，商务座票价1元，余票有"
+          },
+          {
+            "code": "GG",
+            "text": "--",
+            "aria": ""
+          },
+          {
+            "code": "OTHER",
+            "text": "加载中",
+            "aria": ""
+          }
+        ],
+        "boardingDate": "2026-10-11"
+      },
+      {
+        "rowId": "ticket_TESTG5_02_09",
+        "number": "G5",
+        "fromName": "北京南",
+        "toName": "上海",
+        "departure": "23:40",
+        "arrival": "00:30",
+        "duration": "00:50",
+        "arrivalDate": "2026-10-12",
+        "seats": [
+          {
+            "code": "ZE",
+            "text": "有",
+            "aria": "G5次列车，二等座票价10.01元，余票有"
+          },
+          {
+            "code": "RW",
+            "text": "有",
+            "aria": "G5次列车，二等卧票价20.50元，余票有"
+          },
+          {
+            "code": "SWZ",
+            "text": "有",
+            "aria": "G5次列车，商务座票价1元，余票有"
+          },
+          {
+            "code": "GG",
+            "text": "--",
+            "aria": ""
+          },
+          {
+            "code": "OTHER",
+            "text": "加载中",
+            "aria": ""
+          }
+        ],
+        "boardingDate": "2026-10-11"
+      }
+    ]
+  },
+  "flights": [
+    {
+      "number": "MU0001",
+      "operatingNumber": "MU0001",
+      "fromCode": "PKX",
+      "toCode": "PVG",
+      "departure": "2026-10-11T23:00:00+08:00",
+      "arrival": "2026-10-12T01:00:00+08:00",
+      "fieldSources": {
+        "number": "flight-page",
+        "operatingNumber": "flight-page",
+        "fromCode": "flight-page",
+        "toCode": "flight-page",
+        "departure": "flight-page",
+        "arrival": "flight-page"
+      },
+      "offers": [
+        {
+          "code": "E",
+          "name": "ECONOMY",
+          "cabin": "ECONOMY",
+          "status": "AVAILABLE",
+          "amount": "450.50",
+          "currency": "CNY",
+          "taxBasis": "UNKNOWN",
+          "fieldSources": {
+            "name": "flight-page",
+            "cabin": "flight-page",
+            "status": "flight-page",
+            "amount": "flight-other",
+            "currency": "flight-page",
+            "taxBasis": "flight-page"
+          }
+        },
+        {
+          "code": "T",
+          "name": "ECONOMY",
+          "cabin": "ECONOMY",
+          "status": "AVAILABLE",
+          "amount": "500",
+          "currency": "CNY",
+          "taxBasis": "INCLUDED",
+          "fieldSources": {
+            "name": "flight-page",
+            "cabin": "flight-page",
+            "status": "flight-page",
+            "amount": "flight-other",
+            "currency": "flight-page",
+            "taxBasis": "flight-page"
+          }
+        },
+        {
+          "code": "B",
+          "name": "BUSINESS",
+          "cabin": "BUSINESS",
+          "status": "AVAILABLE",
+          "amount": "1",
+          "currency": "CNY",
+          "taxBasis": "UNKNOWN",
+          "fieldSources": {
+            "name": "flight-page",
+            "cabin": "flight-page",
+            "status": "flight-page",
+            "amount": "flight-other",
+            "currency": "flight-page",
+            "taxBasis": "flight-page"
+          }
+        },
+        {
+          "code": "W",
+          "name": "ECONOMY",
+          "cabin": "ECONOMY",
+          "status": "WAITLIST",
+          "amount": "0.01",
+          "currency": "CNY",
+          "taxBasis": "UNKNOWN",
+          "fieldSources": {
+            "name": "flight-page",
+            "cabin": "flight-page",
+            "status": "flight-page",
+            "amount": "flight-other",
+            "currency": "flight-page",
+            "taxBasis": "flight-page"
+          }
+        },
+        {
+          "code": "U",
+          "name": "ECONOMY",
+          "cabin": "ECONOMY",
+          "status": "UNKNOWN",
+          "amount": "2",
+          "currency": "CNY",
+          "taxBasis": "UNKNOWN",
+          "fieldSources": {
+            "name": "flight-page",
+            "cabin": "flight-page",
+            "status": "flight-page",
+            "amount": "flight-other",
+            "currency": "flight-page",
+            "taxBasis": "flight-page"
+          }
+        }
+      ]
+    }
+  ]
+}

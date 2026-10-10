@@ -1,0 +1,11 @@
+[win.build]
+npm.cmd test
+npm.cmd install --global --ignore-scripts --no-audit --no-fund .
+
+[mac.build]
+npm test
+npm install --global --ignore-scripts --no-audit --no-fund .
+
+[linux.build]
+npm test
+npm install --global --ignore-scripts --no-audit --no-fund .

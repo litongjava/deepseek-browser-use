@@ -1,0 +1,11 @@
+[win.build]
+go test ./...
+go install .
+
+[mac.build]
+go test ./...
+go install .
+
+[linux.build]
+go test ./...
+go install .

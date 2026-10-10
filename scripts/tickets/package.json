@@ -1,0 +1,20 @@
+{
+  "name": "dsb-tickets",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-only offline ticket result validation",
+  "bin": {
+    "dsb-tickets": "./cli.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "results.mjs"
+  ]
+}

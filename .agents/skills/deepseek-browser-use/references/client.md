@@ -61,10 +61,10 @@ dsb --id 1001 run get_browser_state --grep mediaCount
   **别据乱码去报「服务端/客户端编码 bug」**：先读同一份文件的留档（`logs/agent/<会话>/*.res.json`，
   UTF-8），或者用 harness 的 read 工具再判断一次。
 
-复杂请求继续使用 `--params @文件.json` / `batch 文件.json`，不为过滤输出改用裸 HTTP 请求，
+复杂请求继续使用 `--params '@文件.json'` / `batch 文件.json`，不为过滤输出改用裸 HTTP 请求，
 否则会丢失统一退出码和调用留档。
 
-**这两个参数文件都认「整个请求体」**：`--params @文件.json` 里的
+**这两个参数文件都认「整个请求体」**：`--params '@文件.json'` 里的
 `{"id":1001,"method":"request_human_input","params":{…}}` 会自动只取 `params` 那一层（按 `method`
 字段识别），`batch` 认纯数组 / `{"commands":[…]}` / 整个请求体三种写法。留档文件、文档示例、
 别人贴过来的裸 HTTP 请求体都能原样存下来直接喂进去 —— 以前这么写会把 `id`/`method` 当命令参数发下去，
@@ -159,7 +159,7 @@ dsb --port 10049 health
 dsb --port 10049 --id 1001 start --browser chrome --headful
 dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
 dsb --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
-dsb --port 10049 --id 1001 js @脚本.js --var who=dsb   # 支持 {{变量}} 注入
+dsb --port 10049 --id 1001 js '@脚本.js' --var who=dsb   # 支持 {{变量}} 注入
 dsb --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
 dsb --port 10049 --id 1001 recipes --run close-all-modals
 dsb --port 10049 upload 图样.jpg                 # 送文件到服务端暂存区
@@ -177,24 +177,24 @@ dsb --port 10049 last                            # 重放最近一次响应
   JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了。
 - **不做脱敏**：留档与终端输出都是原文（手机号、证件号、邮箱、长号码一律原样），`requestId`/`jobId`
   这些下一步要回填的凭据自然也在。交付或共享 `logs/agent/**` 前自己过一眼。
-- **多行脚本不要写在命令行里**：经 cmd/PowerShell 传参会只剩第一行。用 `js @脚本.js`、`--params @文件.json`
+- **多行脚本不要写在命令行里**：经 cmd/PowerShell 传参会只剩第一行。用 `js '@脚本.js'`、`--params '@文件.json'`
   或 `batch cmds.json`。
 - **每个子命令都有自己的帮助**:`dsb state --help`、`dsb batch --help`、`dsb server --help` 打的是
   **那个子命令**的用法与选项,只有 `dsb --help`(或 `dsb -h`)才是全局页。以前所有 `--help` 都只打全局,
   子命令的选项得去翻文档才知道。
-- **`js` / `batch` / `state` 这些是子命令，不是 `run` 的方法名**。写成 `dsb run js @脚本.js` 只会得到一句
+- **`js` / `batch` / `state` 这些是子命令，不是 `run` 的方法名**。写成 `dsb run js '@脚本.js'` 只会得到一句
   `用法错:unrecognized arguments: @脚本.js`（真正的错在「`js` 不该跟在 `run` 后面」）。
   客户端会补一句对症提示，但正确写法是：
 
   ```shell
-  dsb --port 10049 --id 1001 js @脚本.js        # 对：子命令直接写
+  dsb --port 10049 --id 1001 js '@脚本.js'        # 对：子命令直接写
   dsb --port 10049 --id 1001 run get_title      # 对：run 只用于服务端方法
   ```
 
 - **PowerShell 会吃掉方括号与逗号**（它自己的一套参数解析），实测两种翻车：
   `-p selector=div[role=button]` → `unrecognized arguments: div[role=button]`；
   `-Dtest=A,B` → `Missing argument in parameter list`（逗号是 PowerShell 的数组运算符）。
-  **凡是值里带 `[`、`]`、`,`、`"` 的参数，一律写进 `--params @文件.json`**，别在命令行里跟 shell 打架。
+  **凡是值里带 `[`、`]`、`,`、`"` 的参数，一律写进 `--params '@文件.json'`**，别在命令行里跟 shell 打架。
 
 不确定服务端现在是什么状态（引擎、profile 目录、命令数、配方数）时，先跑一次自检：
 

@@ -6,6 +6,8 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 
 # DeepSeek Browser Use（命令行浏览器自动化）
 
+执行前先读 [可靠执行与任务协作](references/reliable-execution.md)：精确 CLI / PowerShell 引用、任务独占、四种任务标识、条件等待及业务成功判据。查价格、票务、数量时同时加载 `web-data-as-text`；查 12306 时再加载 `railway-12306-ticket`。
+
 测试验收、截图超时或留证时，读取 [testing-evidence.md](references/testing-evidence.md)：前置条件、业务断言、截图完整性分别记录。自动/手动截图共用熔断，``force:true``仅探测一次；全页回退图必须标注为视口证据。``state --text-only``仍通过stderr提示证据缺失。
 
 > ## ⚠️ CLI方式第一条：调用统一走 `dsb`
@@ -70,7 +72,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 >
 > - **不要**为了「看看页面长什么样」去下载/打开这些图片，也不要交给视觉模型、不要用 图片读取工具读它。图片的 token 消耗比同一次返回的 `data.text` 高几个数量级。
 > - 定位与操作所需的全部信息都在文本里：`data.browser_state`（页签）+ `data.text`（每行的 `[index]` 就是元素索引）。**读图不会多给一个索引，只会多烧 token。**
-> - 判断「点击到底生效没有」不要靠看图：用点击回执里的 `data.changed`，或用 `diff_dom_text` 比文本差异，都比读图省得多。
+> - 判断业务是否成功必须回读目标文本、状态或网络响应。`data.changed` / `diff_dom_text` 只说明观察到页面变化，不证明提交成功；`changed:false` 也不证明失败。
 > - **只有文本根本表达不了的时候才看图**：验证码 / 二维码 / 扫码登录、图表与曲线、纯图片按钮或图标、以及文本与操作结果明显矛盾、必须肉眼确认的场合。这时优先用 `get_element_screenshot` **只截那一个元素**，而不是把整页大图读进来。
 > - 确实需要整页图时再用 `screenshot`（**默认落盘、只回路径**；要内联 base64 得显式传 `inline: true`），并且一次任务里尽量只读一张。
 > - **模型读不了图时不要硬撑**：用 `ocr_image` 让服务端用本机 OCR 把图上的文字读出来（见 `references/human-in-loop.md`），或 `request_human_input` 请人看一眼。
@@ -85,26 +87,26 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | **只想知道整页里有没有某个词/某个数字**（文号、乡镇名、金额） | 别把整页拉进上下文：用 `find_text`（回命中 + 前后文 + 行号）；`regex: true` 可以一次找几个 |
 | **要找的数字在页面上就是读不到，换选择器也没用** | 先看快照里的 `data.mediaCount` / `data.mediaHint` —— 非空就说明这一页有**大图**（公告扫描件、票据、表格截图）。这些内容**不在 DOM 文字里**，`innerText` 永远读不到：`download_image` 取原始文件（**不是截屏**），再把回执的 `path` 交给 `ocr_image`。整页扫描件/表格截图建议把 OCR 后端换成文档级工具（见 `references/commands.md` 的 `ocr_image`） |
 | **选择器明明匹配到好几个，但我就要其中一个** | 看回执的 `matched` / `chosenIndex`（服务端替你挑的），要自己指定就传 `nth`（0 基，动作类与 `extract_markdown` 都认）。实测分页上「页码 2」与「下一页」的 href 完全一样，没有 `nth` 只能猜 |
-| 点了没反应，但返回 `ok:true` | 看 `data.changed` / `data.effective`；看 `data.hit`（这次命中的元素）；改用 `click_element_by_text` 复核命中的是不是纯文本容器 |
+| 点了没反应，但返回 `ok:true` | 先回读目标业务状态或响应，再看 `data.hit` 诊断命中；`changed` / `effective` 仅作线索，禁止据此补点或判成功 |
 | 不确定页面到底动没动 | `diff_dom_text`（不落盘、比重读整页省） |
 | 表单填了但提交说为空 | 看 `data.mode` / `data.committed`；改用 `input_text_by_selector`（可见字段走真实输入，进框架模型） |
 | 上传了但页面没反应 | 看 `upload_file` 回执里的 `data.consumed`（`noListener` 就是这个坑）；用 `get_element_listeners` 复核 |
 | 有弹窗挡住点击 | `get_modals` + `close_modal`（每条结果看 `blocking`/`matchedBy`；`buttons` 里连 `<a class="btn92s">确认</a>` 这种自有按钮也认） |
 | **`execute_js` 里 `.click()` 点了没反应**（点了 window.open / 带 onclick 的锚） | **不是页面坏了**：JS 派发的点击不是可信事件，弹窗会被浏览器拦掉。改用 `click_element_by_selector`（真实鼠标事件）点它 |
 | 想读某个接口的返回，`get_response_body` 却回 `bodyAvailable:false` | 响应体在收到的当下就抄过一份，**跳转/等一会儿也能读**；真读不到说明它不是 xhr/fetch，改用 `wait_for_response` 等一次新响应 |
-| 多行 JS 报 `SyntaxError: Unexpected end of input` | 脚本在命令行里被截断了：改用 `js @脚本.js`（或服务端 `bodyFile`），别看语法错误去改脚本 |
+| 多行 JS 报 `SyntaxError: Unexpected end of input` | 脚本在命令行里被截断了：改用 `js '@脚本.js'`（或服务端 `bodyFile`），别看语法错误去改脚本 |
 | 某个元素到底有没有挂事件 | `get_element_listeners`；`get_interactive_map` 每条也带 `hasListeners` |
 | 需要人扫码 / 输验证码 / 支付确认 | `request_human_input`（一串动作用 `steps` 一次交办） |
 | **需要向用户「要一个值」，或让用户在几个选项里挑一个**（卡号、身份证号、验证码、「这两张卡用哪张」） | `ask_user`：不截图、不抢焦点，`questions: [{id, question, options?, multiSelect?}]`；答复按 `id` 用 `submit_human_input` 的 `answers` 回填，`get_human_input` 回 `data.answers: [{id, selected[], custom?}]`。**别借 `request_human_input` 的壳子**——它是「请人去页面操作」，语义会拧 |
 | **要用户提供敏感字段（银行卡号 / 身份证号 / 验证码）** | **先问，别替用户决定**：让他选「自己在页面上填」还是「告诉你、你来填」（第 72 条）。用户选了自己填，就**不要**再把值要过来 |
 | 模型读不了图，但要读验证码 / 维护图 | `ocr_image`（Windows 自带 OCR，支持中文） |
 | 长批次怕 HTTP 超时 | `commands` 加 `async: true` + `get_job`；或客户端 `batch cmds.json --async --wait` |
-| 手拼 JSON 被引号 / 中文 / 编码坑了（Windows 尤其） | 别硬拼，用仓库里的 `dsb` 客户端：Windows 敲 `dsb`，macOS/Linux 敲 `dsb`，参数进文件用 `batch cmds.json` / `js @脚本.js`，见 `references/client.md` |
+| 手拼 JSON 被引号 / 中文 / 编码坑了（Windows 尤其） | 别硬拼，用仓库里的 `dsb` 客户端：Windows 敲 `dsb`，macOS/Linux 敲 `dsb`，参数进文件用 `batch cmds.json` / `js '@脚本.js'`，见 `references/client.md` |
 | **`--select` 挑的路径不存在，却拿到了整封回执** | 那是**旧行为**：现在路径不存在会打 `null` 并**以退出码 3（用法错）结束**（stderr 说明）。要旧行为加 `--select-lenient`。批量回执里只要有一步失败、整批 `ok` 就是 `false`，但 `data.results[N]` 仍在 —— `--select data.results.N.…` 对失败批次**照常生效**，失败那一步也能直接挑出来看 |
-| **同一任务上第二条命令回了「未执行 / 服务端忙」（`serialized:true`）** | 正常现象，不是坏了：**同一个任务的命令是串行执行的**（Playwright 的 Connection 不能被并发驱动），第二条最多等 5 秒。`retryable:true` / `started:false`，稍后重发即可；长批量进行中轮询命令排在它后面是意料之中（见 `references/protocol.md`） |
+| **同一任务上第二条命令回了「未执行 / 服务端忙」（`serialized:true`）** | 正常现象，不是坏了：**同一个任务的命令是串行执行的**（Playwright 的 Connection 不能被并发驱动），第二条最多等 5 秒。`retryable:true` / `started:false` 表示未执行；先联系该任务唯一所有者，等其命令完成后由所有者决定是否执行，不要并发追加状态查询或循环重试（见 `references/protocol.md`） |
 | **`upload_file` 报「超过引擎上限 50MB」，或回一句英文的 `Cannot transfer files larger than 50Mb…`** | 用 `selector` 而不是 `index` 定位——超过 50MB 时服务会自动改走 CDP 直传本地路径，但那条兜底需要 CSS 选择器。≤50MB 的文件两条路一样（见 `references/commands.md` 的「上传文件」） |
-| **`execute_js` 老是撞 `Object doesn't exist: response@…`，只能自己手拼 `retryOnSpurious`** | 客户端已给开关：`js @脚本.js --retry-on-spurious`（只给**只读**脚本加；会点按钮/提交表单的脚本不要加，重发等于再执行一次） |
-| **`--params @文件.json` 报「缺少参数 xxx」，可文件里明明写着** | 文件里写**整个请求体**（`{"id":…,"method":…,"params":{…}}`）也认，会自动只取 `params`；`batch` 同样认整个请求体。留档文件与文档示例可以直接原样存下来喂进去 |
+| **`execute_js` 老是撞 `Object doesn't exist: response@…`，只能自己手拼 `retryOnSpurious`** | 客户端已给开关：`js '@脚本.js' --retry-on-spurious`（只给**只读**脚本加；会点按钮/提交表单的脚本不要加，重发等于再执行一次） |
+| **`--params '@文件.json'` 报「缺少参数 xxx」，可文件里明明写着** | 文件里写**整个请求体**（`{"id":…,"method":…,"params":{…}}`）也认，会自动只取 `params`；`batch` 同样认整个请求体。留档文件与文档示例可以直接原样存下来喂进去 |
 | 索引老是失效 | 「一次快照只做一个动作」，或全程用选择器；报错里已经带上快照的年龄与元素范围 |
 | **实时页面（行情 / 时钟 / 状态灯）上索引像是永久失效，每次按索引都回「当前没有页面快照」** | 先看 `data.snapshotStructuralMutations`：**为 0** 说明读取期间只是文字/属性在变，`indicesUsable` 应为 `true`，`data.snapshotNote` 会说明「内容变动但重校验通过」，**照常按索引操作**；**不为 0**（读取期间增删了元素）才会作废，等页面稳定后重取。想恢复旧的「任何变动即作废」判据传 ``strictSnapshot:true`` |
 | 换了浏览器之后所有站点都退登录了 | 看 `start` 回执里的 `data.profileSeenBefore` / `data.profileNote`（换引擎等于换一套登录态） |
@@ -229,7 +231,7 @@ dsb --port 10049 --id 1001 close
 ```
 
 > 上面那段里的 `{id, method, params}` 与 HTTP 响应体依然成立 —— `dsb` 只是替你把它们组装好发出去。
-> 想把整封请求原样喂进去（留档文件、别人贴过来的请求体）就用 `--params @文件.json` 或 `batch 文件.json`。
+> 想把整封请求原样喂进去（留档文件、别人贴过来的请求体）就用 `--params '@文件.json'` 或 `batch 文件.json`。
 
 ### 也可以不手拼 JSON：用现成客户端（**首选**）
 
@@ -241,12 +243,12 @@ dsb --port 10049 health
 dsb --port 10049 --id 1001 start --browser chrome --headful
 dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com
 dsb --port 10049 --id 1001 state --full          # 标题/URL/元素/结构化文本
-dsb --port 10049 --id 1001 js @脚本.js --var who=dsb
+dsb --port 10049 --id 1001 js '@脚本.js' --var who=dsb
 dsb --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
 dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时先自检
 ```
 
-**退出码 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错** —— 把「服务没起」与「业务失败」分开了，写脚本时不用去解析 `msg` 猜。还有两个直接好处：`steps.log` 一行一次调用（时间、序号、任务 ID、方法、成败、耗时、摘要），第几步开始不对一眼就能看出来；每一步的请求与响应都留档。**多行脚本不要写在命令行里**（经 cmd/PowerShell 传参会只剩第一行），用 `js @脚本.js`、`--params @文件.json` 或 `batch cmds.json`。完整用法（含 `--summary` 与 `responseMode` 的区别、`--out`/`--grep`、后端管理）见 `references/client.md`。
+**退出码 0 成功 / 1 传输错 / 2 业务失败 / 3 用法错** —— 把「服务没起」与「业务失败」分开了，写脚本时不用去解析 `msg` 猜。还有两个直接好处：`steps.log` 一行一次调用（时间、序号、任务 ID、方法、成败、耗时、摘要），第几步开始不对一眼就能看出来；每一步的请求与响应都留档。**多行脚本不要写在命令行里**（经 cmd/PowerShell 传参会只剩第一行），用 `js '@脚本.js'`、`--params '@文件.json'` 或 `batch cmds.json`。完整用法（含 `--summary` 与 `responseMode` 的区别、`--out`/`--grep`、后端管理）见 `references/client.md`。
 
 > ### 别把 `dsb` 的正常输出截断成「失败」（宿主里显示成红色 exit code 1）
 >
@@ -259,7 +261,8 @@ dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时�
 > # ✓ 要么不截断
 > dsb methods
 > # ✓ 要么先落盘、再截断文件（文件读取不会反向掐断上游进程）
-> dsb methods > $env:TEMP\m.txt; Get-Content $env:TEMP\m.txt -TotalCount 20
+> dsb methods --out "$env:TEMP/methods.json"
+> # 然后使用宿主 read 工具读取 methods.json，保持诊断与 JSON 分离。
 > ```
 >
 > 判据：`dsb` 自己的退出码（`$LASTEXITCODE`，紧跟在 `dsb` 那条命令之后读）才是它的真实结果；`Get-Content` / `Select-Object` 这类 **cmdlet 不会刷新 `$LASTEXITCODE`**，你读到的 1 可能来自上一条完全无关的命令。只想筛选时用 `Select-String`，不要用 `Select-Object -First`。
@@ -622,7 +625,7 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 
 **`execute_js` 要点**：`body` 支持三种写法（表达式、函数、含 `return` 的语句片段），**一定会 await Promise**——要现取接口值就直接写 `async () => (await fetch(url, {credentials:'same-origin'})).json()`，不要再用已废弃的同步 XHR 去绕。返回值必须 JSON 可序列化（DOM 元素只会得到 `ref: <Node>`，请先转成 `textContent`/`outerHTML`/`value`）。`body` 上限 100000 字符，脚本**没有超时**。跨域 iframe 要传 `frame`。
 
-- **多行脚本不要写在命令行里**（会被 shell 截断，报的却是 `SyntaxError: Unexpected end of input`）：用服务端的 `bodyFile`（文件放在 `get_config` 的 `jsDir` 里）、客户端的 `js @脚本.js`，或 `--params @文件.json`。带参数时用 `vars` 注入 `{{变量}}`（走 JSON 编码，中文/引号/换行都不用转义）。
+- **多行脚本不要写在命令行里**（会被 shell 截断，报的却是 `SyntaxError: Unexpected end of input`）：用服务端的 `bodyFile`（文件放在 `get_config` 的 `jsDir` 里）、客户端的 `js '@脚本.js'`，或 `--params '@文件.json'`。带参数时用 `vars` 注入 `{{变量}}`（走 JSON 编码，中文/引号/换行都不用转义）。
 - **脚本重发无害时传 `retryOnSpurious: true`**：页面上报 `Object doesn't exist: response@…`（对象与脚本毫不相干）时服务端替你重发。**只给读页面/取值的脚本传**；会点按钮、提交表单的脚本不要传——那种脚本重发等于再执行一次。
 
 ### 页面内请求的上下文
@@ -668,7 +671,7 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 | 多标签页 | `get_tabs` 看列表 → `switch_tab_by_url` 切过去 / `close_other_tabs` 清理。注意 `data.browser_state` 里 `current tab is: N` 是 **1 基**，`pageIndex` 是 **0 基** |
 | 抓接口 / 造数据 | `route` 加 `action=mock` 让接口返回假数据、`action=abort` 让请求直接失败；`get_requests` 看请求记录；`wait_for_response` 拿接口返回的 JSON；`unroute` 撤销 |
 | 悬浮菜单 | `hover_and_click` 一步完成悬停 + 点击（分两步菜单会收起来）；菜单项只有文本没有索引时用 `hover_and_click` 加 `selector` |
-| 判断点击到底生效没有 | 看点击回执里的 `data.changed`，或 `diff_dom_text` 确认快照有没有变。**不要为了这个去读 `data.screenshot`** |
+| 判断点击到底生效没有 | 回读目标业务结果或响应；`data.changed` / `diff_dom_text` 只作变化线索，不能作为成功判据。**不要为了这个去读 `data.screenshot`** |
 | 事后复看某一步的页面 | `GET http://localhost:10049/data/<id>/<seq>.png`（截图）与同序号的 `.txt`（页签 + 可交互结构化文本，两者序号相同表示同一时刻） |
 
 ## 九、最常踩的 12 条坑（完整 72 条见 `references/pitfalls.md`）
@@ -677,7 +680,7 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 2. **快照里没有 `id`/`class`/`href`**：按 id/class 定位用选择器类命令，取 href 用 `execute_js`，批量看属性用 `get_interactive_map`。
 3. **快照里找不到明明在页面上的元素**：先看 `data.pixels_above`/`pixels_below` 是不是非 0（非 0 = 在视口外、没有索引）→ ① 传 `viewportExpansion` ② 改用选择器类命令 ③ 滚动后重取。
 4. **`ok=true` 不代表点中了东西**：是否观察到变化看回执里的 `data.changed`/`data.hit`；`click_element_by_text` / `click_element_by_role` / `hover_and_click` 还会返回真正命中的 `data.tag`/`data.outerHtml`。
-5. **`execute_js` 里的 `.click()` 触发不了「真点击才有的东西」**：JS 派发的 click 不是可信事件，`window.open` 会被浏览器拦掉，部分框架的提交按钮也不认它，**而接口照样回 `ok:true`**。要真点击用 `click_element_by_selector` / `click_element_by_index`。判断有没有生效看 `data.mode`（`js` 就是没走真实交互）与 `data.changed`。
+5. **`execute_js` 里的 `.click()` 触发不了「真点击才有的东西」**：JS 派发的 click 不是可信事件，`window.open` 会被浏览器拦掉，部分框架的提交按钮也不认它，**而接口照样回 `ok:true`**。要真点击用 `click_element_by_selector` / `click_element_by_index`。`data.mode` 只说明交互方式，`data.changed` 只说明变化；是否成功必须回读目标业务结果。
 6. **「设了值 / 上传了文件 / 派发了事件，但页面没反应」先查监听器**：`get_element_listeners` 或在 `get_interactive_map` 里看 `hasListeners`。`upload_file` 的回执会直接给 `data.consumed`（`listened`/`noListener`/`unknown`）与 `data.hint`；**看到 `noListener` 就别再换选择器了**，改用组件方法直调（`execute_js` 里拿到页面上的实例调它的 `upload()`），或先点它的可见父元素。
 7. **`ELEMENT_NOT_FOUND` = 选择器一个都没匹配到**（不是超时、不是被遮挡）：去改选择器，先 `get_element_count` 复核数量，再检查父子/兄弟关系写错没有。
 8. **`get_element_count` 说有好几个、点击/输入却不可操作**：多半命中了**隐藏副本**（同名控件在隐藏弹窗里还有一份，是 0×0）。动作类命令会**优先挑可见的那个**，把解析结果写进回执（`matched`/`chosenIndex`/`visibleMatched`/`hiddenMatchNote`）；`upload_file` 是例外 —— file input 基本都是隐藏的，所以它**不挑可见性**、按文档顺序取第一个，回执给 `matched`/`chosenIndex`，要精确指定就传 `nth`（第 73 条）。

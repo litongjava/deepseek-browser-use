@@ -181,3 +181,18 @@ taobao.json
 # 下面的 ! 例外就失效了。
 scripts/*
 !scripts/sync-skills.mjs
+# Track only the offline ticket helper and its synthetic tests.
+!scripts/tickets/
+scripts/tickets/*
+!scripts/tickets/*.mjs
+!scripts/tickets/package.json
+!scripts/tickets/build.txt
+!scripts/tickets/test/
+scripts/tickets/test/*
+!scripts/tickets/test/*.test.mjs
+!scripts/tickets/test/fixtures/
+scripts/tickets/test/fixtures/*
+!scripts/tickets/test/fixtures/synthetic.json
+!scripts/js/
+scripts/js/*
+!scripts/js/tickets-rail-snapshot.js

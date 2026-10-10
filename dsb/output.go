@@ -143,7 +143,7 @@ func (p *Printer) JSON(value Value) {
 		// 才退回整封,并在 stderr 说明是退回去了,免得调用方以为投影生效了。
 		picked, err := selectField(value, *p.Select)
 		if err != nil {
-			p.Warn("Output selection failed after the response was available. The action may have completed. Do not repeat the action to fix output. If recorded, inspect it with dsb last --select data using the same session and record directory.")
+			p.Warn("Output selection failed after the response was available. The action may have completed. Do not repeat the action to fix output. If recorded, inspect it with dsb last without --select using the same session and record directory. This reads a local response, not the original command. With --no-record, last may show an older response.")
 			if p.SelectLenient {
 				// 调用方明确要了宽松模式:照旧退回整封,退出码也照旧是 0
 				p.Warn(fmt.Sprintf("--select %s 在这条响应里不存在,改印完整信封(--select-lenient)", *p.Select))

@@ -62,7 +62,7 @@
     - **profile 与 Chromium 那份是分开的**：换引擎等于换一套登录态，Chrome 里登录过的站点在 Firefox 下要重新登一次（反之亦然）。
     - `pdf` 命令只支持 Chromium，Firefox 下会返回明确失败原因；`set_credentials`、`--profile-directory` 这类 Chromium 概念在 Firefox 下同样不适用。
     - 换引擎会重建浏览器，所以只能在「当前没有其它任务」时换（把在跑的任务 `close` 掉再 `start`，不用重启服务）。
-    - 这仍然是**排障候选**，不保证适用于所有网站，也不代表已成功登录。详见[问题记录与复测证据](scripts/diagnostics/RESULTS-2026-09-22.md)。
+    - 这仍然是**排障候选**，不保证适用于所有网站，也不代表已成功登录。历史问题记录与复测证据位于仓库的 `scripts/diagnostics/RESULTS-2026-09-22.md`（相对仓库根目录，不随用户级技能安装）。
 
 30. **`data.mode=js` 意味着「这次没走真实交互」**：未发现遮挡的元素上，原生点击失败后可能降级成 JS 派发事件；明确被遮挡时 auto 不会穿透点击，对象释放异常也不会自动补点（回执里 `data.mode=js` + `data.fallbackReason`），点击本身通常是有效的。但 JS 设值**不保证进框架的 model**：`input_text` 走 JS 时会回 `data.committed=false`，DOM 上明明有值、预览或提交校验却说「不能为空」就是这种情况——用 `input_text_by_selector` 重填一遍（可见字段默认走真实输入）。**关键步骤（提交、缴费）看到 `mode=js` 要额外确认页面状态**，不要只看 `ok=true`。
 
@@ -102,7 +102,7 @@
 
 41. **站点 skill 里的非命令标识符请用双反引号**：`SkillDocConsistencyTest` 会把单反引号里的 snake_case 名字当命令名检查。Vue 字段、CSS 类名、HTML id、URL 参数、接口字段这些**页面里的名字**写成 `` ``subject_name`` `` 就不会被误判。完整约定见 `docs/SKILL-CONVENTIONS.md`。
 
-42. **`execute_js` 里的 `.click()` 触发不了「真点击才有的东西」**：JS 派发的 click 不是可信事件，`window.open` 会被浏览器拦掉，部分框架的提交按钮也不认它。实测 12306 结果页的「预订」（`<a class="btn72" onclick="checkG1234(...)">`）用 `.click()` 完全没反应，**而接口照样回 `ok:true`** —— 于是「点了没反应」被误判成页面问题。正解是 `click_element_by_selector` / `click_element_by_index`（真实鼠标事件）。判断有没有生效看回执里的 `data.mode`（`js` 就是没走真实交互）与 `data.changed`。
+42. **`execute_js` 里的 `.click()` 触发不了「真点击才有的东西」**：JS 派发的 click 不是可信事件，`window.open` 会被浏览器拦掉，部分框架的提交按钮也不认它。实测 12306 结果页的「预订」（`<a class="btn72" onclick="checkG1234(...)">`）用 `.click()` 完全没反应，**而接口照样回 `ok:true`** —— 于是「点了没反应」被误判成页面问题。正解是 `click_element_by_selector` / `click_element_by_index`（真实鼠标事件）。`data.mode` 只描述交互方式，`data.changed` 只描述观察到的变化；业务是否成功必须回读目标结果。
 
 43. **服务进程被杀 = 它启动的浏览器一起退出 = session cookie 型登录态失效**：12306 这类站点的登录 cookie 是会话级的，浏览器一关就得人工重新登录。实测踩过：agent 的后台任务被回收时带走了 mvn / java / Chrome 整棵进程树，人工白登录一次。所以**别把「重启服务」当成无痛操作**：要么用 `scripts/run/start-server.cmd` / `start-server.sh`（Windows / macOS+Linux，脱离当前进程树启动）与 `scripts/run/stop-server.cmd` / `stop-server.sh`（先关任务与浏览器再结束进程），要么在动手前先确认没有正在进行的人工登录环节。
 
@@ -439,7 +439,7 @@
     `execute_js` 是只读场景的主力，却最容易撞上 Playwright 事件泵投递的伪故障
     （`Object doesn't exist: response@…`，见第 47 条）。服务端早就支持 `retryOnSpurious`，但客户端没有开关，
     调用方只能自己手拼 `{"body":…,"retryOnSpurious":true}` 走 `--params` —— 等于把「用 dsb 少踩坑」
-    这件事又还回去了。现在有 `js @脚本.js --retry-on-spurious`。
+    这件事又还回去了。现在有 `js '@脚本.js' --retry-on-spurious`。
     **只给只读脚本加**：会点按钮、提交表单的脚本重发等于再执行一次。
 
 65. **`send_keys` 只认键名，于是「往输入框里打一段文本」变成了没有一条命令顺手。**
@@ -686,7 +686,7 @@
     
     处置办法：
     - 累加 `scrollTop` 后，必须显式派发标准事件：`container.dispatchEvent(new Event('scroll', { bubbles: true }))` 和 `window.dispatchEvent(new Event('scroll', { bubbles: true }))`；
-    - 配合适度的 `await sleep(800)` 等待后端接口推流与前端 DOM 渲染，即可稳定突破虚拟列表加载 300+ 条评论。
+    - 用有上限的 `wait_for_response` 或 `wait_for_function` 等待新数据/新行键，验证虚拟列表确实推进。固定 sleep 不证明加载完成；不要循环截图或把该站经验推广为所有页面都必需。
 
 81. **富文本编辑器（contenteditable）无法使用常规 `input_text`：采用 `insertText` + `send_keys`。**
 
