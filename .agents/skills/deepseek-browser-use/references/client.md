@@ -175,8 +175,8 @@ dsb --port 10049 last                            # 重放最近一次响应
   （响应精简模式）不是一回事；后者要用 `--response-mode compact` 传（**信封级字段**，不是 `params` 里的）。
   摘要为空时（`get_tabs`/`get_console_logs`/`get_dialog` 这类没有可摘要字段的方法）dsb 会自动退回打印一行
   JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了。
-- **不做脱敏**：留档与终端输出都是原文（手机号、证件号、邮箱、长号码一律原样），`requestId`/`jobId`
-  这些下一步要回填的凭据自然也在。交付或共享 `logs/agent/**` 前自己过一眼。
+- **Cookie 留档保护**：自动请求/响应留档会将结构化 `cookies` 数组及 `set_cookie` 参数中的 Cookie 值替换为 `[REDACTED]`，不修改实时请求、stdout 或显式 `--out` 导出。任意脚本、页面文本、错误消息、HTTP 头、服务端 trace 与历史记录不在此功能覆盖范围，不能把它当成通用脱敏。敏感导出优先 `--no-record`，并使用受限临时目录；不要公开任何原始凭据。
+- **任务筛选**：`last` 使用相同的 `--session` 和留档目录；显式 `--id` 按配对请求记录筛选最新响应，无匹配报错，不回退其他任务。缺失/损坏请求不参与筛选。`--record-dir` 是最终目录，不追加 session；不传显式 ID 时仍读取目录最新响应。
 - **多行脚本不要写在命令行里**：经 cmd/PowerShell 传参会只剩第一行。用 `js '@脚本.js'`、`--params '@文件.json'`
   或 `batch cmds.json`。
 - **每个子命令都有自己的帮助**:`dsb state --help`、`dsb batch --help`、`dsb server --help` 打的是

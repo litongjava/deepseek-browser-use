@@ -98,7 +98,7 @@ func printHelp(command string) {
 	}
 	if command == "last" {
 		fmt.Fprintln(writer, "\nReads the latest recorded response locally. Does not send the original command again.")
-		fmt.Fprintln(writer, "Use the same --session and --record-dir as the original command. --id alone does not select records.")
+		fmt.Fprintln(writer, "Use the same --session and --record-dir as the original command. Explicit --id filters paired request records in that directory; no match is an error.")
 		fmt.Fprintln(writer, "After a --select error, use dsb last without --select to inspect the complete recorded response.")
 		fmt.Fprintln(writer, "A command with --no-record creates no new record. last may show an older response.")
 	}

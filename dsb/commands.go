@@ -599,11 +599,17 @@ func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 	}
 	files := []string{}
 	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".res.json") {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".res.json") {
+			if args.ID != nil && !recordBelongsToTask(client.RecordDir, entry.Name(), client.TaskID) {
+				continue
+			}
 			files = append(files, entry.Name())
 		}
 	}
 	if len(files) == 0 {
+		if args.ID != nil {
+			return 0, usageErrorf("No recorded response with a valid request for task %d in %s; missing or invalid request records cannot establish task ownership", client.TaskID, client.RecordDir)
+		}
 		return 0, usageErrorf("还没有任何记录:%s", client.RecordDir)
 	}
 	// 记录文件名是 %03d.res.json,而 %03d 只是「最小宽度」:第 1000 条叫 1000.res.json,

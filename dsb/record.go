@@ -24,7 +24,7 @@ func (c *Client) recordCall(label string, payload Value, response *Response, sen
 		return
 	}
 	writeErr := func() error {
-		requestText := EncodeJSON(payload, encIndent2)
+		requestText := EncodeJSON(redactCookieRecords(payload), encIndent2)
 		// 用 writeTextFile 而不是 os.WriteFile:它与旧 Python 版一样按文本模式把 \n 翻成 \r\n,
 		// 换掉客户端之后留档文件的字节不变(实测旧记录就是 CRLF)。
 		if err := writeTextFile(filepath.Join(c.RecordDir, fmt.Sprintf("%03d.req.json", index)),
@@ -33,7 +33,7 @@ func (c *Client) recordCall(label string, payload Value, response *Response, sen
 		}
 		var responseText string
 		if response != nil {
-			responseText = EncodeJSON(response.Envelope, encIndent2)
+			responseText = EncodeJSON(redactCookieRecords(response.Envelope), encIndent2)
 		} else {
 			responseText = EncodeJSON(ObjOf("sendFailed", true, "error", sendError), encIndent2)
 		}

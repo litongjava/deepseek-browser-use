@@ -107,14 +107,14 @@ PowerShell 中请给整个 `@文件` 参数加引号，包含 `@`。未引用时
 - `--select data.url,data.title` 不是多字段语法，客户端会在发送请求前拒绝。选择共同父对象 `--select data` 即可。
 - `--select-lenient` 保留含逗号的字面字段名及缺失字段回退行为，不会把逗号解释成多字段选择。
 - 输出路径不存在发生在响应返回之后，原动作可能已经完成。**不要修改筛选参数后重新发送点击、提交等动作。**
-- 已启用记录时，用相同的 `--session` 和 `--record-dir` 执行 `last`。它只读取本地最近响应，不重发请求，单独指定 `--id` 不会选择对应任务的记录。
+- 已启用记录时，用相同的 `--session` 和 `--record-dir` 执行 `last`。它只读取本地响应，不重发请求。显式 `--id` 会按同编号请求文件的顶层任务 ID 筛选该目录中的最新响应；没有可确认归属的记录就报错，不回退其他任务。缺失或损坏的请求文件无法确定归属，不参与筛选；不要据此声称已覆盖所有历史操作。不传 `--id` 则保持读取目录最新响应的行为，`DSB_TASK_ID` 不隐式开启筛选。
 
 ```
-dsb --session checkout --record-dir './logs/agent' last
-dsb --session checkout --record-dir './logs/agent' last --select data
+dsb --session checkout --record-dir './logs/agent/checkout' --id 1001 last
+dsb --session checkout --record-dir './logs/agent/checkout' --id 1001 last --select data
 ```
 
-先不加 `--select` 查看完整响应，再选择已确认存在的路径。
+`--record-dir` 是最终目录，不再拼接 session；`DSB_RECORD_DIR` 才是默认目录计算的根目录。先不加 `--select` 查看记录响应，再选择已确认存在的路径。
 原调用如果使用了 `--no-record`，就没有本次新记录；此时 `last` 可能读到旧响应，不能作为本次动作的证据。
 `last` 的退出码 0 表示本地读取成功，不表示原动作成功，仍需检查记录中的 `ok`、`code` 和业务结果。
 
@@ -247,8 +247,8 @@ DSB_AUTO_START=0 dsb health    # 环境变量
 默认(会话名 `dsb`)每次调用都会往 `logs/agent/<会话>/` 落盘:
 
 ```
-logs/agent/dsb/001.req.json    发出去的完整请求
-logs/agent/dsb/001.res.json    收到的完整响应
+logs/agent/dsb/001.req.json    请求结构（Cookie 值定向遮蔽）
+logs/agent/dsb/001.res.json    响应结构（Cookie 值定向遮蔽）
 logs/agent/dsb/steps.log       一行一次调用:时间 #序号 id 方法 OK/FAIL 耗时 摘要
 ```
 
@@ -261,8 +261,9 @@ logs/agent/dsb/steps.log       一行一次调用:时间 #序号 id 方法 OK/FA
 
 编号接着上一轮往下排,不会覆盖旧记录;`dsb last` 直接重放最近一份响应。
 
-**不做脱敏**:留档与终端输出都是原文(手机号、证件号、邮箱、长号码一律原样)。
-`requestId` / `jobId` 这些下一步要回填的凭据自然也在。
+**结构化 Cookie 留档脱敏**：自动 `.req.json` / `.res.json` 中的 `cookies` 数组元素的 `value`，以及 `set_cookie` 参数的 `value` 替换为 `[REDACTED]`，包括嵌套批次。该操作不修改实际请求与响应；显式 `--out` 和实时 stdout 仍保留原值，便于授权导出。`last` 读取的是脱敏记录，不能用它恢复 Cookie。
+
+这不是通用脱敏：任意 JavaScript 返回字符串、页面文本、错误消息、HTTP 头、服务端 trace 和历史记录不在本功能覆盖范围内；邮箱、手机号等仍可能存在。敏感操作优先 `--no-record`，并限制导出目录访问权限、避免打印正文、使用后清理；`--no-record` 也不会关闭服务端日志。
 
 ### 回执太大:`--out` 落盘、`--grep` 只看命中行
 
