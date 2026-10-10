@@ -26,7 +26,8 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 >
 > 好处是现成的：参数不用跟 shell 打架、每次调用都留档（`logs/agent/<会话>/`、`steps.log`）、
 > 退出码把「服务没起(1)」与「业务失败(2)」分开、服务没起会自动拉起。**跨调用要复用同一个 `--id`**（实例只在内存里）。
-> 只关心某几个字段时用 `--select data.text` / `--grep 关键词` / `--out 文件.json`，别把整封几万字的回执拉进上下文。
+> `--id` 使用数字任务 ID，名称标签不能作为 ID。`--select` 一次只选一个路径，例如 `--select data.text`；多个字段先用 `--out 文件.json` 保存完整响应，再读取并投影。不要拼逗号分隔路径。输出处理失败不代表浏览器动作未执行，先读留档或页面状态，不能直接重发动作。
+> 在 PowerShell 中用 `--out` 保存 UTF-8 JSON，不用 `> 文件` 或 `2>&1` 混合诊断与数据。读取文件使用宿主 read 工具；不要从摘要中搜索第一个 `{` 来猜 JSON 起点。
 
 新增阅读方式：`dsb state --text-only` 只输出结构化文本；`--viewport-expansion -1`
 纳入视口外元素，`--include-frames` 纳入跨域 frame。字段筛选用 `--select data.fields` 等，
@@ -40,7 +41,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 - 默认地址：`http://localhost:10049`（端口来自 `playwright-server/src/main/resources/app.properties` 的 `server.port`）
 - 服务也可能在**别的机器**上，或本机同时开着好几个实例（不同端口 = 不同 profile / 登录态）：用 `--host`/`--port` 指定，或 `dsb server target add <名字> --host <主机> --port <端口>` 登记后 `--use <名字>`。远端目标不自动拉起（那台机器上的服务得自己起）。
 - 启动服务：`dsb server start`（连不上时普通命令会自动拉起）；也可以 `java -jar deepseek-browser-use-<版本>-<平台>.jar`（发行包），或开发态在 `playwright-server` 目录执行 `mvn spring-boot:run`
-- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物，实测有一版连 `list_methods` / `get_config` / `shutdown` 都不支持，拿它开工会在半路撞「不支持的方法」。**开工第一条命令永远是 `list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
+- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物，实测有一版连 `list_methods` / `get_config` / `shutdown` 都不支持，拿它开工会在半路撞「不支持的方法」。**开工先运行 `dsb methods`（CLI 子命令），或 `dsb run list_methods`（协议方法）；不要运行 `dsb list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
 - **只有一个业务端点**：`POST http://localhost:10049/playwright/command`
 - 另有 `GET /playwright/health`（健康检查）与 `GET /data/**`（读取截图与结构化文本）
 - 共 122 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测（`send_keys` 有别名 `press_key`，`key` 与 `keys` 参数通用）
@@ -575,6 +576,8 @@ dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时�
 12. **能用批量就用批量**：第 3～7 步可以合并成一次 `commands` 请求（动作 + 读取混排，末尾放 `get_browser_state`），一次推理拿到全部结果，别一个动作往返一次。
 13. 任务完成输出结论，最后 `close`；等待人类协助时任务尚未完成，不要关闭浏览器。
 
+评论需求调研还应读取 [weibo-demand-research](../weibo-demand-research/SKILL.md)，区分接口取得、实际展示、已读、去重与有效样本数。
+
 ## 六、批量指令、断言与执行 JavaScript
 
 `commands` 是**降低推理步数**的关键：把「动作 + 读取」打包成一次请求，一次模型推理就能拿到全部观察结果；一个批次 = 一个计划段（先做动作，末尾放一个 `get_browser_state`）。
@@ -607,6 +610,10 @@ dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时�
 
 - **多行脚本不要写在命令行里**（会被 shell 截断，报的却是 `SyntaxError: Unexpected end of input`）：用服务端的 `bodyFile`（文件放在 `get_config` 的 `jsDir` 里）、客户端的 `js @脚本.js`，或 `--params @文件.json`。带参数时用 `vars` 注入 `{{变量}}`（走 JSON 编码，中文/引号/换行都不用转义）。
 - **脚本重发无害时传 `retryOnSpurious: true`**：页面上报 `Object doesn't exist: response@…`（对象与脚本毫不相干）时服务端替你重发。**只给读页面/取值的脚本传**；会点按钮、提交表单的脚本不要传——那种脚本重发等于再执行一次。
+
+### 页面内请求的上下文
+
+运行相对路径 `fetch` 前核对 `location.origin`、目标 URL 和 frame；相对地址依据当前文档的 `document.baseURI` 解析。`credentials: "same-origin"` 只控制凭据发送，不会把请求切换到另一个站点。`Failed to fetch` 只说明请求未能正常完成，不能单凭它认定 CORS；先检查 URL、网络记录、重定向及登录状态。检查登录优先使用页面证据，不为确认登录导出整份 Cookie。
 
 ## 七、人机协同（验证码 / 登录 / 人工介入）
 

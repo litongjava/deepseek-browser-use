@@ -88,10 +88,10 @@ func commonSpecs() []argSpec {
 			help: "连不上服务时不自动拉起后端(默认会自动拉起,见 `dsb server --help`)"},
 		{names: []string{"--json"}, dest: "json", help: "只输出 JSON(便于管道)"},
 		{names: []string{"--select"}, dest: "select", takesValue: true, metavar: "PATH",
-			help: "仅输出指定字段的 JSON，如 data.text / data.results.1.data.changed；仍照常留档，" +
-				"失败响应同样按路径投影(只在路径不存在时才退回整封)"},
+			help: "Select one dot-separated field path, e.g. data.text or data.results.1.data.changed. " +
+				"Comma-separated paths are not supported. Missing paths print null (exit 3 on successful responses). Records remain complete."},
 		{names: []string{"--select-lenient"}, dest: "select_lenient",
-			help: "--select 的路径不存在时退回打印完整信封(旧行为);默认是打 null 并以退出码 3 报用法错"},
+			help: "Preserve legacy selection: allow literal comma keys and print the full envelope when the path is missing."},
 		{names: []string{"--compact", "--summary"}, dest: "compact",
 			help: "只输出一行摘要(--summary 是同一个开关的正名;注意它只管本地输出," +
 				"服务端的响应精简模式要用 --response-mode compact)"},
@@ -118,7 +118,7 @@ func outputSwitches() []argSpec {
 // subcommandSpecs 是每个子命令的专属选项与位置参数。
 var subcommandSpecs = map[string][]argSpec{
 	"methods": {{names: []string{"filter"}, dest: "filter", takesValue: false, metavar: "FILTER",
-		help: "只看名字里含这个片段的方法"}},
+		help: "List methods whose names contain FILTER. This does not execute a method. Use dsb run METHOD to execute one."}},
 	"recipes": {
 		{names: []string{"--run"}, dest: "run", takesValue: true, metavar: "RUN", help: "要跑的配方名"},
 		{names: []string{"--var"}, dest: "var", takesValue: true, repeatable: true,
@@ -409,6 +409,9 @@ func parseArgs(argv []string) (*Args, error) {
 			repeated[spec.dest] = append(repeated[spec.dest], raw)
 			return nil
 		}
+		if spec.dest == "select" {
+			repeated[spec.dest] = append(repeated[spec.dest], raw)
+		}
 		values[spec.dest] = raw
 		return nil
 	}
@@ -548,7 +551,30 @@ func parseArgs(argv []string) (*Args, error) {
 	if err := assignOptions(args, values, flags, repeated); err != nil {
 		return nil, err
 	}
+	if !args.SelectLenient {
+		for _, path := range repeated["select"] {
+			if err := validateSelectPath(path); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return args, nil
+}
+
+// validateSelectPath rejects apparent lists before any request or server action.
+// A comma alone is a valid object-key character. Only reject lists whose
+// entries all contain dots. Lenient mode preserves every legacy literal path.
+func validateSelectPath(path string) error {
+	parts := strings.Split(path, ",")
+	if len(parts) < 2 {
+		return nil
+	}
+	for _, part := range parts {
+		if !strings.Contains(part, ".") {
+			return nil
+		}
+	}
+	return usageErrorf("--select accepts one dot-separated path, not comma-separated paths: %s. No request was sent. Select a parent object (for example, --select data). For a literal comma key, use --select-lenient.", pyRepr(path))
 }
 
 // variadicCommands 允许「比声明的还多」的位置参数,多出来的原样收进 args.Positionals。

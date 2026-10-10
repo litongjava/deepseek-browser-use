@@ -190,6 +190,14 @@ func buildClient(args *Args) (*Client, error) {
 		taskID = *args.ID
 	}
 
+	if _, err := asTaskID(taskID); err != nil {
+		source := "DSB_TASK_ID"
+		if args.ID != nil {
+			source = "--id"
+		}
+		return nil, usageErrorf("%s: %v. Use a numeric task ID. Use --session for a recording label.", source, err)
+	}
+
 	var session *string
 	if !args.NoRecord {
 		if value := firstNonEmpty(derefOr(args.Session, ""), derefOr(envString("DSB_SESSION"), "")); value != "" {
