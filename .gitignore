@@ -203,3 +203,4 @@ scripts/lib/*
 !scripts/test/
 scripts/test/*
 !scripts/test/claude-skill-plugin.test.mjs
+.workbuddy
