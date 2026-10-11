@@ -3,6 +3,8 @@ name: cloudflare-domain-redirect
 description: 使用 deepseek-browser-use 在 Cloudflare 配置域名 HTTP/HTTPS 跳转，检查已有 DNS、精确匹配主机名、部署 Redirect Rule 并验证解析与边缘响应。适用于域名迁移或别名跳转，不用于一般 DNS 管理。
 ---
 
+> Claude Code 调用名：`dsb-skills:cloudflare-domain-redirect`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # Cloudflare 域名跳转
 
 通过本项目的 [deepseek-browser-use](../deepseek-browser-use/SKILL.md) 和 dsb 客户端操作已登录的 Cloudflare 控制台。本文来自一次真实任务，域名、IP 和账号均替换为示例；不要套用固定账号 URL 或元素索引。

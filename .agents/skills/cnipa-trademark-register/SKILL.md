@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 在中国商标网（toas.sbj.cnipa.gov.cn
 whenToUse: 需要在国家知识产权局商标网上申请系统做商标注册（或续展、变更、异议等同类网申），或需要在 ant-design + Vue 的长表单向导类站点（分步、自动暂存、级联地址、虚拟列表下拉、隐藏上传框）上稳定填表时。
 ---
 
+> Claude Code 调用名：`dsb-skills:cnipa-trademark-register`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 中国商标网：文字商标注册申请（实操手册）
 
 一句话流程：**切 Firefox → 人登录 → 走到注册申请表单 → 六步向导填到预览 → 交人提交缴费**。

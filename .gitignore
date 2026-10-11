@@ -196,3 +196,10 @@ scripts/tickets/test/fixtures/*
 !scripts/js/
 scripts/js/*
 !scripts/js/tickets-rail-snapshot.js
+# Track the namespaced skill installer and its isolated tests.
+!scripts/lib/
+scripts/lib/*
+!scripts/lib/claude-skill-plugin.mjs
+!scripts/test/
+scripts/test/*
+!scripts/test/claude-skill-plugin.test.mjs

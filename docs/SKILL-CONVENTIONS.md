@@ -22,6 +22,15 @@
 
 构建时会跑 `SkillDocConsistencyTest`（`playwright-server/src/test/java/nexus/io/ai/browser/docs/`）校验两者与服务端的一致性。
 
+### Claude Code 技能命名
+
+Claude Code 通过 `dsb-skills` 插件加载所有技能，调用名统一为 `dsb-skills:{name}`，例如 `dsb-skills:deepseek-browser-use`。
+插件清单位于 `.agents/.claude-plugin/plugin.json`；技能目录和 frontmatter 的 `name` 保留不带前缀的 kebab-case，避免影响 DSH、Codex 和跨技能相对链接。
+
+使用 `node scripts/sync-skills.mjs claude` 同步到用户级插件目录。
+旧扁平技能只迁移同步清单管理的条目，并备份到技能扫描目录之外，不删除本地差异、不触碰无关技能。
+本地 `references/` 与 `scripts/` 资源按技能文件所在目录定位，不假定调用者的工作目录是仓库根目录。
+
 ### 主技能是「一个入口 + 若干分册」
 
 主技能文档装不下全部细节时，拆成 `SKILL.md` 入口加同目录 `references/*.md` 分册 —— 入口每次触发技能都会整体进上下文，所以**只放必读内容**，细节按需再读：

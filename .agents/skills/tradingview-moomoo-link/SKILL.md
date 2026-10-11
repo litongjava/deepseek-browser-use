@@ -3,6 +3,8 @@ name: tradingview-moomoo-link
 description: 用 deepseek-browser-use 在全球站 TradingView 登录并把自己的 moomoo（富途）券商账户连上交易面板的实操手册。讲清三件最容易卡住的事：登录入口藏在**匿名用户菜单**里（页面上没有独立的 Sign in 按钮），`#signin` 哈希跳转必然 ERR_ABORTED，以及 moomoo 连接面板**一个账号密码输入框都没有**——真正的登录发生在 passport.futubull.com 的 OAuth 新页签里。另附「链接全程免费」的判定依据、中国镜像站的坑、交易面板页签文本自带计数（``Orders 2``）导致按文本定位必须用完整标签，以及实时行情页上快照索引为什么曾经永久失效。
 ---
 
+> Claude Code 调用名：`dsb-skills:tradingview-moomoo-link`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # TradingView 连接 moomoo 券商账户
 
 一次真实任务（2026-09-27）的完整记录：登录 tradingview.com，把美国 moomoo 账户连上 TradingView 的 Trading Panel，并读出账户与持仓。用户的验收条件里有一条「如果需要花钱就算了」，所以文中把**哪一步可能涉及付费**单独写清。

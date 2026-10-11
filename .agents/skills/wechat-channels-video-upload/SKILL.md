@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 把本地一个视频发布到微信「视
 whenToUse: 需要把一个本地视频文件投稿到微信视频号（视频号助手网页版），包括扫码登录、上传视频、填描述、发表并回读确认时。站点是 channels.weixin.qq.com（Vue + micro-app 微前端）。
 ---
 
+> Claude Code 调用名：`dsb-skills:wechat-channels-video-upload`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 微信视频号投稿（视频号助手）
 
 一次真实任务（2026-10-07，发布 `科学和技术有什么区别？.mp4`，1080×1920 竖屏 / 133 秒 / 2.8MB）的完整记录。

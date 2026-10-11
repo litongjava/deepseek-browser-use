@@ -1,0 +1,8 @@
+{
+  "name": "dsb-skills",
+  "version": "1.0.0",
+  "description": "Browser automation and site workflows powered by the dsb CLI.",
+  "author": {
+    "name": "litongjava"
+  }
+}

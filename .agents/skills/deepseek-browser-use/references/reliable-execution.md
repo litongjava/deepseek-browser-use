@@ -77,7 +77,7 @@ ok:true 是工具层结果；changed、effective、DOM diff 只是观察线索�
 
 ## 6. 文档维护与安装
 
-技能源为仓库 .agents/skills；scripts/sync-skills.mjs 将其安装到用户级技能目录，并按宿主处理 frontmatter。
+技能源为仓库 .agents/skills；scripts/sync-skills.mjs 按宿主处理 frontmatter。Claude Code 安装为 dsb-skills 插件，使用 dsb-skills:{name} 调用；DSH 与 Codex 保留原有命名。旧清单管理的 Claude 扁平副本迁移到技能扫描目录外的备份位置，避免重复加载。
 先读取源与安装文件并检查差异，保留双方已有改动。同步脚本当前按宿主同步全部技能，不支持单技能筛选；只改三份技能时，定向同步已审阅文件，不能运行 --all --force 覆盖其他技能。不要修改安装清单或无关安装文件来掩盖漂移。同步后比较内容哈希，确认新引用文档也存在。
 
 文档检查不需要打开真实票务网站。CLI 示例通过 help 核对；静态检查覆盖链接、frontmatter、禁止的旧写法、日期与金额示例。只有真的运行过的检查才能写“通过”。

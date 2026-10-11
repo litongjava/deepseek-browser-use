@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 把「注册企业微信 + 提交企业认
 whenToUse: 需要在企业微信管理后台（work.weixin.qq.com/wework_admin）注册或开通企业、提交或续办企业微信认证（¥300）、上传营业执照、走法人扫脸与短信验证、完成微信支付，或需要查认证审核结果、申请发票与合同时；也适用于「Vue 组件自带上传逻辑、原生 file input 被架空」这类站点的上传排障。
 ---
 
+> Claude Code 调用名：`dsb-skills:wecom-register-certify`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 企业微信：注册 + 企业认证 + 支付 ¥300 + 查审核（实操手册）
 
 一句话流程：**有头开浏览器 → 人登录 → 进认证表单 → 逐步填写 → 上传营业执照（组件直调）→ 交人扫脸/短信/支付 → 查审核结果**。

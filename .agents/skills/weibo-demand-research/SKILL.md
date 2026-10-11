@@ -3,6 +3,8 @@ name: weibo-demand-research
 description: 使用 deepseek-browser-use 对微博公开帖子和评论做小规模需求研究：人工登录接力、导航后重取 DOM、请求前核验 origin、分开统计获取和实读样本，保留来源与截断边界，区分体验、广告和传闻。不批量爬取、不发帖、不推断付费意愿。
 ---
 
+> Claude Code 调用名：`dsb-skills:weibo-demand-research`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 微博评论需求研究
 
 ## 适用范围与前置阅读

@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 把本地一个视频发布到 B 站（创
 whenToUse: 需要把一个本地视频文件（或一组视频）投稿到哔哩哔哩（B 站），包括填标题简介标签分区、设封面、提交并确认稿件编号时。站点是 member.bilibili.com 创作中心投稿页（Vue + micro-app）。
 ---
 
+> Claude Code 调用名：`dsb-skills:bilibili-video-upload`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # B 站视频投稿（创作中心）
 
 一次真实任务（2026-09-25，发布 `使用 deepseek-browser-use 在腾讯云购买服务器.mp4`，9 分 48 秒 / 1080P / 47MB）

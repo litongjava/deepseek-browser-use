@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 在快手网页版（kuaishou.com）做用
 whenToUse: 需要在快手（kuaishou.com）采集视频评论、挖掘产品需求、做用户痛点/舆情分析时使用。
 ---
 
+> Claude Code 调用名：`dsb-skills:kuaishou-research`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 快手网页版需求调研实操手册
 
 一次真实生产级任务（2026-10-09）的完整沉淀：用 `dsb` 驱动 Chrome，在快手网页版完成从扫码登录、定位高互动视频、到滚动穿透评论区抓取 237 条真实评论并做需求聚类。
@@ -144,9 +146,9 @@ dsb --id 20261009 js "() => { const v=document.querySelector('video'); if(v){v.p
 ```
 
 ### 步骤 4：滚动穿透 + 结构化提取评论
-见本技能目录下的 `scripts/harvest_comments.js` 模板（可直接用）：
+见本技能目录下的 `scripts/harvest_comments.js` 模板。先按本次加载的技能目录解析文件绝对路径，再传给 dsb；不要假定当前工作目录是仓库根目录：
 ```bash
-dsb --id 20261009 js @.agents/skills/kuaishou-research/scripts/harvest_comments.js --retry-on-spurious --select data.result --out out.json
+dsb --id 20261009 js '@<本技能目录>/scripts/harvest_comments.js' --retry-on-spurious --select data.result --out out.json
 ```
 脚本逻辑：先向上找可滚动祖先、滚两轮（含回顶），再用「时间戳行 → 下一行内容」配对提取，跳过 ``取消/发送/查看更多回复`` 与纯数字点赞数。
 

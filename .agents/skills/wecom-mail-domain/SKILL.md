@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 给企业微信开通「免费版企业邮
 whenToUse: 需要给企业微信 / 腾讯企业邮箱开通邮箱服务、绑定企业自有域名、给成员分配企业邮箱，或需要驱动「主站把第三方控制台套在跨域 iframe 里」这类站点（企业微信的邮件/微盘/文档/会议应用都是这个形态），或需要处理「嵌入式应用用一次性 token 换登录态、token 被 iframe 消费后直连报错」的场景时。
 ---
 
+> Claude Code 调用名：`dsb-skills:wecom-mail-domain`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 企业微信：开通免费企业邮箱并绑定自有域名（实操手册）
 
 一句话流程：**DNS 加两条 MX → 破解 iframe 进 exmail 控制台 → 绑定域名 → 回企业微信绑企业域名 → 成员邮箱自动开通**。

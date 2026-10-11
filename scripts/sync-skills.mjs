@@ -5,7 +5,7 @@
  * 三个工具对 frontmatter 的要求不一样，脚本按目标改写，源文件始终只有一份：
  *
  *   dsh    → ~/.dsh/skills/      认 whenToUse（驼峰），未知键忽略
- *   claude → ~/.claude/skills/   认 when_to_use（下划线），驼峰会被静默忽略
+ *   claude → ~/.claude/skills/dsb-skills/   插件调用名 dsb-skills:<name>
  *   codex  → ~/.codex/skills/    严格白名单：只允许 name/description/license/
  *                                allowed-tools/metadata，多一个键就整份拒绝加载；
  *                                description 不能含尖括号、不能超过 1024 字符。
@@ -21,7 +21,7 @@
  *   node scripts/sync-skills.mjs --all --force      覆盖目标里非本脚本安装的同名技能
  *
  * 每个目标根目录下有一份 .sync-skills.json 清单，记着哪些技能是本脚本装的；
- * 不在清单里的同名技能会被跳过（除非 --force），避免覆盖你手工放的技能。
+ * DSH/Codex 跳过非清单技能；Claude 以插件安装并备份迁移旧技能，遇到非清单旧技能会停止。
  */
 
 import fs from 'node:fs';
@@ -29,6 +29,7 @@ import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { PLUGIN_NAME, inspectClaudePlugin, syncClaudePlugin } from './lib/claude-skill-plugin.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
@@ -64,7 +65,7 @@ const TARGETS = {
     rewrite: (text) => ({ text, notes: [] }),
   },
   claude: {
-    label: 'Claude Code',
+    label: 'Claude Code (dsb-skills plugin)',
     dir: path.join(HOME, '.claude', 'skills'),
     // Claude Code 读下划线键，驼峰会被静默忽略，所以改键名。
     rewrite: (text) => ({ text: text.replace(/^whenToUse:/m, 'when_to_use:'), notes: [] }),
@@ -142,6 +143,7 @@ function usage() {
   node scripts/sync-skills.mjs --status          只看各目标是否已与仓库一致
   node scripts/sync-skills.mjs --all --force     覆盖非本脚本安装的同名技能
 
+Claude 使用 dsb-skills:<name>，旧技能备份到 ~/.claude/skill-backups/，不会覆盖未受管理的旧技能。
 可用的目标：${Object.keys(TARGETS).join(', ')}`);
 }
 
@@ -288,10 +290,28 @@ async function chooseTargets() {
   return [...new Set(picked)];
 }
 
+function claudePluginOptions(skills, target, opts = {}) {
+  return {
+    skills,
+    targetDir: target.dir,
+    pluginManifest: fs.readFileSync(path.join(REPO_ROOT, '.agents', '.claude-plugin', 'plugin.json')),
+    plannedFiles: (skill) => plannedFiles(skill, target).files,
+    dryRun: opts.dryRun,
+    force: opts.force,
+  };
+}
+
 function reportStatus(skills, targetKeys) {
   let anyDrift = false;
   for (const key of targetKeys) {
     const target = TARGETS[key];
+    if (key === 'claude') {
+      const plan = inspectClaudePlugin(claudePluginOptions(skills, target));
+      console.log(`=== claude → ${plan.destination} ===`);
+      console.log(`  ${plan.same ? '一致' : '待同步'} ${PLUGIN_NAME}: ${plan.names.length} 份技能，${plan.changed.length} 个待写文件，${plan.extra.length} 个旧文件，${plan.legacy.length} 份旧技能待备份迁移`);
+      if (!plan.same) anyDrift = true;
+      continue;
+    }
     const owned = new Set(readManifest(target).skillNames);
     console.log(`\n=== ${key} → ${target.dir} ===`);
     if (!fs.existsSync(target.dir)) { console.log('  目录不存在（还没装过）'); anyDrift = true; continue; }
@@ -344,6 +364,16 @@ async function main() {
   for (const key of picked) {
     const target = TARGETS[key];
     console.log(`\n=== ${key} → ${target.dir} ===`);
+    if (key === 'claude') {
+      const result = syncClaudePlugin(claudePluginOptions(skills, target, opts));
+      console.log(`  ${result.same ? '一致' : opts.dryRun ? '将安装' : '已安装'} ${PLUGIN_NAME}: ${result.names.length} 份技能，调用格式 ${PLUGIN_NAME}:<name>`);
+      console.log(`  ${result.legacy.length} 份旧技能${opts.dryRun ? '将备份迁移' : '已备份迁移'}；${result.changed.length} 个待写文件`);
+      if (result.backupDir) console.log(`  备份目录：${result.backupDir}`);
+      if (!opts.dryRun) {
+        allProblems.push(...verify({ ...target, dir: path.join(result.destination, 'skills') }, result.names));
+      }
+      continue;
+    }
     const owned = new Set(readManifest(target).skillNames);
     const tally = { new: 0, update: 0, same: 0, foreign: 0 };
 

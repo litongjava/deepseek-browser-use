@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 完成企业微信（work.weixin.qq.com �
 whenToUse: 需要在企业微信管理后台处理认证/服务的订单收尾（开发票、签合同、申请企业电子签章），或需要在 work.weixin.qq.com 这类 hash 路由 + 内层滚动容器的后台里，用「先回读状态再动手」的方式走一个多步向导，并且其中若干步（扫脸、对公打款、盖章扫描）必须交给真人完成时。
 ---
 
+> Claude Code 调用名：`dsb-skills:wecom-invoice-contract`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 企业微信：订单发票 + 订单合同 + 电子签章（实操手册）
 
 一句话流程：**读订单详情页判断状态 → 能开发票就开（先问纳税人资格）→ 合同走电子路径会被签章卡住 →

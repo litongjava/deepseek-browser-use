@@ -3,6 +3,8 @@ name: deepseek-platform-topup-invoice
 description: 用 deepseek-browser-use 在 DeepSeek 开放平台（platform.deepseek.com）完成「充值 + 开发票」的实操手册：登录态不在任何一份 profile 里（Cookies 库里只有 WAF cookie），必须人工在有头窗口登录；充值走 Top up 页，金额与支付方式两组 radio **初始都不选中**（金额是 ``input[name=topUpAmount]`` 的 10/20/50/100/300/500 与 -1=Custom，支付方式是 ``input[name=paymentMethod]`` 的 alipay/wechat），点 Next step 后在**同一页**弹出收银台对话框，二维码是一个 160×160 的 ``<canvas>``、15 分钟内有效；发票在 Billing 页（/transactions）的 Invoices 页签，表单抬头是自定义下拉 ds-select、**往里打字不落库**（必须点开下拉再点里面的 option），Submit 按钮落在视口之外（实测 y≈978 而视口只有 944 高）因此**不进快照、没有索引**，且表单明写两条硬规则：提交后不可修改、已开金额不退。本文写透三个真正卡住人的坑：① 二维码截出来人扫不出来，根因是 get_browser_state 画的彩色高亮层被截进了图里（用像素直方图确诊，只有纯黑白才可用）；② ``click_element_by_text`` 传 Submit 会点中「once submitted」那段说明文字（包含匹配 + 取文档顺序第一个候选），回执 ok=true 而真按钮一动没动；③ ``get_form_state`` 对 ds-select 这类自定义下拉会**同时**撒两个谎——把已填好的必填项报成空值、把字段已经报红报成 errorCount=0。文内另给出充值前后余额对照与开票成功的三重返读（UI 回执 + Invoice records 行 + ``/api/v0/fapiao/apply`` 响应 code=0），金额、邮箱、抬头、税号、订单号全部脱敏。
 ---
 
+> Claude Code 调用名：`dsb-skills:deepseek-platform-topup-invoice`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # DeepSeek 开放平台：充值 + 开发票（实操手册）
 
 平台是 `platform.deepseek.com`（DeepSeek 开放平台，API 计费的那个，不是 chat.deepseek.com）。本文覆盖两件事：

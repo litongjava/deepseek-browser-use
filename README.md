@@ -110,7 +110,7 @@ dsb --id 1001 close
 
 ### 1. 读 skill 文件：技能就在 `.agents/skills/`
 
-**本仓库自带技能，不用再安装**：15 份技能文档（主技能 + 14 份站点手册）都在 `.agents/skills/` 下，而 `.agents/skills` 正是 DSH 的**项目级技能根**（仓库根有 `.git`），所以**在仓库里启动 dsh 会话，这些技能直接就在技能目录里**：智能体自己会按需加载（动作就是 `skill deepseek-browser-use`），人也可以直接让它读文件。
+**本仓库自带技能，不用再安装**：20 份技能文档（主技能 + 19 份专题技能）都在 `.agents/skills/` 下，而 `.agents/skills` 正是 DSH 的**项目级技能根**（仓库根有 `.git`），所以**在仓库里启动 dsh 会话，这些技能直接就在技能目录里**：智能体自己会按需加载（动作就是 `skill deepseek-browser-use`），人也可以直接让它读文件。
 
 DSH 按固定顺序扫描技能目录：
 
@@ -136,7 +136,7 @@ mkdir -p ~/.dsh/skills
 cp -r .agents/skills/* ~/.dsh/skills/
 ```
 
-**不用重启 DSH**：技能正文每次加载都重新读文件；frontmatter 里的 `name`/`description` 改了，DSH 的文件监听会自己刷新技能目录 —— 这次把技能从 `skills/` 挪到 `.agents/skills/`，同一个会话的技能目录立刻就出现了这 15 个技能。
+**不用重启 DSH**：技能正文每次加载都重新读文件；frontmatter 里的 `name`/`description` 改了，DSH 的文件监听会自己刷新技能目录 —— 这次把技能从 `skills/` 挪到 `.agents/skills/`，同一个会话的技能目录立刻就出现了这 20 个技能。
 
 > **路径注意**：技能正文里的路径都是**相对仓库根**写的（`recipes/`、`logs/agent/` …）。技能待在仓库自己的 `.agents/skills/` 里、dsh 也在仓库根启动时，这些路径天然对得上；**复制到别的项目或用户级目录之后**，请让 cwd 留在本仓库，或在提示词里给出仓库的绝对路径。（客户端 `dsb` 装在 `PATH` 上，不受 cwd 影响。）
 
@@ -144,7 +144,7 @@ cp -r .agents/skills/* ~/.dsh/skills/
 
 ### 2. 装到其它工具：`scripts/sync-skills.mjs`
 
-技能源只有一份——仓库里的 `.agents/skills/`。要在别的 AI 工具里也能用，用仓库自带的同步脚本装过去；它会按各工具的规则改写 frontmatter，源文件不用动。
+技能源只有一份——仓库里的 `.agents/skills/`。要在别的 AI 工具里也能用，用仓库自带的同步脚本装过去；它会按各工具的规则安装；Claude Code 使用 `dsb-skills` 插件命名空间，DSH 与 Codex 保留原有技能名称。
 
 ```bash
 node scripts/sync-skills.mjs
@@ -156,7 +156,7 @@ node scripts/sync-skills.mjs
 选择要安装到的位置（可多选，逗号分隔；直接回车 = 全部）：
 
   1. dsh     DSH (DeepSeek Harness)   <用户目录>\.dsh\skills
-  2. claude  Claude Code              <用户目录>\.claude\skills
+  2. claude  Claude Code plugin       <用户目录>\.claude\skills\dsb-skills
   3. codex   Codex                    <用户目录>\.codex\skills
   a. 全部
 ```
@@ -176,12 +176,50 @@ node scripts/sync-skills.mjs
 | 目标 | 技能目录 | 对 `whenToUse` 的处理 |
 | --- | --- | --- |
 | dsh | `~/.dsh/skills/` | 认驼峰 `whenToUse`，原样复制 |
-| claude | `~/.claude/skills/` | 只认下划线 `when_to_use`，改写键名（驼峰会被静默忽略，丢掉「什么时候该用」的说明） |
+| claude | `~/.claude/skills/dsb-skills/skills/` | 只认下划线 `when_to_use`，改写键名（驼峰会被静默忽略，丢掉「什么时候该用」的说明） |
 | codex | `~/.codex/skills/` | 严格白名单：只允许 `name`/`description`/`license`/`allowed-tools`/`metadata`，多一个键就整份拒绝加载。脚本把 `whenToUse` 的文本并进 `description`（直接删会丢掉触发说明），并把尖括号换成全角、超长截断 |
 
 > codex 的两条硬限制（description 不能含 `<` `>`、不超过 1024 字符）来自它自带的 `quick_validate.py`；脚本写完会按同样的规则复查一遍，不通过就报错退出。
 
-每个目标目录下有一份 `.sync-skills.json`，记着哪些技能是本脚本装的。不在清单里的同名技能会被跳过（除非 `--force`），所以脚本不会覆盖你手工放进去的技能。
+每个目标目录下有一份 `.sync-skills.json`，记着哪些技能是本脚本装的。DSH 与 Codex 会跳过不在清单中的同名技能，除非明确使用 `--force`。Claude 迁移遇到不受管理的同名旧技能会停止，防止重复加载或误覆盖；只有经检查的新插件目标目录允许通过 `--force` 接管，并保留原目录备份。
+
+### Claude Code：统一的 dsb-skills 命名空间
+
+```bash
+node scripts/sync-skills.mjs claude
+```
+
+所有技能在 Claude Code 中以 `dsb-skills:{name}` 调用，例如：
+
+```text
+/dsb-skills:deepseek-browser-use
+/dsb-skills:railway-12306-ticket
+/dsb-skills:web-data-as-text
+```
+
+`.agents/.claude-plugin/plugin.json` 是插件清单，`.agents/skills/` 是唯一技能源。
+技能目录名和 frontmatter 的 `name` 仍保持 kebab-case；前缀由插件名提供，不把冒号放进 Windows 文件名。
+也可以用 `claude --plugin-dir ./.agents` 临时加载仓库中的插件。
+
+本地同步安装到 `~/.claude/skills/dsb-skills/`，由 Claude Code 作为 `dsb-skills@skills-dir` 自动发现，无需新增 marketplace 或修改 settings。
+首次迁移会把旧清单管理的扁平技能移到 `~/.claude/skill-backups/dsb-skills/` 下的独立备份目录，保留本地差异和附加文件。
+遇到未受同步脚本管理的同名旧技能会停止，不自动覆盖；其他技能保持原样。
+后续更新也先保存旧插件副本，再替换并核对文件哈希；重复同步不会重复创建备份。
+
+```bash
+node scripts/sync-skills.mjs claude --status
+```
+
+```bash
+claude plugin details dsb-skills
+```
+
+同步后新开 Claude Code 会话加载新名称；已经运行的会话可能仍保留旧技能清单。
+同步脚本测试不访问真实浏览器，也不修改用户技能目录：
+
+```bash
+node --test scripts/test/claude-skill-plugin.test.mjs
+```
 
 ### 3. 使用 dsb 客户端：发请求
 

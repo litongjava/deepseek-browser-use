@@ -3,6 +3,8 @@ name: youtube-video-download
 description: 用 dsb 与 yt-dlp 下载用户有权保存的 YouTube 视频；区分公开视频与会员内容、频道最新与栏目最新，安全导出登录凭据、先列格式告知降级、收集后台任务并用 ffprobe 验收。
 ---
 
+> Claude Code 调用名：`dsb-skills:youtube-video-download`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # YouTube 视频下载
 
 ## 边界与已验证经验

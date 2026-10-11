@@ -4,6 +4,8 @@ description: 通过 dsb 命令行驱动真实浏览器完成网页任务：默�
 whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点击、勾选、滚动、截图、执行 JS 或提取页面内容时；服务默认地址 http://localhost:10049。读页面只用 get_browser_state 的文本字段，非必要不要读它返回的图片。
 ---
 
+> Claude Code 调用名：`dsb-skills:deepseek-browser-use`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # DeepSeek Browser Use（命令行浏览器自动化）
 
 执行前先读 [可靠执行与任务协作](references/reliable-execution.md)：精确 CLI / PowerShell 引用、任务独占、四种任务标识、条件等待及业务成功判据。查价格、票务、数量时同时加载 `web-data-as-text`；查 12306 时再加载 `railway-12306-ticket`。

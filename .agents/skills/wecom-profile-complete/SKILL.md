@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 完善企业微信「企业信息」（wor
 whenToUse: 需要完善或修改企业微信管理后台「企业信息」里的资料（企业 logo、企业地址、企业简称、企业域名、联系电话、企业名片），或需要在 work.weixin.qq.com 这个 Vue SPA + hash 路由 + 内层滚动容器的后台上做「定位元素 → 填表 → 提交 → 回读确认」这类操作时。
 ---
 
+> Claude Code 调用名：`dsb-skills:wecom-profile-complete`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 企业微信「企业信息」完善（实操手册）
 
 一句话流程：**有头 Chrome → 人扫码登录 → `#profile` 回读现状 → 逐字段改（logo / 地址 / 简称 / 域名）→ 每改一项立刻回读确认**。

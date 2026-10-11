@@ -4,6 +4,8 @@ description: 阿里云「轻量应用服务器」（新版控制台 swasnext）�
 whenToUse: 需要在真实浏览器里登录阿里云、比较轻量应用服务器的套餐与价格、把订单送到收银台，或者判断某个套餐能不能用于 ICP 备案时
 ---
 
+> Claude Code 调用名：`dsb-skills:aliyun-lightweight-server`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 阿里云轻量应用服务器（购买 / 备案）
 
 一次真实任务的产物（2026-09-25）：登录 → 比价 → 选中 2 vCPU / 1 GiB / 30 GiB / 200 Mbps / 华北2（北京）/ 1 年 ￥408.00 → 送到收银台由人付款。

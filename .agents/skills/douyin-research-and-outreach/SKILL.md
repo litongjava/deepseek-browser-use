@@ -4,6 +4,8 @@ description: 用 deepseek-browser-use 在抖音（douyin.com / 抖音精选）�
 whenToUse: 需要在抖音（douyin.com）进行产品需求调研、痛点评论挖掘、舆情分析，或通过私信向潜在客户确认需求与意向时使用。
 ---
 
+> Claude Code 调用名：`dsb-skills:douyin-research-and-outreach`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # 抖音需求调研与定向私信实操手册
 
 一次真实生产级任务（2026-10-09）的完整实操沉淀：通过 `dsb` 驱动 Chrome，在抖音网页版上完成从扫码登录、痛点视频检索、突破虚拟列表拉取 350+ 条深层用户需求评论，到自动定位目标用户主页并成功发送软件需求确认私信的全流程。

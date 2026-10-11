@@ -3,6 +3,8 @@ name: github-issue-triage
 description: 在 GitHub issue 上「回复 + 贴本地截图 + 关闭」的完整套路：登录态判定、只读正文与全部评论、往评论框贴本地图片（评论框没有 file input，要注入 input 再派发 paste）、提交必须用真实鼠标点击、以及发布后的双重核验。适用于 issue 维护、批量答疑、把仓库里的答案回给提问者的任务。
 ---
 
+> Claude Code 调用名：`dsb-skills:github-issue-triage`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+
 # GitHub issue：回复、贴本地截图、关闭
 
 这份手册是一次真实任务的复盘：某个仓库的 4 个 open issue 全部「读题 → 回复 → 贴本地配图 → 关闭」。
