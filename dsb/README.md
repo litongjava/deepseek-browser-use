@@ -42,7 +42,7 @@ dsb server start # 启动服务(连不上时会自动拉起,一般不用手敲)
 dsb server status #查看状态:地址、健康、pid、全部可用 jar
 dsb --port 10049 health                       # 服务在哪:命令行 > 具名目标 > 环境变量 > 配置文件 > 默认(localhost:10049)
 
-dsb start --browser chrome --headful          # 起一个任务(默认无头),看回执 engineHonored 确认引擎真的换了
+dsb start --browser chrome                    # 默认显示浏览器窗口,看回执 engineHonored 确认引擎真的换了
 
 dsb --id 1001 run go_to_url -p url=https://example.com   # 发一条命令
 
@@ -63,13 +63,13 @@ dsb --id 1001 close                           # 关掉任务
 | 子命令 | 作用 |
 | --- | --- |
 | `health` / `config` / `tasks` / `methods [过滤词]` | 运维自省:健康检查、生效配置、活着的任务、命令清单 |
-| `start [--browser chrome] [--headful]` | 起任务;`--browser` 支持 auto/chromium/chrome/edge/firefox |
-| `close` / `shutdown` | 关掉本任务 / 关掉所有任务与共享浏览器 |
-| `run <method> [-p k=v] [--params @文件]` | 发一条命令;带别名容错:`press_key` 会自动映射成 `send_keys`(`key` 与 `keys` 参数通用) |
+| `start [--browser chrome] [--headless]` | 起任务，默认显示窗口；`--headless` 显式无头；`--headful` 保留兼容，不能与 `--headless` 同用；`--browser` 支持 auto/chromium/chrome/edge/firefox |
+| `close [--close-browser]` / `shutdown` | 默认结束任务，最后一个任务保留浏览器和页面；`--close-browser` 显式关闭（其他任务存在时拒绝）；`shutdown` 关闭所有任务与浏览器 |
+| `run <method> [-p k=v] [--params @文件] [--wait-until STAGE]` | 发一条命令；导航等待可选 commit/domcontentloaded/load/networkidle，默认 domcontentloaded；带别名容错:`press_key` 会自动映射成 `send_keys`(`key` 与 `keys` 参数通用) |
 | `batch [文件\|-] [--async] [--wait] [--keep-going] [--stop-on-expect-failure]` | 批量命令(数组 JSON,默认读标准输入) |
 | `job <jobId> [--wait]` | 查/等异步批次 |
 | `recipes [--run 名字] [--var k=v]` | 列配方 / 跑配方(显式点名才跑) |
-| `state [--max-elements N] [--full] [--text-only]` | 页面状态摘要,`--full` 连元素清单与结构化文本 |
+| `state [--max-elements N] [--full] [--text-only] [--highlight] [--screenshot]` | 默认不画高亮、不截图，索引仍可操作；两个开关分别显式启用。`--full` 连元素清单与结构化文本 |
 | `js <脚本\|@脚本.js\|-> [--var k=v] [--retry-on-spurious]` | 执行 JS,支持 `{{变量}}` 注入 |
 | `upload <文件> [--filename 名字]` / `uploads [--delete 名字]` | 文件送到服务端暂存区 / 列、删暂存文件 |
 | `last` | 重放本会话最近一次的响应 |
@@ -297,3 +297,4 @@ cd dsb && go test ./...
 ```
 
 不连服务:参数解析、JSON 保序与编码、编号接续、输出策略、信封级字段、jar 查找优先级、仓库定位、自动拉起的触发条件。
+任务结束默认保留最后的数据页。兼容配置的下一任务复用浏览器并新开页签；配置不兼容时提示先显式关闭，不自动重建。CLI 托管 profile 按服务端口隔离：10049 保留 `.dsb-backend/profile`，其他端口用 `.dsb-backend/profile-<port>`。

@@ -1,6 +1,6 @@
 (
   args = {
-    doHighlightElements: true,
+    doHighlightElements: false,
     focusHighlightIndex: -1,
     viewportExpansion: 0,
     debugMode: false,
@@ -103,6 +103,13 @@
   const ID = { current: 0 };
 
   const HIGHLIGHT_CONTAINER_ID = "playwright-highlight-container";
+
+  // Remove the previous observation's overlays and listeners before reading DOM.
+  for (const cleanup of window._highlightCleanupFunctions || []) {
+    try { cleanup(); } catch (_) { /* Detached elements must not block observation. */ }
+  }
+  window._highlightCleanupFunctions = [];
+  document.getElementById(HIGHLIGHT_CONTAINER_ID)?.remove();
 
   // Add a WeakMap cache for XPath strings
   const xpathCache = new WeakMap();
@@ -351,18 +358,6 @@
       }
     }
   }
-
-  // // Add this function to perform cleanup when needed
-  // function cleanupHighlights() {
-  //   if (window._highlightCleanupFunctions && window._highlightCleanupFunctions.length) {
-  //     window._highlightCleanupFunctions.forEach(fn => fn());
-  //     window._highlightCleanupFunctions = [];
-  //   }
-
-  //   // Also remove the container
-  //   const container = document.getElementById(HIGHLIGHT_CONTAINER_ID);
-  //   if (container) container.remove();
-  // }
 
   /**
    * Gets the position of an element in its parent.
@@ -1162,8 +1157,9 @@
           } else {
             highlightElement(node, nodeData.highlightIndex, parentIframe);
           }
-          return true; // Successfully highlighted
         }
+        // Index selection and descendant deduplication do not depend on drawing.
+        return true;
       } else {
         // console.log(`Skipping highlight for ${nodeData.tagName} (outside viewport)`);
       }

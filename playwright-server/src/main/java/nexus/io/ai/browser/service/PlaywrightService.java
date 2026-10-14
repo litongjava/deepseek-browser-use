@@ -39,6 +39,7 @@ import nexus.io.ai.browser.dom.service.DomService;
 import nexus.io.ai.browser.dom.service.HtmlMarkdown;
 import nexus.io.ai.browser.handler.CommandTraceLog;
 import nexus.io.ai.browser.upload.UploadStore;
+import nexus.io.ai.browser.validation.NavigationValidator;
 import nexus.io.ai.browser.util.ListenerProbe;
 import nexus.io.ai.browser.util.OcrEngine;
 import nexus.io.ai.browser.util.TextSearch;
@@ -68,6 +69,7 @@ import com.microsoft.playwright.options.MouseButton;
 import com.microsoft.playwright.options.SelectOption;
 import com.microsoft.playwright.options.ServiceWorkerPolicy;
 import com.microsoft.playwright.options.ViewportSize;
+import com.microsoft.playwright.options.WaitUntilState;
 
 import lombok.extern.slf4j.Slf4j;
 import nexus.io.model.body.RespBodyVo;
@@ -783,7 +785,7 @@ public class PlaywrightService {
    * 浏览器类型、有头/无头、可执行文件、profile 目录都是浏览器级别的属性,同一个浏览器不能中途切换:
    * <ul>
    * <li>正在跑的浏览器与这次请求**完全一致** → 直接复用;</li>
-   * <li>不一致但已经没有任务在跑 → 关掉它,按这次请求重新起一个(所以换浏览器类型、改配置都不用重启服务);</li>
+   * <li>A configuration change requires explicitly closing the retained browser first.</li>
    * <li>不一致而还有任务在跑 → 明确报错,既不悄悄沿用旧配置,也不把别人的页签弄没。</li>
    * </ul>
    *
@@ -799,14 +801,9 @@ public class PlaywrightService {
       if (current.matches(headless, requested, selection)) {
         return current;
       }
-      if (!INSTANCES.isEmpty()) {
-        throw new IllegalStateException("浏览器已经在运行（" + current.describe() + "）：所有任务共用同一个浏览器，"
-            + "不能中途切换浏览器类型、有头/无头或 profile，请先 close 掉正在运行的任务；"
-            + "想同时用两个浏览器（例如一边 Chrome 一边 Edge）请再起一个服务进程，并给它们配不同的端口与 profile 目录");
-      }
-      log.info("浏览器配置与正在运行的不一致,重建共享浏览器({} -> browser={}, headless={})", current.describe(),
-          BrowserChoice.resolve(requested).id(), headless);
-      closeSharedBrowser();
+      throw new IllegalStateException("Browser configuration differs from the retained browser (" + current.describe()
+          + "). Finish active tasks and explicitly close the browser with closeBrowser=true before switching configuration; "
+          + "or use another service port and profile.");
     }
     synchronized (PlaywrightService.class) {
       if (sharedBrowser == null) {
@@ -1160,15 +1157,11 @@ public class PlaywrightService {
    * 给任务分配页签
    *
    * <p>
-   * 优先用浏览器里还没有归属的页签(启动时那个 about:blank),没有就新开一个。任务之间靠页签隔离,
-   * 所以每个任务拿到的都是自己的一组页签。
+   * Always open a task-owned page; existing pages may belong to the user.
    */
   private BrowserInstance newTaskInstance(long taskId, SharedBrowser browser) {
     BrowserContext context = browser.context;
-    Page page = unclaimedPage(browser);
-    if (page == null) {
-      page = context.newPage();
-    }
+    Page page = context.newPage();
     BrowserInstance instance = new BrowserInstance(taskId, context, page, browser.profileDir, browser.opts);
     String pending = pendingRecorderMode.get();
     if (pending != null) {
@@ -1179,26 +1172,6 @@ public class PlaywrightService {
   }
 
   /**
-   * 浏览器里还没有归属任务的页签(通常是启动时那个 about:blank)
-   *
-   * <p>
-   * 用用户自己的 profile 时,Chrome 可能把上次的会话恢复出来,那些页签是用户自己的
-   * ({@link SharedBrowser#foreignPages}),不算「没人认领」,任务宁可自己新开一个页签。
-   */
-  private static Page unclaimedPage(SharedBrowser browser) {
-    Set<Page> claimed = new HashSet<>(browser.foreignPages);
-    for (BrowserInstance instance : INSTANCES.values()) {
-      claimed.addAll(instance.pages);
-    }
-    for (Page page : browser.context.pages()) {
-      if (!claimed.contains(page)) {
-        return page;
-      }
-    }
-    return null;
-  }
-
-  /**
    * 把一个页签划给某个任务
    *
    * <p>
@@ -1206,7 +1179,7 @@ public class PlaywrightService {
    * 补上任务已经注册过的路由规则。重复认领同一个页签是安全的,监听不会挂两遍。
    */
   private void claimPage(BrowserInstance instance, Page page) {
-    if (page == null || !instance.pages.add(page)) {
+    if (instance.detached || page == null || !instance.pages.add(page)) {
       return;
     }
     // 屏蔽 navigator.webdriver:每个页签都要挂一次,弹窗也算
@@ -1971,9 +1944,34 @@ public class PlaywrightService {
     return EnvUtils.get("user.home", ".");
   }
 
+  private static <T> void listen(BrowserInstance inst, Page page, Consumer<Consumer<T>> add,
+      Consumer<Consumer<T>> remove, Consumer<T> handler) {
+    Consumer<T> activeHandler = event -> {
+      if (!inst.detached) {
+        handler.accept(event);
+      }
+    };
+    add.accept(activeHandler);
+    inst.listenerCleanup.computeIfAbsent(page, ignored -> new ArrayList<>()).add(() -> remove.accept(activeHandler));
+  }
+
+  private static void detachTaskPage(BrowserInstance inst, Page page) {
+    List<Runnable> cleanup = inst.listenerCleanup.remove(page);
+    if (cleanup != null) {
+      for (Runnable remove : cleanup) {
+        remove.run();
+      }
+    }
+    if (!page.isClosed()) {
+      for (String pattern : inst.routedPatterns) {
+        page.unroute(pattern);
+      }
+    }
+  }
+
   /** 弹窗、控制台日志、页面错误、弹窗页签:每个页签都要挂一次 */
   private void attachListeners(BrowserInstance inst, Page page) {
-    page.onDialog(dialog -> {
+    listen(inst, page, page::onDialog, page::offDialog, dialog -> {
       Kv info = Kv.by("type", dialog.type()).set("message", dialog.message()).set("defaultValue", dialog.defaultValue())
           .set("seq", inst.dialogSeq.incrementAndGet()).set("timestamp", System.currentTimeMillis());
       inst.lastDialog = info;
@@ -1984,17 +1982,17 @@ public class PlaywrightService {
         dialog.accept();
       }
     });
-    page.onConsoleMessage(msg -> addBounded(inst.consoleLogs, msg.type() + ": " + msg.text()));
-    page.onPageError(error -> addBounded(inst.pageErrors, error));
+    listen(inst, page, page::onConsoleMessage, page::offConsoleMessage, msg -> addBounded(inst.consoleLogs, msg.type() + ": " + msg.text()));
+    listen(inst, page, page::onPageError, page::offPageError, error -> addBounded(inst.pageErrors, error));
     // 下载刻意**不在这里注册 page.onDownload**:Playwright Java 的 Page 级事件在客户端是挂到
     // **上下文**上再按页过滤的,每个页签注册一次就会不断累积上下文级监听器;而上下文事件分发一旦碰到
     // 已经释放的对象就会抛 `Object doesn't exist: response@…`,并在**后续任意一次 API 调用**上重抛
     // (这一族异常在真实站点上会稳定复现:几条毫不相干的命令报同一个已释放的对象)。
     // 下载的判定改成纯服务端地数下载目录,见 countDownloadFiles —— 不碰 Playwright 对象,少一份分发面。
     // 这个页签弹出的新窗口归同一个任务,别人看不见
-    page.onPopup(popup -> claimPage(inst, popup));
+    listen(inst, page, page::onPopup, page::offPopup, popup -> claimPage(inst, popup));
     // 页签被人工关掉(共用浏览器时很常见)后要有人接管「当前页」
-    page.onClose(closed -> onPageClosed(inst, closed));
+    listen(inst, page, page::onClose, page::offClose, closed -> onPageClosed(inst, closed));
   }
 
   /**
@@ -2006,6 +2004,7 @@ public class PlaywrightService {
    */
   private void onPageClosed(BrowserInstance inst, Page page) {
     inst.pages.remove(page);
+    detachTaskPage(inst, page);
     if (inst.detached || inst.page != page) {
       return;
     }
@@ -2119,7 +2118,8 @@ public class PlaywrightService {
 
   private void attachRequestRecorder(BrowserInstance inst, Page page) {
     inst.recorderAttachedAt = System.currentTimeMillis();
-    inst.recorderAttached = true;    page.onRequest(request -> safely("onRequest", () -> {
+    inst.recorderAttached = true;
+    listen(inst, page, page::onRequest, page::offRequest, request -> safely("onRequest", () -> {
       Kv entry = requestInfo(request);
       addBoundedRequest(inst.requests, entry);
       if (request != null) {
@@ -2127,14 +2127,14 @@ public class PlaywrightService {
         inst.inflight.incrementAndGet();
       }
     }));
-    page.onResponse(response -> safely("onResponse", () -> {
+    listen(inst, page, page::onResponse, page::offResponse, response -> safely("onResponse", () -> {
       if (response != null) {
         recordResponse(inst, response);
       }
     }));
     // body 已下载完再读取,并留在当前 Playwright 调用线程上。
     // 在独立线程里 response.text() 会并发驱动同一个 Connection,打乱事件顺序。
-    page.onRequestFinished(request -> safely("onRequestFinished", () -> {
+    listen(inst, page, page::onRequestFinished, page::offRequestFinished, request -> safely("onRequestFinished", () -> {
       for (BrowserInstance.RecordedResponse recorded : snapshotResponses(inst)) {
         if (recorded.response.request() == request) {
           ResponseBodyCache.capture(recorded);
@@ -2142,7 +2142,7 @@ public class PlaywrightService {
         }
       }
     }));
-    page.onRequestFailed(request -> safely("onRequestFailed", () -> {
+    listen(inst, page, page::onRequestFailed, page::offRequestFailed, request -> safely("onRequestFailed", () -> {
       if (request == null) {
         return;
       }
@@ -2459,14 +2459,20 @@ public class PlaywrightService {
    */
   public RespBodyVo getBrowserState(Long browserId, Boolean highlight, Integer viewportExpansion,
       Boolean includeElements, Integer maxElements, Boolean includeFrames, Boolean strictSnapshot) {
+    return getBrowserState(browserId, highlight, viewportExpansion, includeElements, maxElements,
+        includeFrames, strictSnapshot, null);
+  }
+
+  public RespBodyVo getBrowserState(Long browserId, Boolean highlight, Integer viewportExpansion,
+      Boolean includeElements, Integer maxElements, Boolean includeFrames, Boolean strictSnapshot, Boolean screenshot) {
     return getBrowserStateAttempt(browserId, highlight, viewportExpansion, includeElements, maxElements,
-        includeFrames, Boolean.TRUE.equals(strictSnapshot), 1);
+        includeFrames, Boolean.TRUE.equals(strictSnapshot), screenshot, 1);
   }
 
   private RespBodyVo getBrowserStateAttempt(Long browserId, Boolean highlight, Integer viewportExpansion,
-      Boolean includeElements, Integer maxElements, Boolean includeFrames, boolean strictSnapshot, int attempt) {
+      Boolean includeElements, Integer maxElements, Boolean includeFrames, boolean strictSnapshot, Boolean screenshot, int attempt) {
     return withInstance(browserId, inst -> {
-      boolean doHighlight = highlight == null || highlight;
+      boolean doHighlight = Boolean.TRUE.equals(highlight);
       int expansion = viewportExpansion == null ? 0 : viewportExpansion;
       boolean withFrames = Boolean.TRUE.equals(includeFrames);
 
@@ -2545,7 +2551,7 @@ public class PlaywrightService {
       }
 
       // 截图 + 同名的可交互结构化文本
-      Kv capture = capture(inst);
+      Kv capture = capture(inst, screenshot == null ? captureEnabled() : screenshot);
       kv.set(capture);
       String stateFile = writeStateFile(inst, capture.getInt("seq"), browserState, text);
       if (stateFile != null) {
@@ -2569,7 +2575,7 @@ public class PlaywrightService {
         inst.snapshotInvalidated = true;
         if (attempt < 2) {
           return getBrowserStateAttempt(browserId, highlight, viewportExpansion, includeElements,
-              maxElements, includeFrames, strictSnapshot, attempt + 1);
+              maxElements, includeFrames, strictSnapshot, screenshot, attempt + 1);
         }
         kv.set("snapshotIssues", issues).set("indicesUsable", false)
             .set("snapshotLastMutation", endStamp.get("lastMutation"))
@@ -2956,7 +2962,7 @@ public class PlaywrightService {
    * diff_dom_text 用:它每次都要重新 buildDomTree,但不需要产生一对新的截图/文本文件, 否则对比一次页面就多两张垃圾文件。
    */
   private RespBodyVo buildState(BrowserInstance inst, Boolean highlight, Integer viewportExpansion) {
-    boolean doHighlight = highlight == null || highlight;
+    boolean doHighlight = Boolean.TRUE.equals(highlight);
     int expansion = viewportExpansion == null ? 0 : viewportExpansion;
     DOMState state;
     try {
@@ -3159,9 +3165,15 @@ public class PlaywrightService {
    * @return 含 seq / screenshot / screenshot_path 的 Kv;截图失败时含 screenshot_error
    */
   public Kv capture(BrowserInstance inst) {
+    return capture(inst, captureEnabled());
+  }
+
+  private Kv capture(BrowserInstance inst, boolean requested) {
     int seq = inst.captureSeq.incrementAndGet();
     Kv data = Kv.by("seq", seq);
-    if (!captureEnabled()) return data.set("screenshot_skipped", "browser.capture.enabled=false");
+    if (!requested) {
+      return data.set("screenshot_skipped", "not-requested");
+    }
     Path png = dataDir(inst.id).resolve(seq + ".png");
     CapturePolicy.Result result = CapturePolicy.run(inst, "viewport", false, false, null,
         (mode, timeout) -> withHighlightHidden(inst, () -> inst.page.screenshot(new Page.ScreenshotOptions().setTimeout(timeout))));
@@ -3434,10 +3446,10 @@ public class PlaywrightService {
     }
   }
 
-  /** 自动截图开关({@code browser.capture.enabled},默认开) */
+  /** Automatic capture is opt-in; explicit screenshot commands remain available. */
   public static boolean captureEnabled() {
     String configured = ChromeBrowser.config(KEY_CAPTURE_ENABLED);
-    return configured == null || Boolean.parseBoolean(configured.trim());
+    return configured != null && Boolean.parseBoolean(configured.trim());
   }
 
   /**
@@ -5083,10 +5095,21 @@ public class PlaywrightService {
 
   /** 新增 go_to_url （功能同 navigate，但单独接口） */
   public RespBodyVo goToUrl(Long browserId, String url) {
+    return goToUrl(browserId, url, null, null);
+  }
+
+  public RespBodyVo goToUrl(Long browserId, String url, String waitUntil, Integer timeoutMs) {
+    WaitUntilState stage = NavigationValidator.stage(waitUntil);
+    NavigationValidator.timeout(timeoutMs);
     return withInstance(browserId, inst -> {
       try {
-        Response rsp = inst.page.navigate(url);
-        return RespBodyVo.ok(Kv.by("status", rsp == null ? 0 : rsp.status()));
+        Page.NavigateOptions options = new Page.NavigateOptions().setWaitUntil(stage);
+        if (timeoutMs != null) {
+          options.setTimeout(timeoutMs);
+        }
+        Response rsp = inst.page.navigate(url, options);
+        return RespBodyVo.ok(Kv.by("status", rsp == null ? 0 : rsp.status())
+            .set("url", inst.page.url()).set("waitUntil", stage.name().toLowerCase(java.util.Locale.ROOT)));
       } catch (PlaywrightException e) {
         // 伪故障兜底:这条异常可能只是事件泵投递过来的(见 ActionError#SPURIOUS_DISPATCH),
         // 而导航**其实已经成功**。实测 go_to_url 连试 3 次都报 Object doesn't exist: response@…,
@@ -10837,34 +10860,65 @@ public class PlaywrightService {
    * 结束一个任务
    *
    * <p>
-   * 只关掉这个任务自己的页签:浏览器、profile 与 Playwright driver 都是共用的,关掉会连累别的任务。
-   * 最后一个任务关闭时才把浏览器一起收掉(用户 profile 的占用也随之释放)。
+   * Retain the last task's pages for the user and release task-owned listeners.
+   * Other tasks close only their own pages. The shared browser requires explicit closure.
    */
   public RespBodyVo close(Long browserId) {
+    return close(browserId, false);
+  }
+
+  public RespBodyVo close(Long browserId, boolean closeBrowser) {
+    synchronized (PlaywrightService.class) {
+      if (closeBrowser && INSTANCES.keySet().stream().anyMatch(id -> !id.equals(browserId))) {
+        return RespBodyVo.fail("Other tasks are active; closeBrowser cannot close their browser");
+      }
+      // A completed task may explicitly release its retained idle browser later.
+      if (closeBrowser && INSTANCES.isEmpty()) {
+        closeSharedBrowser();
+        return RespBodyVo.ok(Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0));
+      }
+      RespBodyVo result = closeTask(browserId);
+      if (closeBrowser && result.isOk()) {
+        closeSharedBrowser();
+        result.setData(Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0));
+      }
+      return result;
+    }
+  }
+
+  private RespBodyVo closeTask(Long browserId) {
     BrowserInstance inst = INSTANCES.remove(browserId);
     if (inst == null) {
       return RespBodyVo.fail("没有找到对应的浏览器实例：" + browserId);
     }
     inst.detached = true;
-    for (Page page : pagesOf(inst)) {
+    List<Page> taskPages = pagesOf(inst);
+    boolean keepPages = INSTANCES.isEmpty() && sharedBrowser != null;
+    if (keepPages) {
+      // Hand completed pages to the user; future tasks must not claim them.
+      sharedBrowser.foreignPages.removeIf(Page::isClosed);
+      sharedBrowser.foreignPages.addAll(taskPages);
+    }
+    for (Page page : taskPages) {
       try {
-        page.close();
+        detachTaskPage(inst, page);
+        if (!keepPages) {
+          page.close();
+        }
       } catch (RuntimeException e) {
         // 页签可能已经因为浏览器崩溃而失效,这里不该让 close 变成失败
         log.warn("关闭任务 {} 的页签失败:{}", browserId, e.getMessage());
       }
     }
     inst.pages.clear();
-    if (INSTANCES.isEmpty()) {
-      closeSharedBrowser();
-    }
     // 注意:这里**不关** Playwright。它是全进程共享的 driver,关掉会把其它任务的浏览器一起搞死;
     // 它由 JVM 退出时的 shutdown hook 负责收尾。
-    return RespBodyVo.ok();
+    return RespBodyVo.ok(Kv.by("browserRetained", sharedBrowser != null).set("pagesRetained", keepPages)
+        .set("remainingTasks", INSTANCES.size()));
   }
 
   /**
-   * 关掉共享浏览器(最后一个任务关闭、或者要重建上下文时调用)
+   * Explicitly close the shared browser (shutdown, closeBrowser, or context restart).
    *
    * <p>
    * 用用户 profile 时浏览器是我们自己拉起来的,得连进程一起收掉,否则用户下次打开 Chrome 会被告知
@@ -10907,6 +10961,10 @@ public class PlaywrightService {
     if (browser == null) {
       return instance;
     }
+    if (browser.context.pages().stream().anyMatch(page -> !page.isClosed() && !instance.pages.contains(page)
+        && (browser.foreignPages.contains(page) || !"about:blank".equals(page.url())))) {
+      throw new IllegalStateException("User pages are open; explicitly close the browser before changing context settings");
+    }
     // 重建前后都要保住这个任务的页签归属:先摘掉,重建完再认领一个新页签
     instance.detached = true;
     instance.pages.clear();
@@ -10923,10 +10981,7 @@ public class PlaywrightService {
     instance.context = fresh.context;
     instance.profileDir = fresh.profileDir;
     instance.opts = fresh.opts;
-    Page page = unclaimedPage(fresh);
-    if (page == null) {
-      page = fresh.context.newPage();
-    }
+    Page page = fresh.context.newPage();
     instance.page = page;
     claimPage(instance, page);
     // 换了**整个浏览器进程**= 截图能力重新有一次机会,必须把截图熔断一起复位。

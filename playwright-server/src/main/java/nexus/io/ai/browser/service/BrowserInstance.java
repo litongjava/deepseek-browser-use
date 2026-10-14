@@ -57,6 +57,9 @@ public class BrowserInstance {
    */
   public final Set<Page> pages = ConcurrentHashMap.newKeySet();
 
+  /** Remove task-owned listeners when pages are handed back to the user. */
+  public final Map<Page, List<Runnable>> listenerCleanup = new ConcurrentHashMap<>();
+
   /**
    * 任务是否正在被关闭(close / 重建浏览器)
    *

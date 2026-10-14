@@ -125,12 +125,12 @@ dsb --port 10049 --id 1001 close
 
 ## 截图与可交互结构化文本（data/<id>/）
 
-每次浏览的页面发生变化，服务都会自动留档，落在进程工作目录下的 `data/<id>/` 里：
+默认只留结构化文本；截图需 `get_browser_state` 的 `screenshot:true`、CLI `state --screenshot` 或显式截图命令。只有显式设置 `browser.capture.enabled=true` 才恢复动作自动截图。文件位于 `data/<id>/`：
 
 | 时机 | 产物 |
 | --- | --- |
-| 「会改变页面」的方法执行成功 | `data/<id>/<seq>.png` 一张截图 |
-| 每次 `get_browser_state` | `data/<id>/<seq>.png` 截图 **+** `data/<id>/<seq>.txt` 同名的可交互结构化文本 |
+| 「会改变页面」的方法执行成功 | 默认不截图；显式启用全局自动截图时生成 `<seq>.png` |
+| 每次 `get_browser_state` | `<seq>.txt` 结构化文本；显式请求截图时另有同序号 `.png` |
 
 - `seq` 是**每个任务独立的自增序号，从 1 开始**：1.png、2.png、3.png、4.png…… 一对 `.png` / `.txt` 的序号相同，表示是同一时刻的页面。
 - 这两个文件都可以直接 GET：`GET http://localhost:10049/data/<id>/<seq>.png`、`GET .../<seq>.txt`。视觉模型可以按 URL 取图，**但非必要不要取**（见 `SKILL.md` 开头的省 token 铁律）：截图只是留档，智能体读页面请读 `data.text` 或同序号的 `.txt`。
@@ -139,7 +139,7 @@ dsb --port 10049 --id 1001 close
 - 哪些方法算「会改变页面」：导航类（`navigate`、`go_to_url`、`go_back`、`go_forward`、`reload`）、点击与交互类、滚动与鼠标类、页签类、等待类、`execute_js` 与部分设置类。纯读取类（`get_url`、`get_cookies`、`is_visible`……）不截图，否则每读一个值就多一张一模一样的图。
 - 截图前会尽力等页面进入 DOMCONTENTLOADED（最多 1.5 秒），等不到也照常截图，不会因为等待失败丢掉这一张。
 - **出图的像素尺寸取决于视口策略**（服务端配置 `browser.viewport`，默认 `window` = 视口跟随真实窗口）。`window` 下 `devicePixelRatio` 是**真实系统 DPI 比**，出图 = CSS 视口 × 该比值 —— 实测 150% 缩放的屏幕上，1470×925 的视口出的是 **2205×1388** 的图；`fixed` / 显式尺寸下固定为 1.0，出图就是 CSS 视口那么大。所以**要把图上的像素位置换算成页面坐标**（`data.text` 里的坐标、`clip` 参数、`set_viewport` 用的都是 CSS 像素）**就除以 `devicePixelRatio`**。`start` 回执里的 `data.browser.viewport` 说明这次用的是哪一种。
-- 批量调用时**每一步的结果里都有它自己那一步的截图**，所以一次批量请求就能拿到整段操作的页面变化历史。
+- 显式启用全局自动截图后，批量调用时每一步的结果包含该步截图，所以一次批量请求就能拿到整段操作的页面变化历史。
 - 这些文件不会自动清理，`data/` 已经加进 `.gitignore`；不需要时直接删目录即可。
 
 ### 调用追踪日志（`logs/trace/`）

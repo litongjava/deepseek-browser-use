@@ -101,9 +101,8 @@ public final class ChromeBrowser {
    * CDP 那条路(本机 Chrome + 自己拉进程 + {@code --remote-debugging-port})默认用的托管 profile 目录
    *
    * <p>
-   * 留空时是 {@code ~/.config/browseruse/profiles/shared-default}。刻意**不按端口派生**:这条路用的是
-   * 托管 profile,本来就不会和用户正在开的 Chrome 抢目录,再按端口分只会让登录态在换端口时丢一次。
-   * 详见 {@link #cdpManagedProfileDir()}。
+   * Default port keeps shared-default; other ports use shared-&lt;port&gt;.
+   * Explicit profile paths take precedence.
    */
   public static final String KEY_CDP_PROFILE_DIR = "browser.chrome.cdpProfileDir";
 
@@ -234,7 +233,7 @@ public final class ChromeBrowser {
    *
    * @return 端口字符串;取不到(或非数字)时返回 null,调用方退回不分端口的老目录
    */
-  private static String portSuffix() {
+  static String portSuffix() {
     String port = config("server.port");
     if (port == null) {
       port = EnvUtils.get("server.port");
@@ -253,15 +252,9 @@ public final class ChromeBrowser {
    * CDP 那条路(自己拉 Chrome + {@code --remote-debugging-port})默认用的托管 profile 目录
    *
    * <p>
-   * <b>为什么单独一份、而且不再按端口派生。</b>「本机 Chrome + CDP」这条路走的是**托管 profile**
-   * (不是用户日常那份 {@code User Data}),所以它天然不会和用户正在开的 Chrome 抢同一个目录 ——
-   * 这正好把「用用户 profile 时必须先关掉 Chrome」那个限制去掉了。既然不抢,也就没有「同一台机器上
-   * 多个实例互相踩」的问题,按端口派生(shared-10049)只会让登录态在换端口时莫名其妙地丢一次,
-   * 所以固定成 {@code shared-default}:它是「本机 Chrome + CDP」这条路的默认身份,换端口不换登录态。
-   *
-   * <p>
-   * 优先级:{@code browser.chrome.cdpProfileDir} &gt; {@code browser.profileDir}(显式配置永远优先,
-   * 想跟旧的托管目录共用一份登录态就指过去)&gt; {@code ~/.config/browseruse/profiles/shared-default}。
+   * Each service port has a persistent profile. The default port retains shared-default
+   * for compatibility; other ports use shared-&lt;port&gt; to avoid profile lock conflicts.
+   * Explicit browser.chrome.cdpProfileDir and browser.profileDir values take precedence.
    *
    * <p>
    * 想用**用户自己那份** Chrome profile(现成的 Google 登录态等)请打开
@@ -276,7 +269,9 @@ public final class ChromeBrowser {
     if (explicit != null && !explicit.isBlank()) {
       return Paths.get(stripQuotes(explicit)).toAbsolutePath().normalize();
     }
-    return profilesBase().resolve("shared-default").toAbsolutePath().normalize();
+    String port = portSuffix();
+    String directory = port == null || "10049".equals(port) ? "shared-default" : "shared-" + port;
+    return profilesBase().resolve(directory).toAbsolutePath().normalize();
   }
 
   /** {@code ~/.config/browseruse/profiles} */

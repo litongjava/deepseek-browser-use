@@ -61,7 +61,7 @@
     - Firefox 用的是 **Playwright 自带的那份**（打过补丁、走 juggler 协议），本机安装的普通 Firefox 接不上，所以**不要**配 `browser.firefox.path` 指到本机 Firefox。
     - **profile 与 Chromium 那份是分开的**：换引擎等于换一套登录态，Chrome 里登录过的站点在 Firefox 下要重新登一次（反之亦然）。
     - `pdf` 命令只支持 Chromium，Firefox 下会返回明确失败原因；`set_credentials`、`--profile-directory` 这类 Chromium 概念在 Firefox 下同样不适用。
-    - 换引擎会重建浏览器，所以只能在「当前没有其它任务」时换（把在跑的任务 `close` 掉再 `start`，不用重启服务）。
+    - 换引擎会重建浏览器，所以只能在「当前没有其它任务」时换（结束任务并显式 `close --close-browser` 后再 `start`，不用重启服务）。
     - 这仍然是**排障候选**，不保证适用于所有网站，也不代表已成功登录。历史问题记录与复测证据位于仓库的 `scripts/diagnostics/RESULTS-2026-09-22.md`（相对仓库根目录，不随用户级技能安装）。
 
 30. **`data.mode=js` 意味着「这次没走真实交互」**：未发现遮挡的元素上，原生点击失败后可能降级成 JS 派发事件；明确被遮挡时 auto 不会穿透点击，对象释放异常也不会自动补点（回执里 `data.mode=js` + `data.fallbackReason`），点击本身通常是有效的。但 JS 设值**不保证进框架的 model**：`input_text` 走 JS 时会回 `data.committed=false`，DOM 上明明有值、预览或提交校验却说「不能为空」就是这种情况——用 `input_text_by_selector` 重填一遍（可见字段默认走真实输入）。**关键步骤（提交、缴费）看到 `mode=js` 要额外确认页面状态**，不要只看 `ok=true`。
@@ -72,14 +72,14 @@
 
     - 服务在 Windows 上会**自动清掉残留痕迹**（profile 里的 `parent.lock` 与 `.startup-incomplete`：前者删得掉就证明没有活着的持有者，后者是「上次启动没走完」的标记），并且**第一次失败后会自动重建驱动再试一次** —— 实测这个重试往往就能成功（表现为第一次等 60 秒、第二次 2 秒起来）。
     - 手工处理顺序：先结束残留浏览器进程（`Get-Process firefox | Stop-Process -Force`），再重启服务。
-    - **规范做法是「先 `close` 任务，再停服务」**：关掉最后一个任务时浏览器会一起退出，就不会留下孤儿。关掉全部任务与共享浏览器也可以直接用 `shutdown`（服务进程不退出，HTTP 还能应答）。
+    - **普通任务完成仅 `close`**：最后一个任务保留浏览器与数据页。确需停止服务时用 `dsb server stop`；单独关闭闲置浏览器用 `close --close-browser`。关掉全部任务与共享浏览器也可以直接用 `shutdown`（服务进程不退出，HTTP 还能应答）。
     - 有头模式（`headless:false`）下这个现象更容易出现：有头启动比有头慢，且窗口/桌面状态会影响启动。排查时可以先确认「无头能不能起来」（`headless:true`），能起来就说明是环境问题而不是引擎问题。
     - **profile 目录默认按端口分开**（`shared-<端口>`）：同一台机器上跑多个服务实例时，各自用各自的 profile，不会互相抢锁。要用同一份 profile（例如复用已登录的会话）就显式配 `browser.profileDir`。当前解析到哪个目录用 `get_config` 看。
     - **强杀服务前先确认没有活着的任务**：`list_tasks` 能直接看到活着的任务与共享浏览器，不用翻日志猜。
 
 33. **`browser` 参数在老版本发布包上会被静默忽略**：老版本只认 `headless`，传了 `browser:"firefox"` 照样用内置 Chromium 打开页面，回执还是 `ok:true`——实测在一个需要 Firefox 的站点上白排查了很久。现在 `start` 的回执里明确给出 `requestedBrowser`、`effectiveBrowser`、`engineHonored`，不匹配时还会带 `engineWarning`。**看到 `engineHonored:false` 就说明这个服务实例没有按参数切浏览器**，要升级服务端；也可以用 `get_config` 确认服务端认的 `engine`/`configuredType`。
 
-34. **截图与日志不会自动清理**：一次完整的站点操作能攒下上百个追踪文件与几十张截图。定期用 `cleanup` 清理（**默认只预演**，`dryRun:false` 才真删），或用 `browser.capture.enabled=false` 关掉「每次页面变化都自动截图」（显式调 `screenshot` 不受影响）。
+34. **截图与日志不会自动清理**：一次完整的站点操作能攒下上百个追踪文件与几十张截图。定期用 `cleanup` 清理（**默认只预演**，`dryRun:false` 才真删），`browser.capture.enabled` 默认 false；仅显式设置 true 才启用动作自动截图（显式调 `screenshot` 不受影响）。
 
 35. **报错信息里现在带「下一步」**，不用再自己想到要去查什么：
 

@@ -49,7 +49,7 @@ dsb --port 10049 --id 1001 batch cmds.json --async --wait
 - 有失败时整体响应是 `code:0`，但 `data.results` 仍然完整返回，`msg` 指出第一条失败的命令。
 - 参数缺失会得到 `第 N 条命令 xxx 失败：缺少参数 index`，不会 500。
 - 数组最多 200 条；空数组、非对象项、嵌套 `commands` 都会得到中文提示。
-- 布尔参数不传按 `false` 处理（和单独调用一致），所以批量里 **`scroll` 要写 `"down":true` 才向下**；`start` 例外，不传 `headless` 按无头处理，避免误弹窗口。
+- 布尔参数不传按 `false` 处理（和单独调用一致），所以批量里 **`scroll` 要写 `"down":true` 才向下**；`start` 不传 `headless` 时默认显示窗口，仅显式传 `headless:true` 才使用无头模式。
 
 **PTC 推荐节奏**：一个批次 = 一个计划段。批次里先做动作，末尾放一个 `get_browser_state`，这样下一次推理直接基于最新快照决策。
 

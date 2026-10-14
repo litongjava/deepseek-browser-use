@@ -8,6 +8,8 @@
 >
 > Chrome 136 起不允许在默认用户数据目录上开启远程调试。`RemoteDebuggingAllowed` 允许远程调试不等于解除默认目录限制；不要通过降级浏览器或修改策略尝试绕过。需要独立 profile 时，先用 `dsb profile clone` 离线复制，再用 `dsb start --profile <名称>` 选择副本。复制不保证 Cookie、保存密码或网站登录态可用，必要时由用户重新登录。
 
+默认 `dsb start` 显示窗口；`--headful` 保留兼容，`--headless` 显式无头，两个开关不能同用。协议 `headless` 默认 `false`，批量命令相同。已有任务时不能切换显示模式；先结束自己的任务，确认共享浏览器无其他任务后再切换。
+
 ## 通过命令行列举、复制和选择 profile
 
 ```powershell
@@ -51,7 +53,7 @@ dsb --id 1002 start --headful --user-data-dir "<独立 User Data>" --profile-dir
 
 **注意三件事**：
 
-- **一次只能有一个浏览器**：浏览器与 profile 全进程共用。任务还在跑时 `start` 传一个不同的 `browser` 会返回 `start 失败：浏览器已经在运行（browser=chrome，headless=true，profile=…）：所有任务共用同一个浏览器，不能中途切换浏览器类型…`。要换就先 `close` 掉在跑的任务，再 `start`；**不用重启服务**。
+- **每个服务一个浏览器**：兼容配置直接复用；切换类型、显示模式或 profile 前，先结束任务并显式 `dsb --id <id> close --close-browser`。仅结束任务不会关闭浏览器。
 - **换浏览器等于换一套登录态**：`chrome`／`chromium` 共用 `browser.profileDir` 那一份；`edge` 用它自己那份（`~/.config/browseruse/profiles/edge`）；`firefox` 的 profile 格式与 Chromium 系不通用。所以换过去之后，需要登录的站点要重新登一次（登录态会留在那份 profile 里，后续任务不用再登）。
 - **`edge` 走的是「自己拉进程 + CDP」这条路**（`data.browser.mode` 是 `cdp`，和用用户自己的 Chrome profile 一样）：这样才能带着沙箱跑（实测 Edge 配上沙箱时，Playwright 的管道启动会让它启动即退出）。随之而来的差别有两条：`set_credentials` 在这条路上不可用；页面触发的下载落到浏览器自己的下载目录（不是 `~/Downloads/broswer`，`pdf` 命令不受影响，它自己算路径）。
 - **`edge` 这条路用的是浏览器自己的 UA**（含 `Edg/`）。内置 Chromium 会伪装成 Chrome 的 UA，本机 Chrome 与 Edge 都用各自的 UA —— 所以 UA 里出现 `Edg/` 才说明这次真的用上了 Edge。
@@ -72,12 +74,12 @@ dsb --id 1002 start --headful --user-data-dir "<独立 User Data>" --profile-dir
 | 本机装的 Firefox | 用不上：Playwright 的 Firefox 是打过补丁的构建（走 juggler 协议），`browser.firefox.path` 一般不需要配 |
 | UA | **不覆写成 Chrome**：Firefox 的价值就在于它是 Firefox，UA 里会是 `Firefox/<版本>` |
 
-`browser.engine` 是**浏览器级**配置：改了它之后，如果还有任务在跑，`start` 会明确报错而不是把别人的页签弄没；没有任务在跑时，下一次 `start` 会自动把旧浏览器收掉、按新引擎重建。登录态跟着 profile 走，**换引擎会换一套登录态**（Chromium 与 Firefox 的 profile 格式不通用），所以切过去之后需要重新登录一次。
+`browser.engine` 是**浏览器级**配置：改了它之后，如果还有任务在跑，`start` 会明确报错而不是把别人的页签弄没；没有任务时也保留旧浏览器，必须显式关闭后才能切换引擎。登录态跟着 profile 走，**换引擎会换一套登录态**（Chromium 与 Firefox 的 profile 格式不通用），所以切过去之后需要重新登录一次。
 
 - `id` 就是任务标识。`start` 时自己指定（例如用业务里的任务号），不传则自动生成雪花 ID。
 - 每个任务有**自己的一组页签**：`get_tabs` / `data.tabs` / `switch_tab` 的索引只在这个任务的页签里数，别的任务的页签看不见也点不到。弹窗与 `new_tab` 开出来的新页签归开它的任务。
 - **同一个 `id` 不能重复 `start`**：会返回 `start 失败：该 id 已经有正在运行的浏览器实例：1001，请先调用 close，或换一个 id`。要重来就先 `close` 再 `start`。
-- `close` 只关掉这个任务的页签；**最后一个任务关闭时**浏览器才会一起退出（profile 的占用也随之释放）。
+- `close` 在还有其他任务时只关本任务页签；最后一个任务结束时保留浏览器与页面，并移除任务监听和路由。新任务另开页签，不接管保留页或用户页。只有显式 `close --close-browser`、`shutdown` 或停止服务才释放浏览器及 profile。
 - 实例本身只在内存里，服务重启后 id 失效（登录态在 profile 里，仍在）。
 - `start` 的返回里有 `data.browser`：`type`（这次实际用的浏览器：`chrome`／`edge`／`chromium`／`firefox`）、`chrome`（是否用上了本机 Chrome）、`userProfile`（是否用上了用户自己的 profile）、`engine`、`mode`（`managed` = Playwright 的托管 profile，`cdp` = 服务自己拉进程再接上：用户自己的 Chrome profile 与 `edge` 都是这条）、`executable`、`profileDir`、`profileDirectory`、`headless`，以及服务替你做了退让时的 `note`。**`userProfile=false` 不代表未登录**：命名副本也会返回 false；以目标网站的实际登录状态为准，必要时请用户完成登录；**看到 `type` 不是你要的那个，先看 `note`**（见上节「用哪个浏览器」）。
 - **`data.profileSeenBefore` 与 `data.profileNote` 回答的是另一件事**：`engineHonored:true` 只说明「浏览器参数被采纳了」，**不说明「这份 profile 里有登录态」**。这两个字段直接说清：
@@ -89,3 +91,7 @@ dsb --id 1002 start --headful --user-data-dir "<独立 User Data>" --profile-dir
 - 服务没有鉴权，默认只监听本机；对外暴露前必须自行加访问控制。
 
 > 登录态不跟着任务 ID 走，而是跟着共享 profile 走：换任务、换 id 都不影响。`userProfile=false` 时用的是托管 profile（`~/.config/browseruse/profiles/shared`），那份 profile 里的登录态是 agent 自己养起来的 —— 第一次登录之后同样会长期保留。
+
+### 默认 profile 按服务端口隔离
+
+CLI 启动的服务：默认端口 10049 保留 `.dsb-backend/profile`，其他端口使用 `.dsb-backend/profile-<port>`。直接启动 Java 的 Chrome CDP 默认目录为 `shared-default`（默认端口）或 `shared-<port>`，Edge 为 `edge` 或 `edge-<port>`。显式配置目录优先；同一服务的任务共享登录态，重启同一端口复用原目录。

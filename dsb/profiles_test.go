@@ -11,6 +11,7 @@ import (
 
 func TestProfileInvalidArguments(t *testing.T) {
 	for _, argv := range [][]string{
+		{"start", "--headless", "--headful"}, {"start", "--headful", "--headless"},
 		{"start", "--profile="}, {"start", "--profile", "  "},
 		{"start", "--user-data-dir="}, {"start", "--profile-directory", "Default"},
 		{"start", "--profile", "litongjava", "--user-data-dir", "C:/data"},
@@ -38,12 +39,17 @@ func TestProfileCommandWireContract(t *testing.T) {
 		params    string
 		preflight bool
 	}{
+		{[]string{"start"}, "start", `{"headless":false}`, false},
+		{[]string{"start", "--headful"}, "start", `{"headless":false}`, false},
+		{[]string{"start", "--headless"}, "start", `{"headless":true}`, false},
 		{[]string{"profiles"}, "list_profiles", "{}", false},
 		{[]string{"profile", "list"}, "list_profiles", "{}", false},
 		{[]string{"profile", "clone", "--name", "litongjava", "--source-user-data-dir", "C:/User Data"}, "clone_profile", `{"name":"litongjava","sourceUserDataDir":"C:/User Data","sourceProfileDirectory":"Default"}`, false},
 		{[]string{"profile", "clone", "--name", "litongjava", "--source-user-data-dir", "C:/User Data", "--source-profile-directory", "Profile 2"}, "clone_profile", `{"name":"litongjava","sourceUserDataDir":"C:/User Data","sourceProfileDirectory":"Profile 2"}`, false},
 		{[]string{"start", "--profile", "litongjava", "--headful"}, "start", `{"headless":false,"browser":"chrome","profile":"litongjava"}`, true},
-		{[]string{"start", "--browser", "auto", "--user-data-dir", "C:/User Data", "--profile-directory", "Profile 2"}, "start", `{"headless":true,"browser":"chrome","userDataDir":"C:/User Data","profileDirectory":"Profile 2"}`, true},
+		{[]string{"start", "--profile", "litongjava"}, "start", `{"headless":false,"browser":"chrome","profile":"litongjava"}`, true},
+		{[]string{"start", "--profile", "litongjava", "--headless"}, "start", `{"headless":true,"browser":"chrome","profile":"litongjava"}`, true},
+		{[]string{"start", "--browser", "auto", "--user-data-dir", "C:/User Data", "--profile-directory", "Profile 2"}, "start", `{"headless":false,"browser":"chrome","userDataDir":"C:/User Data","profileDirectory":"Profile 2"}`, true},
 	} {
 		t.Run(strings.Join(tc.argv, " "), func(t *testing.T) {
 			requests, commands := 0, 0

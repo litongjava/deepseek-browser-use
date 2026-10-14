@@ -8,16 +8,16 @@
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `start` | `id`(可选), `headless`(bool，默认 `true`), `browser`(可选，见下), `networkRecording`(bool，可选) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法 |
-| `close` | `id` | 关掉**这个任务自己的页签**，别的任务不受影响；**最后一个任务关闭时**浏览器才一起退出（登录态留在 profile 里，下次还在） |
+| `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法 |
+| `close` | `id`, `closeBrowser`(bool，默认 false) | 结束任务；最后一个任务保留浏览器和页面。显式 `closeBrowser:true` 才关闭浏览器，有其他任务时拒绝；任务已结束后仍可显式关闭闲置浏览器 |
 
 ### 导航与页面信息
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `navigate` | `id`, `url` | 返回 `data.status` |
-| `go_to_url` | `id`, `url` | 与 `navigate` 等价。**打不开的地址会报 `errorCode:NETWORK_ERROR`**，并带上 `data.netError`（Chrome 的错误码，如 `ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED`）与可重试建议 —— 这时页面是 **Chrome 自己的网络错误页**，上面没有任何内容可读，别去查选择器，先看本机代理 / VPN（见 `pitfalls.md` 第 74 条） |
-| `get_browser_state` | `id`, `highlight`, `viewportExpansion`, `includeElements`, `maxElements`, `includeFrames`, `strictSnapshot` | 见 `reading-pages.md`。`strictSnapshot`(bool，默认 false) 决定「这份索引什么时候作废」：默认只作废**结构变更**（读取期间增删了元素）与逐元素重校验失败的快照，实时行情这类只有文字/属性在变的页面索引仍然可用；传 `true` 恢复旧的「读取期间任何 DOM 变更即作废」判据 |
+| `navigate` | `id`, `url`, `waitUntil`(默认 domcontentloaded), `timeoutMs`(1—120000) | 导航；等待阶段可选 commit/domcontentloaded/load/networkidle，返回实际 URL、status 和 waitUntil。CLI：`run navigate --wait-until load -p url=...` |
+| `go_to_url` | `id`, `url`, `waitUntil`, `timeoutMs` | 与 `navigate` 等价。**打不开的地址会报 `errorCode:NETWORK_ERROR`**，并带上 `data.netError`（Chrome 的错误码，如 `ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED`）与可重试建议 —— 这时页面是 **Chrome 自己的网络错误页**，上面没有任何内容可读，别去查选择器，先看本机代理 / VPN（见 `pitfalls.md` 第 74 条） |
+| `get_browser_state` | `id`, `highlight`(默认 false), `screenshot`(默认 false), `viewportExpansion`, `includeElements`, `maxElements`, `includeFrames`, `strictSnapshot` | 见 `reading-pages.md`。`strictSnapshot`(bool，默认 false) 决定「这份索引什么时候作废」：默认只作废**结构变更**（读取期间增删了元素）与逐元素重校验失败的快照，实时行情这类只有文字/属性在变的页面索引仍然可用；传 `true` 恢复旧的「读取期间任何 DOM 变更即作废」判据 |
 | `list_frames` | `id`, `refresh`(bool，默认 true) | 列出页面上的**全部 frame**（含跨域 iframe）：`data.frames[]`（`index`/`url`/`name`/`isMain`/`parentIndex`/`depth`/`elementCount`/`indexRange`；读不出来的 frame 另有 `readError`）。`index 0` 固定是主 frame，其余按 frame 树深度优先编号。**顶层读不到元素时先看它**，见 `reading-pages.md`「跨域 iframe」 |
 | `get_page_snapshot` | `id`, `includeConsole`(bool), `includeRequests`(bool), `requestFilter` | 一次拿到页面状态：`data.url`、`data.title`、`data.tabs`、`data.dialog`、`data.loading`；`includeConsole=true` 再带 `data.logs`/`data.errors`，`includeRequests=true` 再带 `data.requests`（可用 `requestFilter` 按 URL 子串过滤）。替代六次单独调用，**不含 DOM 快照文本** |
 | `diff_dom_text` | `id`, `highlight`, `viewportExpansion` | 重新执行一次 buildDomTree，与上一次快照按行做差集：`data.changed`、`data.added`、`data.removed`（各最多 200 行）、`data.first`。判断「页面到底动没动」比重读整页省 token。**不产生新的截图/文本文件** |
@@ -298,7 +298,7 @@ dsb run mouse_up -p button=left
 | `get_element_screenshot` | `id`, `index`(可选), `selector`(可选), `path`(可选), `inline`(bool，默认 false), `frame`(可选), `timeoutMs`(1—120000), `force`(bool) | 只截一个元素，返回 `data.path`+`data.url`+`data.size`、`data.target`；`inline: true` 时另给 `data.base64`。`index` 与 `selector` 传一个即可。元素在跨域 iframe 里时传 `frame`。自动/手动共用熔断；force仅探测一次。截图预算及结果范围见 [testing-evidence.md](testing-evidence.md)。 |
 | `pdf` | `id`, `path`(可选) | 存 PDF，返回 `data.path`；不传 `path` 落到 `~/Downloads/broswer/` |
 
-> 日常「看页面长什么样」**先别看图**：`data.screenshot` 是每个改变页面的方法自动留下的截图地址，但把图读进上下文很贵，非必要不要读（见 `SKILL.md` 开头的省 token 铁律），读 `data.text` 就够了。`get_element_screenshot` 是验证码、二维码、图表这类「必须看图」的元素的标准做法：走 Playwright 自己的元素截图，**不受 canvas 跨域污染限制**（用 `execute_js` + canvas 手抠图，跨域图片会直接失败），而且只截一个元素、比整页图省得多。
+> 日常「看页面长什么样」**先别看图**：截图默认关闭；`state --screenshot` 或截图命令显式请求，`data.screenshot` 是请求后生成的截图地址，但把图读进上下文很贵，非必要不要读（见 `SKILL.md` 开头的省 token 铁律），读 `data.text` 就够了。`get_element_screenshot` 是验证码、二维码、图表这类「必须看图」的元素的标准做法：走 Playwright 自己的元素截图，**不受 canvas 跨域污染限制**（用 `execute_js` + canvas 手抠图，跨域图片会直接失败），而且只截一个元素、比整页图省得多。
 
 ### Cookie 与本地存储
 
@@ -319,7 +319,7 @@ dsb run mouse_up -p button=left
 | `set_geolocation` | `id`, `latitude`, `longitude` | 会同时授予 `geolocation` 权限 |
 | `set_offline` | `id`, `offline`(bool) | 断网 / 恢复 |
 | `set_headers` | `id`, `headersJson` | 形如 `{"X-Key":"v"}` |
-| `set_credentials` | `id`, `username`, `password` | HTTP 基本认证。凭据只能在创建上下文时设置，所以**会重建整个浏览器**：当前页面丢失，**且会失败** —— 浏览器是所有任务共用的，只允许在「当前只有这一个任务」时调用（否则提示先 `close` 掉其它任务）；走 CDP 那条路时（`data.browser.mode=cdp`：用户自己的 Chrome profile 或 `browser=edge`）不支持，会直接返回失败原因，需要基本认证就改用 `browser=chrome`／`chromium` |
+| `set_credentials` | `id`, `username`, `password` | HTTP 基本认证。凭据只能在创建上下文时设置，所以**会重建整个浏览器**：当前页面丢失，**且会失败** —— 浏览器是所有任务共用的，只允许在「当前只有这一个任务且没有保留的用户数据页」时调用；走 CDP 那条路时（`data.browser.mode=cdp`：用户自己的 Chrome profile 或 `browser=edge`）不支持，会直接返回失败原因，需要基本认证就改用 `browser=chrome`／`chromium` |
 | `set_media` | `id`, `colorScheme` | `light` / `dark` / `no-preference` |
 
 ### 弹窗与控制台
@@ -500,7 +500,7 @@ browser.ocr.timeoutMs=120000
 ```properties
 # 自动截图与熔断：连续失败 failThreshold 次后冷却；伪故障单独计数、只短冷却；
 # 冷却到期会半开（清零计数），手动 screenshot 传 force=true 可探测一次且失败不延长冷却
-browser.capture.enabled=true
+browser.capture.enabled=false
 browser.capture.timeoutMs=8000
 browser.capture.failThreshold=3
 browser.capture.cooldownMs=120000

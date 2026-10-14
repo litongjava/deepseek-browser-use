@@ -2,12 +2,13 @@
 
 > 本文是 [SKILL.md](../SKILL.md) 的分册，按需阅读。
 
-`get_browser_state` 是阅读页面的唯一入口。它在页面里执行 buildDomTree，把 DOM 转成 AI 可读的结构化文本，缓存本次快照，同时**截一张图**并把文本落盘（见 `protocol.md`）。
+`get_browser_state` 是阅读页面的唯一入口。它在页面里执行 buildDomTree，把 DOM 转成 AI 可读的结构化文本，缓存本次快照，把文本落盘；默认不截图，需要时显式传 `screenshot:true`（见 `protocol.md`）。
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `id` | 是 | 任务 ID |
-| `highlight` | 否 | 是否在页面上画高亮框，默认 `true`（便于人工观察，不影响返回文本） |
+| `highlight` | 否 | 是否在页面上画高亮框，默认 `false`；关闭时仍分配索引，读取前清理旧高亮及其监听器 |
+| `screenshot` | 否 | 显式请求本次截图，默认关闭；CLI 为 `state --screenshot` |
 | `viewportExpansion` | 否 | 视口外扩像素，默认 `0`；想一次拿到首屏之外的更多元素就调大（例如 `1000`） |
 | `includeElements` | 否 | 是否在 `data.elements` 里内联元素清单，默认 `true` |
 | `maxElements` | 否 | 内联条数上限，默认 200 |
@@ -26,7 +27,7 @@
 | `data.viewport_height` / `data.page_height` | 视口高度与整页高度 |
 | `data.frames` / `data.frameCount` | 只有 `includeFrames: true` 时有：每个 frame 的 `index`/`url`/`name`/`isMain`/`depth`/`elementCount`/`indexRange` |
 | `data.frameHint` | 顶层一个可交互元素都没读到、而页面上确实有 iframe 时出现：提示下一步该用 `includeFrames` / `list_frames` |
-| `data.seq` / `data.screenshot` / `data.screenshot_path` / `data.state_file` | 本次落盘的截图与结构化文本，见 `protocol.md`。**前三个只是截图地址：非必要不要读图**，见 `SKILL.md` 开头的省 token 铁律；真正要读的是 `data.text` |
+| `data.seq` / `data.screenshot` / `data.screenshot_path` / `data.state_file` | 本次落盘的截图与结构化文本，见 `protocol.md`。截图字段仅在显式请求截图时返回，`seq` 是序号，非必要不要读图，见 `SKILL.md` 开头的省 token 铁律；真正要读的是 `data.text` |
 | `data.indicesUsable` / `data.snapshotConsistent` / `data.snapshotIssues` | 这份索引还能不能用来按索引操作。`indicesUsable:false` 时索引已作废，必须重取快照 |
 | `data.snapshotStructuralMutations` / `data.snapshotContentMutations` / `data.snapshotMutations` | **本次读取期间**的变更次数（增量，不是页面累计值） |
 | `data.snapshotNote` | 页面动过但判据认为索引仍可用时的一句话解释 |

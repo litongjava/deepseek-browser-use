@@ -39,7 +39,7 @@ public class CommandTable {
   static {
     // ---------- 实例生命周期 ----------
     put("start", (svc, id, a) -> {
-      // 不传 headless 时按无头处理,避免在服务器上误弹出窗口
+      // Show the browser window unless headless mode is explicitly requested.
       Boolean headless = a.getBoolean("headless");
       // 不传 browser 时按配置里的默认类型(browser.type / browser.engine)处理,行为与以前一致;
       // 传了不认识的值会在 svc.start 里被拒掉,错误信息里带上可选值(见 BrowserType)
@@ -47,7 +47,7 @@ public class CommandTable {
       // 网络记录模式可选:true = 从一开始就记请求/响应;false = 这个任务不记;不传 = 按全局配置
       // (browser.network.record,默认 lazy:第一次要读网络数据时才挂监听器)
       Boolean networkRecording = a.getBoolean("networkRecording");
-      long newId = svc.start(id, headless == null || headless, requested, networkRecording,
+      long newId = svc.start(id, Boolean.TRUE.equals(headless), requested, networkRecording,
           new ProfileSelection(a.getString("profile"), a.getString("userDataDir"),
               a.getString("profileDirectory")));
       Kv data = Kv.by("id", newId);
@@ -83,13 +83,13 @@ public class CommandTable {
     put("list_profiles", (svc, id, a) -> svc.listProfiles());
     put("clone_profile", (svc, id, a) -> svc.cloneProfile(new CloneProfileRequest(
         a.getString("name"), a.getString("sourceUserDataDir"), a.getString("sourceProfileDirectory"))));
-    put("close", (svc, id, a) -> svc.close(id));
+    put("close", (svc, id, a) -> svc.close(id, Boolean.TRUE.equals(a.getBoolean("closeBrowser"))));
     // 关掉所有任务与共享浏览器:比直接杀进程干净(不留占着 profile 的孤儿浏览器)
     put("shutdown", (svc, id, a) -> svc.shutdown());
 
     // ---------- 导航与页面信息 ----------
-    put("navigate", (svc, id, a) -> svc.navigate(id, reqStr(a, "url")));
-    put("go_to_url", (svc, id, a) -> svc.goToUrl(id, reqStr(a, "url")));
+    put("navigate", (svc, id, a) -> svc.goToUrl(id, reqStr(a, "url"), a.getString("waitUntil"), a.getInteger("timeoutMs")));
+    put("go_to_url", (svc, id, a) -> svc.goToUrl(id, reqStr(a, "url"), a.getString("waitUntil"), a.getInteger("timeoutMs")));
     put("go_back", (svc, id, a) -> svc.goBack(id));
     put("go_forward", (svc, id, a) -> svc.goForward(id));
     put("reload", (svc, id, a) -> svc.reload(id));
@@ -98,7 +98,7 @@ public class CommandTable {
     put("get_browser_state",
         (svc, id, a) -> svc.getBrowserState(id, a.getBoolean("highlight"), a.getInteger("viewportExpansion"),
             a.getBoolean("includeElements"), a.getInteger("maxElements"), a.getBoolean("includeFrames"),
-            a.getBoolean("strictSnapshot")));
+            a.getBoolean("strictSnapshot"), a.getBoolean("screenshot")));
     // 页面上的 frame 清单(跨域 iframe 也能读到 URL):主站把第三方控制台套在 iframe 里时先看它
     put("list_frames", (svc, id, a) -> svc.listFrames(id, a.getBoolean("refresh")));
     put("wait", (svc, id, a) -> svc.waitSeconds(id, reqInt(a, "seconds")));

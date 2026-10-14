@@ -1,6 +1,6 @@
 ---
 name: deepseek-browser-use
-description: 通过 dsb 命令行驱动真实浏览器完成网页任务：默认使用本机安装的 Google Chrome 与一份共享的持久化 profile（所有任务共用一个浏览器进程，任务之间按页签隔离，登录一次长期有效），用 get_browser_state 取回可交互结构化页面文本与元素索引，按索引点击/输入/勾选/悬停/拖拽/双击，下拉框、上传文件、多标签页、等待、鼠标、截图与 PDF、Cookie 与本地存储、浏览器设置、弹窗与控制台、网络拦截、执行任意 JavaScript、批量指令；每次页面变化自动截图、每次取状态自动落盘截图与结构化文本（截图只留档，非必要不要读图，读文本即可，以节省 token）。当任务需要真实浏览器（JS 渲染、登录态、点击交互）而不是纯 HTTP 抓取时使用。
+description: 通过 dsb 命令行驱动真实浏览器完成网页任务：默认使用本机安装的 Google Chrome 与一份共享的持久化 profile（所有任务共用一个浏览器进程，任务之间按页签隔离，登录一次长期有效），用 get_browser_state 取回可交互结构化页面文本与元素索引，按索引点击/输入/勾选/悬停/拖拽/双击，下拉框、上传文件、多标签页、等待、鼠标、截图与 PDF、Cookie 与本地存储、浏览器设置、弹窗与控制台、网络拦截、执行任意 JavaScript、批量指令；默认不画高亮、不截图，索引照常生成；取状态留档结构化文本，截图需显式请求；最后一个任务结束后保留浏览器与数据页。当任务需要真实浏览器（JS 渲染、登录态、点击交互）而不是纯 HTTP 抓取时使用。
 whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点击、勾选、滚动、截图、执行 JS 或提取页面内容时；服务默认地址 http://localhost:10049。读页面只用 get_browser_state 的文本字段，非必要不要读它返回的图片。
 ---
 
@@ -12,26 +12,25 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 
 测试验收、截图超时或留证时，读取 [testing-evidence.md](references/testing-evidence.md)：前置条件、业务断言、截图完整性分别记录。自动/手动截图共用熔断，``force:true``仅探测一次；全页回退图必须标注为视口证据。``state --text-only``仍通过stderr提示证据缺失。
 
-> ## ⚠️ CLI方式第一条：调用统一走 `dsb`
->
-> **`dsb` 是装在 `PATH` 上的一个 Go 二进制，在任何目录直接敲 `dsb ...` 就行**（源码在仓库 `dsb/`）。
-> **不要手写 `curl`/`Invoke-WebRequest` 往 `POST /playwright/command` 拼 JSON**，
-> 也不要写 `python dsb.py` / `.\client\dsb.cmd` 之类旧入口 —— 那些已经删掉了，只有 `dsb`。
->
-> | 要干的事 | 正确写法 |
-> | --- | --- |
-> | 看服务活没活 | `dsb --port 10049 health`（**别用 curl 探 `/playwright/health`**） |
-> | 服务没起 | 不用管：普通命令会自动拉起后端并重试一次（显式管理用 `dsb server start` / `dsb server stop`） |
-> | 开任务 | `dsb --port 10049 --id 1001 start --browser chrome --headful` |
-> | 走一步 | `dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com` |
-> | 读页面 | `dsb --port 10049 --id 1001 state --text-only`（`--full` 要标题/URL/元素） |
-> | 批量 | `dsb --port 10049 --id 1001 batch cmds.json --async --wait` |
-> | 记不清子命令 | `dsb --help`（`run`/`state`/`js`/`batch`/`upload`/`last`/`server`/`selftest` 是子命令，`js` 不能跟在 `run` 后面） |
->
-> 好处是现成的：参数不用跟 shell 打架、每次调用都留档（`logs/agent/<会话>/`、`steps.log`）、
-> 退出码把「服务没起(1)」与「业务失败(2)」分开、服务没起会自动拉起。**跨调用要复用同一个 `--id`**（实例只在内存里）。
-> `--id` 使用数字任务 ID，名称标签不能作为 ID。`--select` 一次只选一个路径，例如 `--select data.text`；多个字段先用 `--out 文件.json` 保存完整响应，再读取并投影。不要拼逗号分隔路径。输出处理失败不代表浏览器动作未执行，先读留档或页面状态，不能直接重发动作。
-> 在 PowerShell 中用 `--out` 保存 UTF-8 JSON，不用 `> 文件` 或 `2>&1` 混合诊断与数据。读取文件使用宿主 read 工具；不要从摘要中搜索第一个 `{` 来猜 JSON 起点。
+## CLI方式第一条：调用统一走 `dsb`
+
+**`dsb` 是装在 `PATH` 上的一个 Go 二进制，在任何目录直接敲 `dsb ...` 就行**（源码在仓库 `dsb/`）。
+**不要手写 `curl`拼接json发送请求，
+
+| 要干的事 | 正确写法 |
+| --- | --- |
+| 看服务活没活 | `dsb --port 10049 health`|
+| 服务没起 | 不用管：普通命令会自动拉起后端并重试一次（显式管理用 `dsb server start` / `dsb server stop`） |
+| 开任务（默认显示窗口） | `dsb --port 10049 --id 1001 start --browser chrome` |
+| 走一步 | `dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com` |
+| 读页面 | `dsb --port 10049 --id 1001 state --text-only`（`--full` 要标题/URL/元素） |
+| 批量 | `dsb --port 10049 --id 1001 batch cmds.json --async --wait` |
+| 记不清子命令 | `dsb --help`（`run`/`state`/`js`/`batch`/`upload`/`last`/`server`/`selftest` 是子命令，`js` 不能跟在 `run` 后面） |
+
+dsb每次调用都留档（`logs/agent/<会话>/`、`steps.log`）、
+退出码把「服务没起(1)」与「业务失败(2)」分开、服务没起会自动拉起。**跨调用要复用同一个 `--id`**（实例只在内存里）。
+`--id` 使用数字or名称作为 ID。`--select` 一次只选一个路径，例如 `--select data.text`；多个字段先用 `--out 文件.json` 保存完整响应，再读取并投影。不要拼逗号分隔路径。输出处理失败不代表浏览器动作未执行，先读留档或页面状态，不能直接重发动作。
+在 PowerShell 中用 `--out` 保存 UTF-8 JSON，不用 `> 文件` 或 `2>&1` 混合诊断与数据。读取文件使用宿主 read 工具；不要从摘要中搜索第一个 `{` 来猜 JSON 起点。
 
 新增阅读方式：`dsb state --text-only` 只输出结构化文本；`--viewport-expansion -1`
 纳入视口外元素，`--include-frames` 纳入跨域 frame。字段筛选用 `--select data.fields` 等，
@@ -42,10 +41,12 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 
 这是给智能体用的命令行浏览器自动化工具：通过 `dsb` 命令驱动真实的浏览器（默认是**本机安装的 Google Chrome**，配一份**共享的持久化 profile**），把网页变成「可交互结构化文本 + 截图」。
 
-- 默认地址：`http://localhost:10049`（端口来自 `playwright-server/src/main/resources/app.properties` 的 `server.port`）
+**默认显示浏览器窗口**：`dsb start` 即为有界面模式；在需要无头模式时使用 `dsb start --headless`。协议 `start`（包括批量中的 `start`）省略 `headless` 或传 `false` 都显示窗口，传 `true` 才无头。回读 `data.browser.headless` 确认实际模式；共享浏览器仍有任务时不能切换模式，只关闭自己的任务。
+
+- 默认地址：`http://localhost:10049`
 - 服务也可能在**别的机器**上，或本机同时开着好几个实例（不同端口 = 不同 profile / 登录态）：用 `--host`/`--port` 指定，或 `dsb server target add <名字> --host <主机> --port <端口>` 登记后 `--use <名字>`。远端目标不自动拉起（那台机器上的服务得自己起）。
 - 启动服务：`dsb server start`（连不上时普通命令会自动拉起）；也可以 `java -jar deepseek-browser-use-<版本>-<平台>.jar`（发行包），或开发态在 `playwright-server` 目录执行 `mvn spring-boot:run`
-- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物，实测有一版连 `list_methods` / `get_config` / `shutdown` 都不支持，拿它开工会在半路撞「不支持的方法」。**开工先运行 `dsb methods`（CLI 子命令），或 `dsb run list_methods`（协议方法）；不要运行 `dsb list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
+- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物。**开工先运行 `dsb methods`（CLI 子命令），或 `dsb run list_methods`（协议方法）；不要运行 `dsb list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
 - **只有一个业务端点**：`POST http://localhost:10049/playwright/command`
 - 另有 `GET /playwright/health`（健康检查）与 `GET /data/**`（读取截图与结构化文本）
 - 共 122 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测（`send_keys` 有别名 `press_key`，`key` 与 `keys` 参数通用）
@@ -274,11 +275,12 @@ dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时�
 
 ## 二、读页面：`get_browser_state`
 
-`get_browser_state` 是阅读页面的唯一入口。它在页面里执行 buildDomTree，把 DOM 转成 AI 可读的结构化文本，缓存本次快照，同时**截一张图**并把文本落盘。
+`get_browser_state` 是阅读页面的唯一入口。它在页面里执行 buildDomTree，把 DOM 转成 AI 可读的结构化文本，缓存本次快照，把文本落盘；默认不截图，需要时显式传 `screenshot:true`。
 
 | 参数 | 说明 |
 | --- | --- |
-| `highlight` | 是否在页面上画高亮框，默认 `true`（便于人工观察，不影响返回文本） |
+| `highlight` | 是否在页面上画高亮框，默认 `false`；关闭时仍分配索引，读取前清理旧高亮及其监听器 |
+| `screenshot` | 显式请求本次截图，默认关闭；CLI 为 `state --screenshot` |
 | `viewportExpansion` | 视口外扩像素，默认 `0`；想一次拿到首屏之外的更多元素就调大（例如 `1000`） |
 | `includeElements` / `maxElements` | 是否在 `data.elements` 里内联元素清单（默认 `true`）与内联条数上限（默认 200） |
 | `includeFrames` | 是否把**跨域 iframe** 里的元素也纳入快照，默认 `false` |
@@ -294,7 +296,7 @@ dsb --port 10049 selftest --browser chrome       # 不确定服务端状态时�
 | `data.pixels_above` / `data.pixels_below` | 视口上方/下方还有多少像素没进快照。**非 0 就说明元素在视口外、没有索引** |
 | `data.frames` / `data.frameCount` / `data.frameHint` | 只在 `includeFrames: true`（或页面里确实有没纳入的跨域 frame）时出现 |
 | `data.viewport_height` / `data.page_height` | 视口高度与整页高度 |
-| `data.seq` / `data.screenshot` / `data.screenshot_path` / `data.state_file` | 本次落盘的截图与结构化文本。**前三个只是截图地址：非必要不要读图**（见开头铁律）；真正要读的是 `data.text` |
+| `data.seq` / `data.screenshot` / `data.screenshot_path` / `data.state_file` | 本次落盘的截图与结构化文本。截图字段仅在显式请求截图时返回，`seq` 是序号，非必要不要读图（见开头铁律）；真正要读的是 `data.text` |
 | `data.indicesUsable` / `data.snapshotConsistent` / `data.snapshotIssues` | 这份索引还能不能用来按索引操作。`indicesUsable:false` 时元素索引已经作废，必须重取快照 |
 | `data.snapshotStructuralMutations` / `data.snapshotContentMutations` / `data.snapshotMutations` | **本次读取期间**的变更次数（增量，不是页面累计值）。结构变更（增删元素）会让位置型 xpath 挪位 → 作废索引；内容变更（文字/属性）不会 → 索引照常可用 |
 | `data.snapshotNote` | 一句话解释「为什么这次没作废」：页面动过但只是内容变动、且每个索引都重校验通过 |
@@ -367,11 +369,11 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 
 **注意三件事**：
 
-- **一次只能有一个浏览器**：任务还在跑时 `start` 一个不同的 `browser` 会失败。要换就先 `close` 掉在跑的任务再 `start`，**不用重启服务**。
+- **一次只能有一个浏览器**：任务还在跑时 `start` 一个不同的 `browser` 会失败。要换就先结束任务，显式 `close --close-browser` 后再 `start`，**不用重启服务**。
 - **换浏览器等于换一套登录态**：`chrome`／`chromium` 共用 `browser.profileDir` 那一份；`edge` 与 `firefox` 各用各的（Firefox 的 profile 格式与 Chromium 系不通用）。
 - **`engineHonored:true` 只说明「浏览器参数被采纳了」，不说明「这份 profile 里有登录态」**：要看 `data.profileSeenBefore`（这份 profile 之前用过吗）与 `data.profileNote`（例如「本次首次创建，任何站点都要重新登录」/「引擎从 X 切到 Y，登录态不通用」）。实测踩过：服务端默认引擎被配成 `firefox`，而企业微信 / DNSPod / 腾讯云的登录态都在 Chromium profile 里。
 
-其余要点：同一个 `id` 不能重复 `start`；每个任务有自己的一组页签（别的任务的页签看不见也点不到）；`close` 只关这个任务的页签，**最后一个任务关闭时**浏览器才退出；实例只在内存里，服务重启后 id 失效（登录态在 profile 里，仍在）；服务没有鉴权，默认只监听本机。各引擎的差异表、profile 目录按端口分开、强杀服务留下孤儿浏览器怎么处理，见 `references/browsers.md`。
+其余要点：同一个 `id` 不能重复 `start`；每个任务有自己的一组页签（别的任务的页签看不见也点不到）；`close` 结束任务；最后一个任务的页面及浏览器保留给用户，后续任务另开页签复用浏览器；实例只在内存里，服务重启后 id 失效（登录态在 profile 里，仍在）；服务没有鉴权，默认只监听本机。各引擎的差异表、profile 目录按端口分开、强杀服务留下孤儿浏览器怎么处理，见 `references/browsers.md`。
 
 ## 四、命令速查（全部 122 个方法）
 
@@ -381,8 +383,8 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 
 | 方法 | 说明 |
 | --- | --- |
-| `start` | 开始一个任务（`id` 可选、`headless` 默认 `true`、`browser` 见上）；返回 `data.id` 与 `data.browser`（这次用的浏览器与 profile） |
-| `close` | 关掉**这个任务自己的页签**，别的任务不受影响；最后一个任务关闭时浏览器才退出 |
+| `start` | 开始一个任务（`id` 可选、`headless` 默认 `false`，显示窗口、`browser` 见上）；返回 `data.id` 与 `data.browser`（这次用的浏览器与 profile） |
+| `close` | 结束任务；最后一个任务保留浏览器和页面。`closeBrowser:true` 显式关闭浏览器（有其他任务时拒绝） |
 | `shutdown` | 关掉所有任务与共享浏览器（服务进程不退出）。比直接杀进程干净：不留占着 profile 目录的孤儿浏览器 |
 
 ### 导航与页面信息
@@ -593,7 +595,7 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 10. **填完一屏表单后先用 `get_form_state` 对一遍**。
 11. 遇到登录、验证码、短信码、扫码、滑块验证、点击验证等无法自行处理的环节，**必须主动请求人类帮助**，暂停依赖该环节的操作并保留浏览器现场；确认人工处理完成后再继续，见第七节。
 12. **能用批量就用批量**：第 3～7 步可以合并成一次 `commands` 请求（动作 + 读取混排，末尾放 `get_browser_state`），一次推理拿到全部结果，别一个动作往返一次。
-13. 任务完成输出结论，最后 `close`；等待人类协助时任务尚未完成，不要关闭浏览器。
+13. 任务完成后 `close` 解除任务控制，最后一个任务的浏览器和数据页保留给用户；不要例行追加 `--close-browser`、`shutdown` 或停止服务。仅在明确需要关闭时显式执行。等待人工协助时保留任务。
 
 评论需求调研还应读取 [weibo-demand-research](../weibo-demand-research/SKILL.md)，区分接口取得、实际展示、已读、去重与有效样本数。
 
@@ -639,7 +641,7 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 **遇到无法自行处理的环节，必须主动请求人类帮助，不要反复尝试或直接放弃任务。** 常见情况包括需要人工登录、输入图片验证码或短信码、扫码、拖动滑块、按顺序点击图片/文字验证、设备确认。
 
 1. 告诉用户当前停在哪个网站、遇到了什么问题、需要完成哪一步（例如「当前停在登录页，需要你完成登录和滑块验证，完成后请告诉我，我会继续」）。
-2. 优先让用户直接操作有头浏览器（`headless=false`），用 `bring_to_front` 或 `request_human_input` 把当前页签带到最前。保留当前任务 ID、页面和浏览器；**等待期间不要刷新、关闭或继续点击验证控件**。无头实例无法显示时，先说明需要切到有头模式，保存当前 URL，再按同一 ID 先 `close` 后 `start`（可能丢失未提交的表单）。
+2. 优先让用户直接操作有头浏览器（`headless=false`），用 `bring_to_front` 或 `request_human_input` 把当前页签带到最前。保留当前任务 ID、页面和浏览器；**等待期间不要刷新、关闭或继续点击验证控件**。无头实例无法显示时，先说明需要切到有头模式，保存当前 URL，确认没有其他任务后，显式 `close --close-browser` 再按同一 ID `start`（可能丢失未提交的表单）。
 3. 调 `request_human_input` 记录人工请求，并通过宿主工具的提问能力或对话消息明确通知用户；**不能假定接口返回成功就代表用户已收到通知**。登录、滑块、点击验证优先由用户在浏览器内完成，不要求用户在对话中提供密码。
 4. 等待用户答复或观察到明确的完成状态；**请求超时只表示尚未收到答复，不代表验证已通过**，不要反复提交、不要猜答案。
 5. 用户处理后重新 `get_browser_state`，确认已登录或验证已通过并取得新的元素索引，再继续原任务。

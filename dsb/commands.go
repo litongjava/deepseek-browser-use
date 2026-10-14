@@ -193,7 +193,13 @@ func cmdStart(client CommandAPI, args *Args, out *Printer) (int, error) {
 
 // cmdClose 关掉这个任务。
 func cmdClose(client CommandAPI, args *Args, out *Printer) (int, error) {
-	response, err := client.Close(nil)
+	var response *Response
+	var err error
+	if args.CloseBrowser {
+		response, err = client.Command("close", ObjOf("closeBrowser", true), nil, 0, "close")
+	} else {
+		response, err = client.Close(nil)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -233,6 +239,17 @@ func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 	method := "run"
 	if args.Method != nil {
 		method = *args.Method
+	}
+	if args.WaitUntil != nil {
+		if method != "go_to_url" && method != "navigate" {
+			return 0, usageErrorf("--wait-until is only supported by go_to_url and navigate")
+		}
+		switch *args.WaitUntil {
+		case "commit", "domcontentloaded", "load", "networkidle":
+			params.Set("waitUntil", *args.WaitUntil)
+		default:
+			return 0, usageErrorf("invalid --wait-until: %s", *args.WaitUntil)
+		}
 	}
 	// 常见别名容错: press_key -> send_keys(key 与 keys 二选一,统一成 keys 后再发,
 	// 并把 key 从参数里摘掉,避免服务端回 unknownParams:["key"] 的噪音)
@@ -473,6 +490,8 @@ func warnObservation(out *Printer, data Value) {
 // cmdState 页面状态摘要:标题、URL、元素数,以及可选的元素清单/正文。
 func cmdState(client CommandAPI, args *Args, out *Printer) (int, error) {
 	params := NewObj()
+	params.Set("highlight", args.Highlight)
+	params.Set("screenshot", args.Screenshot)
 	params.Set("includeElements", !args.TextOnly)
 	if args.ViewportExpansion != nil {
 		params.Set("viewportExpansion", numberFromInt(*args.ViewportExpansion))

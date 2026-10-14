@@ -98,7 +98,9 @@ public final class EdgeBrowser {
     if (configured != null) {
       return Paths.get(ChromeBrowser.stripQuotes(configured)).toAbsolutePath().normalize();
     }
-    return Paths.get(EnvUtils.get("user.home", "."), ".config", "browseruse", "profiles", "edge");
+    String port = ChromeBrowser.portSuffix();
+    String directory = port == null || "10049".equals(port) ? "edge" : "edge-" + port;
+    return Paths.get(EnvUtils.get("user.home", "."), ".config", "browseruse", "profiles", directory);
   }
 
   /**

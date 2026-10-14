@@ -58,7 +58,7 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 		return nil, err
 	}
 	if !hasProfileSelection(args) {
-		return client.Start(browser, !args.Headful, nil)
+		return client.Start(browser, args.Headless, nil)
 	}
 	methods, err := client.Methods()
 	if err != nil {
@@ -76,7 +76,7 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 	if !supported {
 		return nil, usageErrorf("backend does not advertise list_profiles; explicit profile selection requires an updated backend. No start request was sent")
 	}
-	params := ObjOf("headless", !args.Headful, "browser", "chrome")
+	params := ObjOf("headless", args.Headless, "browser", "chrome")
 	if args.Profile != nil {
 		params.Set("profile", *args.Profile)
 	}

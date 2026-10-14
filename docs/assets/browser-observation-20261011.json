@@ -1,0 +1,604 @@
+{
+  "observedDate": "2026-10-11",
+  "timezone": "Asia/Shanghai",
+  "scope": "Visible Chrome on local HTML fixture; isolated service port 10069, no business sites tested. Test service explicitly stopped after validation.",
+  "observations": {
+    "start": {
+      "data": {
+        "engineHonored": true,
+        "networkRecording": "on(按全局配置)",
+        "effectiveBrowser": "chrome",
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "26244",
+          "attempts": 1,
+          "elapsedMs": "3756"
+        },
+        "browser": {
+          "note": "browser=chrome：走 CDP（自己拉进程 + --remote-debugging-port + connectOverCDP），profile=D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069（托管 profile，与用户日常那份 Chrome 互不干扰）",
+          "profileDir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069",
+          "chrome": true,
+          "upload": {
+            "maxBytes": "52428800",
+            "dir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\upload",
+            "enabled": true
+          },
+          "profileSeenBefore": false,
+          "type": "chrome",
+          "profileDirectory": "Default",
+          "userProfile": false,
+          "cdp": {
+            "product": "Chrome/154.0.8037.98",
+            "notes": [
+              "下载目录:C:\\Users\\Administrator\\Downloads\\broswer(Browser.setDownloadBehavior)",
+              "已授权限:clipboardReadWrite / clipboardSanitizedWrite / notifications"
+            ],
+            "protocolVersion": "1.3"
+          },
+          "executable": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+          "profileNote": "该 profile 目录本次是**首次创建**,里面没有任何登录态:任何需要登录的站点都要重新登录一次(登录之后会留在这份 profile 里,后续任务不用再登)。 browser=chrome：走 CDP（自己拉进程 + --remote-debugging-port + connectOverCDP），profile=D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069（托管 profile，与用户日常那份 Chrome 互不干扰）",
+          "headless": false,
+          "mode": "cdp",
+          "trace": {
+            "redact": true,
+            "dir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\logs\\trace\\20261011",
+            "enabled": true
+          },
+          "engine": "chromium",
+          "viewport": {
+            "mode": "window",
+            "size": "window"
+          },
+          "userDataDir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069"
+        },
+        "profileSeenBefore": false,
+        "id": "2026101169",
+        "requestedBrowser": "chrome",
+        "profileNote": "该 profile 目录本次是**首次创建**,里面没有任何登录态:任何需要登录的站点都要重新登录一次(登录之后会留在这份 profile 里,后续任务不用再登)。 browser=chrome：走 CDP（自己拉进程 + --remote-debugging-port + connectOverCDP），profile=D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069（托管 profile，与用户日常那份 Chrome 互不干扰）"
+      },
+      "code": 1,
+      "ok": true
+    },
+    "navigation": {
+      "data": {
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29966",
+          "attempts": 1,
+          "elapsedMs": "34"
+        },
+        "waitUntil": "load",
+        "screenshot_skipped": "not-requested",
+        "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+        "seq": 1,
+        "status": 200
+      },
+      "code": 1,
+      "ok": true
+    },
+    "default": {
+      "data": {
+        "snapshotConsistent": true,
+        "state_file": "/data/2026101169/2.txt",
+        "snapshotAttempts": 1,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29927",
+          "attempts": 1,
+          "elapsedMs": "73"
+        },
+        "tabs": [
+          {
+            "current": true,
+            "index": 0,
+            "title": "Browser retention fixture",
+            "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html"
+          }
+        ],
+        "browser_state": "Browser tab: 1, Title: \"Browser retention fixture\", URL: \"file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html\".\ncurrent tab is: 1",
+        "snapshotStrict": false,
+        "title": "Browser retention fixture",
+        "snapshotMutations": 0,
+        "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+        "indicesUsable": true,
+        "viewport_height": 937,
+        "pixels_below": 0,
+        "snapshotStructuralMutations": 0,
+        "pageAppearsBlank": false,
+        "pixels_above": 0,
+        "elements": [
+          {
+            "frameIndex": 0,
+            "visible": true,
+            "snapshotId": "keep",
+            "listeners": [
+              "click"
+            ],
+            "snapshotTag": "button",
+            "index": 0,
+            "className": "",
+            "listenerDetection": "heuristic",
+            "rect": [
+              8,
+              80,
+              129,
+              21
+            ],
+            "frameUrl": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+            "xpath": "html/body/button",
+            "tag": "BUTTON",
+            "id": "keep",
+            "hasListeners": true,
+            "text": "Read retained data",
+            "value": "",
+            "resolved": true
+          }
+        ],
+        "elementCount": 1,
+        "text": "Local browser retention test\n[0]<button >Read retained data/>\nData remains available after task completion.",
+        "elementsTruncated": false,
+        "screenshot_skipped": "not-requested",
+        "snapshotContentMutations": 0,
+        "page_height": 937,
+        "seq": 2
+      },
+      "code": 1,
+      "ok": true
+    },
+    "explicit": {
+      "data": {
+        "state_file": "/data/2026101169/3.txt",
+        "snapshotAttempts": 1,
+        "tabs": [
+          {
+            "current": true,
+            "index": 0,
+            "title": "Browser retention fixture",
+            "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html"
+          }
+        ],
+        "screenshot": "/data/2026101169/3.png",
+        "title": "Browser retention fixture",
+        "snapshotMutations": 0,
+        "viewport_height": 937,
+        "pixels_below": 0,
+        "text": "Local browser retention test\n[0]<button >Read retained data/>\nData remains available after task completion.",
+        "capture_degraded": false,
+        "snapshotContentMutations": 0,
+        "seq": 3,
+        "snapshotConsistent": true,
+        "screenshot_path": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\data\\2026101169\\3.png",
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29859",
+          "attempts": 1,
+          "elapsedMs": "141"
+        },
+        "browser_state": "Browser tab: 1, Title: \"Browser retention fixture\", URL: \"file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html\".\ncurrent tab is: 1",
+        "capture": {
+          "retries": 0,
+          "pageClosed": false,
+          "stage": "complete",
+          "timeoutMs": 8000,
+          "browserConnected": true,
+          "actualMode": "viewport",
+          "requestedMode": "viewport",
+          "attempts": 1,
+          "elapsedMs": "106"
+        },
+        "snapshotStrict": false,
+        "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+        "indicesUsable": true,
+        "snapshotStructuralMutations": 0,
+        "pageAppearsBlank": false,
+        "pixels_above": 0,
+        "elements": [
+          {
+            "frameIndex": 0,
+            "visible": true,
+            "snapshotId": "keep",
+            "listeners": [
+              "click"
+            ],
+            "snapshotTag": "button",
+            "index": 0,
+            "className": "",
+            "listenerDetection": "heuristic",
+            "rect": [
+              8,
+              80,
+              129,
+              21
+            ],
+            "frameUrl": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+            "xpath": "html/body/button",
+            "tag": "BUTTON",
+            "id": "keep",
+            "hasListeners": true,
+            "text": "Read retained data",
+            "value": "",
+            "resolved": true
+          }
+        ],
+        "elementCount": 1,
+        "elementsTruncated": false,
+        "page_height": 937
+      },
+      "code": 1,
+      "ok": true
+    },
+    "clean": {
+      "data": {
+        "snapshotConsistent": true,
+        "state_file": "/data/2026101169/4.txt",
+        "snapshotAttempts": 1,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29972",
+          "attempts": 1,
+          "elapsedMs": "28"
+        },
+        "tabs": [
+          {
+            "current": true,
+            "index": 0,
+            "title": "Browser retention fixture",
+            "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html"
+          }
+        ],
+        "browser_state": "Browser tab: 1, Title: \"Browser retention fixture\", URL: \"file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html\".\ncurrent tab is: 1",
+        "snapshotStrict": false,
+        "title": "Browser retention fixture",
+        "snapshotMutations": 0,
+        "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+        "indicesUsable": true,
+        "viewport_height": 937,
+        "pixels_below": 0,
+        "snapshotStructuralMutations": 0,
+        "pageAppearsBlank": false,
+        "pixels_above": 0,
+        "elements": [
+          {
+            "frameIndex": 0,
+            "visible": true,
+            "snapshotId": "keep",
+            "listeners": [
+              "click"
+            ],
+            "snapshotTag": "button",
+            "index": 0,
+            "className": "",
+            "listenerDetection": "heuristic",
+            "rect": [
+              8,
+              80,
+              129,
+              21
+            ],
+            "frameUrl": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+            "xpath": "html/body/button",
+            "tag": "BUTTON",
+            "id": "keep",
+            "hasListeners": true,
+            "text": "Read retained data",
+            "value": "",
+            "resolved": true
+          }
+        ],
+        "elementCount": 1,
+        "text": "Local browser retention test\n[0]<button >Read retained data/>\nData remains available after task completion.",
+        "elementsTruncated": false,
+        "screenshot_skipped": "not-requested",
+        "snapshotContentMutations": 0,
+        "page_height": 937,
+        "seq": 4
+      },
+      "code": 1,
+      "ok": true
+    },
+    "cleanup": {
+      "data": {
+        "result": {
+          "overlays": 0,
+          "listeners": 0
+        },
+        "awaited": true,
+        "evalTimeoutMs": "60000",
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29996",
+          "attempts": 1,
+          "elapsedMs": "4"
+        },
+        "screenshot_skipped": "not-requested",
+        "seq": 5
+      },
+      "code": 1,
+      "ok": true
+    },
+    "click": {
+      "data": {
+        "urlBefore": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+        "probeTrustworthy": true,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29847",
+          "attempts": 1,
+          "elapsedMs": "153"
+        },
+        "tabCountBefore": 1,
+        "textLengthAfter": 69,
+        "tabCountAfter": 1,
+        "retrySafe": false,
+        "textLengthBefore": 94,
+        "observationComplete": true,
+        "mode": "native",
+        "effective": true,
+        "urlAfter": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+        "hit": {
+          "tag": "BUTTON",
+          "text": "Read retained data",
+          "outerHtml": "<button id=\"keep\" onclick=\"document.querySelector('#result').textContent='Clicked successfully'\">Read retained data</button>"
+        },
+        "actionStatus": "completed",
+        "observationWindowMs": 500,
+        "changeStatus": "observed",
+        "screenshot_skipped": "not-requested",
+        "seq": 6,
+        "changed": true
+      },
+      "code": 1,
+      "ok": true
+    },
+    "result": {
+      "data": {
+        "snapshotConsistent": true,
+        "state_file": "/data/2026101169/7.txt",
+        "snapshotAttempts": 1,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29973",
+          "attempts": 1,
+          "elapsedMs": "27"
+        },
+        "tabs": [
+          {
+            "current": true,
+            "index": 0,
+            "title": "Browser retention fixture",
+            "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html"
+          }
+        ],
+        "browser_state": "Browser tab: 1, Title: \"Browser retention fixture\", URL: \"file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html\".\ncurrent tab is: 1",
+        "snapshotStrict": false,
+        "title": "Browser retention fixture",
+        "snapshotMutations": 0,
+        "url": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+        "indicesUsable": true,
+        "viewport_height": 937,
+        "pixels_below": 0,
+        "snapshotStructuralMutations": 0,
+        "pageAppearsBlank": false,
+        "pixels_above": 0,
+        "elements": [
+          {
+            "frameIndex": 0,
+            "visible": true,
+            "snapshotId": "keep",
+            "listeners": [
+              "click"
+            ],
+            "snapshotTag": "button",
+            "index": 0,
+            "className": "",
+            "listenerDetection": "heuristic",
+            "rect": [
+              8,
+              80,
+              129,
+              21
+            ],
+            "frameUrl": "file:///D:/code/project/project-browser-use/deepseek-browser-use/docs/assets/observation-fixture.html",
+            "xpath": "html/body/button",
+            "tag": "BUTTON",
+            "id": "keep",
+            "hasListeners": true,
+            "text": "Read retained data",
+            "value": "",
+            "resolved": true
+          }
+        ],
+        "elementCount": 1,
+        "text": "Local browser retention test\n[0]<button >Read retained data/>\nClicked successfully",
+        "elementsTruncated": false,
+        "screenshot_skipped": "not-requested",
+        "snapshotContentMutations": 0,
+        "page_height": 937,
+        "seq": 7
+      },
+      "code": 1,
+      "ok": true
+    },
+    "close": {
+      "data": {
+        "pagesRetained": true,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "30000",
+          "attempts": 1,
+          "elapsedMs": "0"
+        },
+        "browserRetained": true,
+        "remainingTasks": 0
+      },
+      "code": 1,
+      "ok": true
+    },
+    "idle": {
+      "data": {
+        "browser": {
+          "headless": false,
+          "mode": "cdp",
+          "profileDir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069",
+          "engine": "chromium",
+          "type": "chrome"
+        },
+        "count": 0,
+        "tasks": []
+      },
+      "code": 1,
+      "ok": true
+    },
+    "reuse": {
+      "data": {
+        "engineHonored": true,
+        "networkRecording": "on(按全局配置)",
+        "effectiveBrowser": "chrome",
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29944",
+          "attempts": 1,
+          "elapsedMs": "56"
+        },
+        "browser": {
+          "note": "browser=chrome：走 CDP（自己拉进程 + --remote-debugging-port + connectOverCDP），profile=D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069（托管 profile，与用户日常那份 Chrome 互不干扰）",
+          "profileDir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069",
+          "chrome": true,
+          "upload": {
+            "maxBytes": "52428800",
+            "dir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\upload",
+            "enabled": true
+          },
+          "profileSeenBefore": true,
+          "type": "chrome",
+          "profileDirectory": "Default",
+          "userProfile": false,
+          "cdp": {
+            "product": "Chrome/154.0.8037.98",
+            "notes": [
+              "下载目录:C:\\Users\\Administrator\\Downloads\\broswer(Browser.setDownloadBehavior)",
+              "已授权限:clipboardReadWrite / clipboardSanitizedWrite / notifications"
+            ],
+            "protocolVersion": "1.3"
+          },
+          "executable": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+          "profileNote": "这份 profile 之前用过(上次是 browser=chrome):里面已有的登录态应该还在。 browser=chrome：走 CDP（自己拉进程 + --remote-debugging-port + connectOverCDP），profile=D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069（托管 profile，与用户日常那份 Chrome 互不干扰）",
+          "headless": false,
+          "mode": "cdp",
+          "previousBrowser": "chrome",
+          "trace": {
+            "redact": true,
+            "dir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\logs\\trace\\20261011",
+            "enabled": true
+          },
+          "engine": "chromium",
+          "viewport": {
+            "mode": "window",
+            "size": "window"
+          },
+          "previousEngine": "chromium",
+          "userDataDir": "D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069"
+        },
+        "profileSeenBefore": true,
+        "id": "2026101170",
+        "requestedBrowser": "chrome",
+        "profileNote": "这份 profile 之前用过(上次是 browser=chrome):里面已有的登录态应该还在。 browser=chrome：走 CDP（自己拉进程 + --remote-debugging-port + connectOverCDP），profile=D:\\code\\project\\project-browser-use\\deepseek-browser-use\\.dsb-backend\\profile-10069（托管 profile，与用户日常那份 Chrome 互不干扰）"
+      },
+      "code": 1,
+      "ok": true
+    },
+    "new-tab": {
+      "data": {
+        "snapshotConsistent": true,
+        "state_file": "/data/2026101170/1.txt",
+        "snapshotAttempts": 1,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29959",
+          "attempts": 1,
+          "elapsedMs": "41"
+        },
+        "tabs": [
+          {
+            "current": true,
+            "index": 0,
+            "title": "",
+            "url": "about:blank"
+          }
+        ],
+        "browser_state": "Browser tab: 1, URL: \"about:blank\".\ncurrent tab is: 1",
+        "snapshotStrict": false,
+        "title": "",
+        "snapshotMutations": 0,
+        "url": "about:blank",
+        "indicesUsable": true,
+        "viewport_height": 937,
+        "pixels_below": 0,
+        "snapshotStructuralMutations": 0,
+        "pageAppearsBlank": true,
+        "pixels_above": 0,
+        "elements": [],
+        "elementCount": 0,
+        "text": "",
+        "elementsTruncated": false,
+        "screenshot_skipped": "not-requested",
+        "snapshotContentMutations": 0,
+        "page_height": 937,
+        "seq": 1
+      },
+      "code": 1,
+      "ok": true
+    },
+    "second-close": {
+      "data": {
+        "pagesRetained": true,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "30000",
+          "attempts": 1,
+          "elapsedMs": "0"
+        },
+        "browserRetained": true,
+        "remainingTasks": 0
+      },
+      "code": 1,
+      "ok": true
+    },
+    "explicit-close": {
+      "data": {
+        "pagesRetained": false,
+        "retryBudget": {
+          "retries": 0,
+          "commandAttempts": 1,
+          "remainingMs": "29985",
+          "attempts": 1,
+          "elapsedMs": "15"
+        },
+        "browserRetained": false,
+        "remainingTasks": 0
+      },
+      "code": 1,
+      "ok": true
+    },
+    "released": {
+      "data": {
+        "count": 0,
+        "tasks": []
+      },
+      "code": 1,
+      "ok": true
+    }
+  }
+}

@@ -138,9 +138,14 @@ var subcommandSpecs = map[string][]argSpec{
 		{names: []string{"--profile-directory"}, dest: "profile_directory", takesValue: true, metavar: "NAME", help: "Chrome profile 子目录;需要 --user-data-dir"},
 		{names: []string{"--browser"}, dest: "browser", takesValue: true, metavar: "BROWSER",
 			help: "auto/chromium/chrome/edge/firefox"},
-		{names: []string{"--headful"}, dest: "headful", help: "弹出真实窗口(默认无头)"},
+		{names: []string{"--headless"}, dest: "headless", help: "使用无头模式(默认显示浏览器窗口);不能与 --headful 同用"},
+		{names: []string{"--headful"}, dest: "headful", help: "显示浏览器窗口(默认行为,保留兼容旧命令);不能与 --headless 同用"},
+	},
+	"close": {
+		{names: []string{"--close-browser"}, dest: "close_browser", help: "显式关闭浏览器;仅允许没有其他任务时使用"},
 	},
 	"run": {
+		{names: []string{"--wait-until"}, dest: "wait_until", takesValue: true, metavar: "STAGE", help: "导航等待阶段:commit/domcontentloaded/load/networkidle"},
 		{names: []string{"method"}, dest: "method", metavar: "METHOD", help: "命令名,例如 go_to_url"},
 		{names: []string{"--params"}, dest: "params", takesValue: true, metavar: "PARAMS",
 			help: "参数 JSON,或 @文件.json,或 - 读标准输入"},
@@ -182,6 +187,8 @@ var subcommandSpecs = map[string][]argSpec{
 	"uploads": {{names: []string{"--delete"}, dest: "delete", takesValue: true, metavar: "DELETE",
 		help: "要删除的暂存文件名"}},
 	"state": {
+		{names: []string{"--highlight"}, dest: "highlight", help: "绘制元素高亮(默认关闭,不影响索引)"},
+		{names: []string{"--screenshot"}, dest: "screenshot", help: "显式保存本次页面截图(默认不截图)"},
 		{names: []string{"--max-elements"}, dest: "max_elements", takesValue: true, metavar: "MAX_ELEMENTS",
 			help: "内联元素条数上限"},
 		{names: []string{"--full"}, dest: "full", help: "连元素清单与结构化文本一起打印"},
@@ -271,6 +278,7 @@ type Args struct {
 	SourceUserDataDir      *string
 	SourceProfileDirectory *string
 	Headful                bool
+	Headless               bool
 	Params                 *string
 	Param                  []string
 	RetrySpur              bool
@@ -292,6 +300,10 @@ type Args struct {
 	MaxElements            *int
 	Full                   bool
 	TextOnly               bool
+	Highlight              bool
+	Screenshot             bool
+	CloseBrowser           bool
+	WaitUntil              *string
 	ViewportExpansion      *int
 	IncludeFrames          bool
 
@@ -573,6 +585,9 @@ func parseArgs(argv []string) (*Args, error) {
 	if err := assignOptions(args, values, flags, repeated); err != nil {
 		return nil, err
 	}
+	if args.Headless && args.Headful {
+		return nil, usageErrorf("--headless cannot be combined with --headful")
+	}
 	if !args.SelectLenient {
 		for _, path := range repeated["select"] {
 			if err := validateSelectPath(path); err != nil {
@@ -708,6 +723,7 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.SourceUserDataDir = readString("source_user_data_dir")
 	args.SourceProfileDirectory = readString("source_profile_directory")
 	args.Params = readString("params")
+	args.WaitUntil = readString("wait_until")
 	args.Out = readString("out")
 	args.Grep = readString("grep")
 	args.Delete = readString("delete")
@@ -758,6 +774,7 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.Diagnostics = flags["diagnostics"]
 	args.Verbose = flags["verbose"]
 	args.Headful = flags["headful"]
+	args.Headless = flags["headless"]
 	args.RetrySpur = flags["retry_on_spurious"]
 	args.KeepGoing = flags["keep_going"]
 	args.StopExpect = flags["stop_on_expect_failure"]
@@ -765,6 +782,9 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.Wait = flags["wait"]
 	args.Full = flags["full"]
 	args.TextOnly = flags["text_only"]
+	args.Highlight = flags["highlight"]
+	args.Screenshot = flags["screenshot"]
+	args.CloseBrowser = flags["close_browser"]
 	args.IncludeFrames = flags["include_frames"]
 	args.KeepBrowser = flags["keep_browser"]
 	return nil

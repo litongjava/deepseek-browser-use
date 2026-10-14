@@ -10,7 +10,7 @@
 智能体自己读不了网页、点不了按钮。这个服务把一台真实的浏览器包成一个 HTTP 端点：智能体发一条 `{id, method, params}`，服务就去操作浏览器，然后把页面变成两样它能读懂的东西 ——
 
 - **可交互结构化文本**：整页 DOM 压成 `[index]<a >登录/>` 这样的行，`[index]` 就是可以点的元素编号；
-- **截图**：每次页面变化自动留一张，落在 `data/<id>/` 下，可以直接喂给视觉模型。
+- **截图**：默认关闭，显式请求才生成，落在 `data/<id>/` 下，可以直接喂给视觉模型。
 
 它不是一个抓取库，也不是无头爬虫框架：它是一个**长驻的、有状态的浏览器服务** —— 一个浏览器进程、一份持久化 profile，多个任务靠页签隔离，登录态一直留着。
 
@@ -75,12 +75,11 @@ dsb health
 ### 一个最小的使用示例
 
 ```shell
-# 1. 起一个任务（--headful 会弹出真实窗口，可以看着它操作）
-dsb --id 1001 start --headful
+# 1. 起一个任务（默认显示浏览器窗口，可以看着它操作）
+dsb --id 1001 start
 
-# 2. 打开页面（响应里带回这一页的自动截图）
-dsb --id 1001 run go_to_url -p url=https://example.com
-# {"data":{"status":200,"seq":1,"screenshot":"/data/1001/1.png",...}}
+# 2. 打开页面，默认等 DOMContentLoaded，可选择等待阶段
+dsb --id 1001 run go_to_url -p url=https://example.com --wait-until domcontentloaded
 
 # 3. 取浏览器状态：browser_state 是页签，text 是可交互结构化文本
 dsb --id 1001 state
@@ -88,12 +87,14 @@ dsb --id 1001 state
 # 4. 按索引点一下
 dsb --id 1001 run click_element_by_index -p index=0
 
-# 5. 看这一步的截图
-#    http://localhost:10049/data/1001/2.png
+# 5. 需要截图时显式请求；仅需高亮则加 --highlight
+dsb --id 1001 state --screenshot
 
-# 6. 收工
+# 6. 结束任务，最后一个任务的浏览器及页面保留给用户
 dsb --id 1001 close
 ```
+
+`start` 默认显示窗口，旧命令的 `--headful` 保留兼容；仅在需要无头模式时传 `--headless`，两个开关不能同时使用。协议 `start`（包括批量命令）省略 `headless` 或传 `false` 均显示窗口，传 `true` 才无头。回读 `data.browser.headless` 确认实际模式。用法与本地验证记录见[默认显示浏览器窗口](docs/default-browser-mode.md)。
 
 > 服务还没起也行:`dsb` 会在连不上时按 `~/.dsb/config.json` 记下的仓库位置把后端拉起来,再重试一次
 > (`dsb server start|stop|status|logs` 可以显式管理,见 [`dsb/README.md`](dsb/README.md))。
@@ -362,7 +363,7 @@ dsb --port 10049 upload 图样.jpg --filename 图样-改个名.jpg   # 换个服
 浏览器是**全进程共享**的：一个 Chrome 进程、一份 profile，任务之间靠**页签**隔离。
 
 - 第一个 `start` 会把浏览器拉起来，之后每个 `start` 只是认领/新开自己的页签；
-- `close` 只关掉该任务自己的页签，最后一个任务关闭时才把浏览器收掉；
+- `close` 结束任务；最后一个任务保留浏览器和数据页，后续任务另开页签复用；
 - **浏览器类型**、有头/无头、profile 目录、可执行文件是**浏览器级别**的属性：与正在运行的那个不一致时，若已经没有任务在跑就按新配置重建（改了配置、换了浏览器都不用重启服务），若还有任务在跑就明确报错，不会把别人的页签弄没；
 - `start` 的返回里带 `data.browser`，说明这次到底用的哪个浏览器、哪份 profile：
 
@@ -408,8 +409,7 @@ dsb --port 10049 start --browser edge
 就用内置 Chromium），并把原因写进 `data.browser.note`；显式写了 `chrome` / `edge` 就是「我就要这个」，
 没装会直接报错并说清怎么改 —— 否则「明明要了 Edge，结果用 Chrome 跑出另一种页面」这种问题很难查。
 
-**一次只能有一个浏览器。** 类型可以在任务之间切换（把在跑的任务 `close` 掉再 `start` 即可，不用重启
-服务），但不能在任务运行中切换：那会连累别的任务的页签，服务会明确报错。想同时用两个浏览器（例如一边
+**每个服务一个浏览器。** 切换类型、显示模式或 profile 时，先结束任务并显式 `close --close-browser`，再 `start`。配置不兼容时服务报错，不会自动关闭保留页。想同时用两个浏览器（例如一边
 Chrome 一边 Edge），再起一个服务进程，给它们配不同的端口与 profile 目录。
 
 **profile 目录是跟着「浏览器产品」走的**：内置 Chromium 与本机 Chrome 共用 `browser.profileDir`
@@ -534,7 +534,7 @@ Chromium 会走到空白页或 HTTP 400；同一流程在 Firefox 139 下能正�
 | UA | 不覆写成 Chrome，UA 就是 Firefox 自己的 |
 
 `start` 的返回里会多一个 `data.browser.engine`，用它确认这次到底跑的是哪个引擎。引擎是浏览器级配置：
-改了之后若还有任务在跑，`start` 会报错而不是把别人的页签弄没；空闲时下一次 `start` 会自动重建。
+更改后 `start` 会提示配置不兼容；先结束任务并显式关闭浏览器，再用新配置启动。空闲浏览器也不会自动重建。
 **换引擎 = 换一套 profile 格式，所以要重新登录一次**。
 
 `start` 的回执里还会明确给出「我要的」与「实际用的」：
@@ -605,7 +605,7 @@ dsb --port 10049 selftest --browser chrome
 
 代价是 driver 成了单点：它一旦崩，所有任务一起断。所以 `start` 里带了自愈 —— 第一次失败就把共享实例判死、重建一个再试一次（实测 driver 被杀后，下一次 `start` 会在 ~340ms 内重建并成功）。
 
-`close` 只关掉该任务自己的页签，**不会**动共享的 driver，也不会连累别的任务。driver 与（用用户 profile 时）
+`close` 在还有其他任务时关闭本任务页签；最后一个任务结束时保留页面和浏览器，移除任务监听与路由。driver 与（用用户 profile 时）
 我们自己拉起来的 Chrome 都由 JVM 退出时的 shutdown hook 收尾；即使进程被硬杀（`taskkill /F`），driver 也会
 因为管道关闭自己退出，不会留下孤儿进程。
 
@@ -621,14 +621,14 @@ current tab is: 1               		[12]<a name='tj_login'>登录/>
 - `browser_state` 告诉你**有几个页签、当前在哪一个**；
 - `text` 告诉你**页面上有什么、哪些能点**，每行的 `[index]` 就是操作时要传的索引。
 
-### 页面变化自动留档
+### 文本留档与显式截图
 
 | 时机 | 产物 |
 | --- | --- |
-| 「会改变页面」的方法执行成功 | `data/<id>/<序号>.png` |
-| 每次 `get_browser_state` | `data/<id>/<序号>.png` **+** 同名的 `.txt`（页签 + 结构化文本） |
+| 「会改变页面」的方法执行成功 | 默认不截图；显式设置 `browser.capture.enabled=true` 后才自动生成 PNG |
+| 每次 `get_browser_state` | `data/<id>/<序号>.txt`；显式 `screenshot:true` 或 CLI `state --screenshot` 时另有 PNG |
 
-序号从 1 开始递增，`data/<id>/1.png`、`2.png`、`3.png`…… 一对 `.png`/`.txt` 序号相同就代表是同一时刻的页面。两个文件都能直接 GET，视觉模型按 URL 取图即可。一次 `commands` 批量请求里，每一步的截图都在它自己那一步的 `data.screenshot` 里 —— 一个批次就是一段页面变化历史。
+默认高亮关闭，索引始终生成；每次读取前清理旧标记与高亮监听器。序号从 1 开始递增，截图仅在显式启用时存在。 一对 `.png`/`.txt` 序号相同就代表是同一时刻的页面。两个文件都能直接 GET，视觉模型按 URL 取图即可。显式启用全局自动截图后，一次 `commands` 批量请求里，每一步的截图都在它自己那一步的 `data.screenshot` 里 —— 一个批次就是一段页面变化历史。
 
 截图**截不出来**时不会拖着命令白等：默认单次 8 秒、连续失败 3 次就熔断（真失败 120 秒、伪故障只 15 秒），熔断期间命令不再为截图付时间，回执里写明 `data.capture_degraded: true` 与 `data.retryAfterMs` —— 那是服务端在告诉你「现在是盲操作」，改用文本取证，或用 `screenshot` + `force:true` 探一次（探测失败不延长冷却）。冷却到期会**半开**：计数清零，重新累计到阈值才再熔断（旧实现只在成功时清零，熔断过一次之后一次偶发超时就又把画面关两分钟）。
 
@@ -865,11 +865,11 @@ deepseek-browser-use/
 - `data/`、`logs/trace/` 与 `upload/` 里的文件**都不会自动清理**，长期跑要自己定期清理。
 - 追踪日志**默认脱敏**（手机号、18 位身份证号/统一社会信用代码、邮箱、16～19 位长数字 → `***`，可用 `browser.trace.redact` 追加公司名/商标名等自定义规则），但这是**尽力而为**：姓名、门牌号这类按模式认不出来的个人信息不会被掩掉，交付或共享日志前自己过一眼。需要原文时把 `browser.trace.redact.enabled` 设为 `false`。
 
-### 停服务前先关任务（否则会留下孤儿浏览器）
+### 任务结束保留浏览器，停止服务需显式操作
 
 浏览器是**独立进程**：强杀服务（或它的 mvn 进程）不会关掉它启动的浏览器，残留的浏览器会一直占着 profile 目录，下一次 `start` 可能卡到启动超时（默认 60 秒，`browser.launch.timeoutMs`）。
 
-- **规范做法**：先 `close` 掉任务再停服务 —— 关掉最后一个任务时浏览器会跟着退出。
+- **规范做法**：任务结束用 `close` 保留浏览器；确需停服务时用 `dsb server stop`，它会显式关闭浏览器。单独关闭闲置浏览器可用 `close --close-browser`；有其他任务时拒绝。
 - **别手动拼这套流程**：后台启动 / 干净停止各有 Windows 与 macOS/Linux 两套脚本。
 
   Windows：
@@ -919,7 +919,7 @@ deepseek-browser-use/
 | 只是想看实时日志 | 不用开窗口：`Get-Content -Wait logs\server\server-<端口>.out.log` |
 
 > **别直接叉掉那个窗口**：关窗口 = 杀进程 = 服务停，浏览器跟着退出，**session cookie 型的登录态（12306、政务站点）一并失效**，人得重新登录一次。要停服务用 `stop-server.cmd`（先 `shutdown` 关任务与浏览器，再结束进程树）。
-- **重启服务是有代价的**：关掉最后一个任务时浏览器就退出了，而 **session cookie 型的登录态**（12306、政务站点等）会随之失效，人工得重新登录一次；持久 cookie 不受影响。所以「顺手重启一下」之前先想清楚有没有正在进行的登录环节。
+- **重启服务是有代价的**：普通 `close` 保留浏览器；显式关闭浏览器或重启服务后，**session cookie 型的登录态**（12306、政务站点等）会随之失效，人工得重新登录一次；持久 cookie 不受影响。所以「顺手重启一下」之前先想清楚有没有正在进行的登录环节。
 - 已经留下了孤儿：先结束残留的浏览器进程，再重启服务。
 - 服务侧也有兜底：Windows 上会自动清掉 profile 里的 `parent.lock` 与 `.startup-incomplete` 这两种残留标记（`parent.lock` 删得掉就说明没有活着的持有者），并且第一次启动失败后会自动重建驱动重试一次 —— 实测这个重试通常就能起来（表现为第一次等 60 秒、第二次 2 秒）。
 

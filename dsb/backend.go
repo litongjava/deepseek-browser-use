@@ -123,7 +123,13 @@ func (l ServerLayout) outLog() string {
 func (l ServerLayout) errLog() string {
 	return filepath.Join(l.RepoDir, "logs", "server", fmt.Sprintf("server-%d.err.log", l.Port))
 }
-func (l ServerLayout) profileDir() string { return filepath.Join(l.RepoDir, ".dsb-backend", "profile") }
+func (l ServerLayout) profileDir() string {
+	// Preserve the default service's existing login state.
+	if l.Port == DefaultPort {
+		return filepath.Join(l.RepoDir, ".dsb-backend", "profile")
+	}
+	return filepath.Join(l.RepoDir, ".dsb-backend", fmt.Sprintf("profile-%d", l.Port))
+}
 
 // baseURL 拼出这个端口的服务地址(与客户端用的同一个)。
 func (l ServerLayout) baseURL() string {
