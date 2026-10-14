@@ -24,7 +24,7 @@
 
 ### 输出失败与动作执行分开处理
 
-`dsb methods` 是客户端子命令，`dsb run list_methods` 调用协议方法。任务 ID 必须为数字。`--select` 是单路径，不是逗号分隔的多字段查询。需要多个字段时保存完整 JSON 再在读取程序中投影。
+`dsb list_methods` 与 `dsb methods` 是等价的客户端子命令，共用过滤、输出选项与退出码；例如 `dsb list_methods click --json` 按名称子串过滤（不区分大小写），不会执行方法。`dsb run list_methods` 仍用于调用协议方法。旧版 CLI 若不认识新别名，先用 `dsb methods` 并更新 CLI。任务 ID 必须为数字。`--select` 是单路径，不是逗号分隔的多字段查询。需要多个字段时保存完整 JSON 再在读取程序中投影。
 
 字段不存在只能在收到回执后判断，因此退出码 3 不等于动作没有执行。优先读取当前会话留档、`dsb last` 或新页面状态，不要重新点击、提交或导航来修复显示问题。`--out` 会保存完整响应且优先于 `--select`；不要用该组合测试路径是否存在。
 
@@ -32,7 +32,7 @@ PowerShell 的 `> 文件` 与客户端 `--out` 不是一回事：Windows PowerSh
 
 ### 回执太大：`--out` 落盘、`--grep` 只看命中行
 
-`run`、`js`、`start`、`close`、`state`、`health`、`methods`、`config`、`tasks` 统一提供两个输出开关（只影响**怎么打印**，不改变发出去的请求，也不会多一次往返）：
+`run`、`js`、`start`、`close`、`state`、`health`、`methods`（别名 `list_methods`）、`config`、`tasks` 统一提供两个输出开关（只影响**怎么打印**，不改变发出去的请求，也不会多一次往返）：
 
 ```bash
 # 完整 JSON 写进文件，stdout 只留一行「已写入 …（N 字符，M 行）」

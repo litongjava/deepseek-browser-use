@@ -20,6 +20,7 @@ whenToUse: 需要在真实浏览器里打开网页、阅读页面、填表、点
 | 要干的事 | 正确写法 |
 | --- | --- |
 | 看服务活没活 | `dsb --port 10049 health`|
+| 列出支持的方法 | `dsb list_methods`（与 `dsb methods` 等价）；按名称过滤用 `dsb list_methods click` |
 | 服务没起 | 不用管：普通命令会自动拉起后端并重试一次（显式管理用 `dsb server start` / `dsb server stop`） |
 | 开任务（默认显示窗口） | `dsb --port 10049 --id 1001 start --browser chrome` |
 | 走一步 | `dsb --port 10049 --id 1001 run go_to_url -p url=https://example.com` |
@@ -46,8 +47,8 @@ dsb每次调用都留档（`logs/agent/<会话>/`、`steps.log`）、
 - 默认地址：`http://localhost:10049`
 - 服务也可能在**别的机器**上，或本机同时开着好几个实例（不同端口 = 不同 profile / 登录态）：用 `--host`/`--port` 指定，或 `dsb server target add <名字> --host <主机> --port <端口>` 登记后 `--use <名字>`。远端目标不自动拉起（那台机器上的服务得自己起）。
 - 启动服务：`dsb server start`（连不上时普通命令会自动拉起）；也可以 `java -jar deepseek-browser-use-<版本>-<平台>.jar`（发行包），或开发态在 `playwright-server` 目录执行 `mvn spring-boot:run`
-- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物。**开工先运行 `dsb methods`（CLI 子命令），或 `dsb run list_methods`（协议方法）；不要运行 `dsb list_methods`**（连它都没有 = 这份包太旧），要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
-- **只有一个业务端点**：`POST http://localhost:10049/playwright/command`
+- **发行包可能落后于源码**：`dist/` 下的 jar 是构建产物。**开工先运行 `dsb list_methods` 或 `dsb methods`（等价的 CLI 子命令），也可用 `dsb run list_methods` 调用协议方法**。旧版 CLI 不认识 `list_methods` 子命令时先用 `methods`，再更新 CLI；后端要跟源码一致就先 `dsb server build` 再 `dsb server restart`（它按当前 commit 构建并归档，启动时优先用最新的那份；`dsb server status` 会把全部候选 jar 与选中的那份列出来）。
+- **只有一个业务端点**：`POST /playwright/command`
 - 另有 `GET /playwright/health`（健康检查）与 `GET /data/**`（读取截图与结构化文本）
 - 共 122 个方法（拿不准就先 `list_methods`），`get_browser_state` 是阅读页面的入口，其余方法负责操作与观测（`send_keys` 有别名 `press_key`，`key` 与 `keys` 参数通用）
 - **调客户端一律写 `dsb ...`（装在 `PATH` 上，任何目录直接敲），不要用 `curl`/`Invoke-WebRequest` 手拼 JSON。**

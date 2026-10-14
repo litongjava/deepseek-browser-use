@@ -63,6 +63,7 @@ dsb --id 1001 close                           # 关掉任务
 | 子命令 | 作用 |
 | --- | --- |
 | `health` / `config` / `tasks` / `methods [过滤词]` | 运维自省:健康检查、生效配置、活着的任务、命令清单 |
+| `list_methods [过滤词]` | `methods` 的等价别名，支持相同的过滤与输出选项，例如 `dsb list_methods click --json` |
 | `start [--browser chrome] [--headless]` | 起任务，默认显示窗口；`--headless` 显式无头；`--headful` 保留兼容，不能与 `--headless` 同用；`--browser` 支持 auto/chromium/chrome/edge/firefox |
 | `close [--close-browser]` / `shutdown` | 默认结束任务，最后一个任务保留浏览器和页面；`--close-browser` 显式关闭（其他任务存在时拒绝）；`shutdown` 关闭所有任务与浏览器 |
 | `run <method> [-p k=v] [--params @文件] [--wait-until STAGE]` | 发一条命令；导航等待可选 commit/domcontentloaded/load/networkidle，默认 domcontentloaded；带别名容错:`press_key` 会自动映射成 `send_keys`(`key` 与 `keys` 参数通用) |

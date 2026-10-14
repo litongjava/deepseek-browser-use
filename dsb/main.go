@@ -88,7 +88,7 @@ func dispatch(client *Client, args *Args, out *Printer) (int, error) {
 	switch args.Command {
 	case "health":
 		return cmdHealth(client, args, out)
-	case "methods":
+	case "methods", "list_methods":
 		return cmdMethods(client, args, out)
 	case "config":
 		return cmdConfig(client, args, out)

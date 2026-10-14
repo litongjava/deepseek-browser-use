@@ -35,34 +35,35 @@ type argSpec struct {
 // commandNames 子命令名。
 //
 // start / close 既是子命令**也是**服务端方法名,不能一律当成误用(见 subcommandMisuseHint)。
-var commandNames = []string{"health", "methods", "config", "tasks", "last", "recipes", "start", "close",
+var commandNames = []string{"health", "methods", "list_methods", "config", "tasks", "last", "recipes", "start", "close",
 	"profiles", "profile", "shutdown", "run", "batch", "job", "upload", "uploads", "state", "js", "selftest", "server"}
 
-// subcommandAlsoMethod 这两个名字在服务端也是合法方法,`dsb run start` / `dsb run close` 是正常用法。
-var subcommandAlsoMethod = map[string]bool{"start": true, "close": true}
+// These subcommands are also valid server methods when used with run.
+var subcommandAlsoMethod = map[string]bool{"start": true, "close": true, "list_methods": true}
 
 // commandHelp 每个子命令的一行说明(与 Python 版 --help 里的措辞一致)。
 var commandHelp = map[string]string{
-	"health":   "健康检查",
-	"methods":  "命令清单",
-	"config":   "服务端生效配置",
-	"tasks":    "当前活着的任务",
-	"last":     "读取本会话最近响应;显式 --id 按任务筛选",
-	"recipes":  "配方列表;--run 直接跑一个",
-	"profiles": "列出可用浏览器 profiles",
-	"profile":  "管理 profiles: list / clone",
-	"start":    "起一个任务",
-	"close":    "关掉这个任务",
-	"shutdown": "关掉所有任务与共享浏览器",
-	"run":      "执行一条命令",
-	"batch":    "批量执行命令(数组 JSON,默认读标准输入)",
-	"job":      "查/等异步任务",
-	"upload":   "把文件送到服务端暂存区",
-	"uploads":  "列出暂存文件;--delete 删一个",
-	"state":    "页面状态摘要",
-	"js":       "执行 JavaScript",
-	"selftest": "对当前服务跑一遍端到端自检",
-	"server":   "管理后端服务与目标(init/build/start/stop/restart/status/logs/target)",
+	"health":       "健康检查",
+	"methods":      "命令清单",
+	"list_methods": "命令清单(methods 的别名)",
+	"config":       "服务端生效配置",
+	"tasks":        "当前活着的任务",
+	"last":         "读取本会话最近响应;显式 --id 按任务筛选",
+	"recipes":      "配方列表;--run 直接跑一个",
+	"profiles":     "列出可用浏览器 profiles",
+	"profile":      "管理 profiles: list / clone",
+	"start":        "起一个任务",
+	"close":        "关掉这个任务",
+	"shutdown":     "关掉所有任务与共享浏览器",
+	"run":          "执行一条命令",
+	"batch":        "批量执行命令(数组 JSON,默认读标准输入)",
+	"job":          "查/等异步任务",
+	"upload":       "把文件送到服务端暂存区",
+	"uploads":      "列出暂存文件;--delete 删一个",
+	"state":        "页面状态摘要",
+	"js":           "执行 JavaScript",
+	"selftest":     "对当前服务跑一遍端到端自检",
+	"server":       "管理后端服务与目标(init/build/start/stop/restart/status/logs/target)",
 }
 
 // commonSpecs 是通用选项:顶层与每个子命令都认。
@@ -117,10 +118,13 @@ func outputSwitches() []argSpec {
 	}
 }
 
+var methodsSpecs = []argSpec{{names: []string{"filter"}, dest: "filter", takesValue: false, metavar: "FILTER",
+	help: "List methods whose names contain FILTER. This does not execute a method. Use dsb run METHOD to execute one."}}
+
 // subcommandSpecs 是每个子命令的专属选项与位置参数。
 var subcommandSpecs = map[string][]argSpec{
-	"methods": {{names: []string{"filter"}, dest: "filter", takesValue: false, metavar: "FILTER",
-		help: "List methods whose names contain FILTER. This does not execute a method. Use dsb run METHOD to execute one."}},
+	"methods":      methodsSpecs,
+	"list_methods": methodsSpecs,
 	"recipes": {
 		{names: []string{"--run"}, dest: "run", takesValue: true, metavar: "RUN", help: "要跑的配方名"},
 		{names: []string{"--var"}, dest: "var", takesValue: true, repeatable: true,
@@ -229,7 +233,7 @@ var subcommandSpecs = map[string][]argSpec{
 // commandsWithOutputSwitches 与 Python 版的循环一致。
 var commandsWithOutputSwitches = map[string]bool{
 	"profiles": true, "profile": true,
-	"health": true, "methods": true, "config": true, "tasks": true,
+	"health": true, "methods": true, "list_methods": true, "config": true, "tasks": true,
 	"start": true, "close": true, "state": true, "run": true, "js": true,
 }
 
