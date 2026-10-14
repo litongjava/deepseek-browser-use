@@ -1,10 +1,9 @@
 ---
 name: wecom-profile-complete
-description: 用 deepseek-browser-use 完善企业微信「企业信息」（work.weixin.qq.com/wework_admin/frame#profile）的实操手册：企业 logo、企业地址（三级区划级联）、企业简称（含简称命名依据，且简称只能免费改一次）、企业域名绑定、联系电话（可留空）、企业名片，以及每一步的回读确认写法。该后台是 Vue 单页应用 + hash 路由，内容区是内层滚动容器（window.scrollTo 无效），快照索引在任何点击或异步渲染后立即全部重算，视口外的元素既不进 data.text 也没有索引，所以定位一律优先用 CSS 选择器而不是索引；企业 logo 上传框是 opacity:0 且位置在视口外的隐藏 file input，正解是 upload_file 传 selector；企业微信自己的弹窗类名不一定命中 get_modals 的选择器（返回 0 不等于没有弹窗），这种情况要用 execute_js 自己扫 position:fixed 或高 z-index 的可见浮层；Vue 组件可能压根没挂事件监听器（el._vei 为 null），此时派发的 change/click 到不了框架 handler，只能直接调组件方法。企业域名绑定的前置条件是该域名已经能收信（企业微信会做 MX 校验），必须先按 .agents/skills/wecom-mail-domain 把邮箱域名绑好，绑好后本页填域名点「绑定域名」即完成，不需要再建验证邮箱。文内数据全部脱敏，替换占位符即可复用。
-whenToUse: 需要完善或修改企业微信管理后台「企业信息」里的资料（企业 logo、企业地址、企业简称、企业域名、联系电话、企业名片），或需要在 work.weixin.qq.com 这个 Vue SPA + hash 路由 + 内层滚动容器的后台上做「定位元素 → 填表 → 提交 → 回读确认」这类操作时。
+description: 使用 dsb 完善企业微信的 logo、地址、简称、域名、联系电话和企业名片；包含简称修改次数、地址级联、隐藏上传框及保存后回读。
 ---
 
-> Claude Code 调用名：`dsb-skills:wecom-profile-complete`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:wecom-profile-complete`。
 
 # 企业微信「企业信息」完善（实操手册）
 
@@ -28,37 +27,9 @@ whenToUse: 需要完善或修改企业微信管理后台「企业信息」里的
 
 ## 1. 开工前
 
-### 1.1 服务
+### 1.1 服务与浏览器
 
-先确认服务活着，再看它现在认的是什么引擎、什么 profile：
-
-```shell
-dsb --port 10049 health
-dsb --port 10049 config          # engine / profileDir / action / upload
-dsb --port 10049 tasks           # 有没有别的任务占着浏览器
-```
-
-`get_config`（或 `GET /playwright/config`）能回答三个高频问题：**这次用的是哪个引擎**、
-**profile 落在哪个目录**、**动作超时与降级开关怎么配的**。方法名拿不准时先 `list_methods`，别猜。
-
-### 1.2 浏览器：必须有头 + 用 Chrome
-
-```json
-{"id": 1001, "method": "start", "params": {"headless": false, "browser": "chrome"}}
-```
-
-- **`headless: false` 是硬要求**：这个后台必须由人在真实窗口里扫码登录，无头没法接力。
-- **`browser: "chrome"`**：企业微信后台是普通 Vue SPA，Chromium 系完全够用，**不需要**像中国商标网那样切
-  Firefox（切了反而换 profile、换登录态，白白重登一次）。
-- **换引擎等于换登录态**：Chromium 与 Firefox 的 profile 格式不通用，`edge` 也有自己一份
-  （`data.browser.profileDir` 能看出这次落在哪）。**别为了「试试看」切浏览器**，切完要重新扫码登录。
-- **一次只能有一个浏览器**：任务还在跑时 `start` 一个不同的 `browser` 会被直接拒。要换就先 `close`
-  再 `start`，**不用重启服务**。
-- 登录态**跟着共享 profile 走，不跟任务 id 走**：这次登过，下次换 id 还是登着的。
-
-回执里要看 `data.browser.type`（实际用的浏览器）、`data.browser.userProfile`
-（**`false` 说明不是用户日常那份登录态**，那就必须重新走登录）、`data.browser.note`（服务替你退让过就会写在这）。
-`data.browser.upload.dir` 就是上传文件的暂存目录，第 4 节要用。
+通用命令、等待、人工协助和任务收尾见 [主技能](../deepseek-browser-use/SKILL.md)。 使用有头 Chrome，并核对实际登录的企业。
 
 ### 1.3 开工前必须问清的字段
 
@@ -74,28 +45,6 @@ dsb --port 10049 tasks           # 有没有别的任务占着浏览器
 | 企业名片 | 可选 | 是否需要，以及要展示什么 |
 
 **地址与简称是「对外可见」的**，填之前把值复述给用户确认一次，比事后回滚便宜。
-
-### 1.4 留档（排查用）
-
-- 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、
-  `NNNNNN-<任务id>-<方法>.json` 完整请求响应、`uploads.log` 上传记录）。
-- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起、
-  `js` 子命令支持 `{{变量}}` 注入）；已有 PowerShell 排查习惯的可以用 `scripts/trace/browse.ps1`。
-- 服务端日志**默认脱敏**（手机号、18 位统一社会信用代码、邮箱、长数字 → `***`），但这是**尽力而为**：
-  公司名、门牌号这类认不出来的不会被掩掉，而且日志**不会自动清理**。
-- 任务结束提醒用户清理：`cleanup`（**默认只预演**，要真删显式传 `"dryRun": false`）。
-
-### 1.5 用客户端省掉手拼 JSON
-
-中文、引号、换行在手拼 `-d '...'` 时很容易被吃掉（PowerShell 尤其）。稳定写法：
-
-```shell
-dsb --port 10049 --id 1001 health
-dsb --port 10049 --id 1001 start --browser chrome
-dsb --port 10049 --id 1001 run go_to_url -p url=https://work.weixin.qq.com/wework_admin/frame
-dsb --port 10049 --id 1001 js @回读.js          # 支持 {{变量}} 注入
-dsb --port 10049 --id 1001 batch cmds.json --async --wait   # 长批次不受 HTTP 超时限制
-```
 
 ## 2. 登录：交给人
 
@@ -233,7 +182,7 @@ return [].slice.call(document.querySelectorAll('.profile_enterprise_item')).map(
 });
 ```
 
-要按「字段真的变了」下断言时，用批量指令的 `expect`（见第 10 节）：
+要按「字段真的变了」下断言时，用批量指令的 `expect`（见 [批量分册](../deepseek-browser-use/references/batch-and-js.md)）：
 **回执说成功不算数，断言通过才算数**。
 
 ## 4. 企业 logo
@@ -261,7 +210,7 @@ logo 行是 `.profile_enterprise_item_Logo`，点它旁边的「修改」打开�
 1. 它**不在快照里**（不可见 → 没有索引）→ 按索引的 `upload_file` 无从下手；
 2. 它**也不是「看得见但被挡住」**，所以 `mode:"mouse"` 这类强制真实鼠标的招数对它没用。
 
-**正解：`upload_file` 直接传 `selector`。** 它不需要元素可见，也不需要索引 —— 主技能第六节
+**正解：`upload_file` 直接传 `selector`。** 它不需要元素可见，也不需要索引 —— 主技能对应分册
 「上传文件」写得很明确：
 
 ```json
@@ -425,31 +374,9 @@ return {shortName: row ? row.querySelector('.profile_enterprise_item_main').inne
 
 ## 7. 企业域名绑定
 
-### 7.1 前置条件：域名必须已经能收信
+### 7.1 前置条件：域名可收信
 
-**这是本页最容易被忽略的一条**：绑定企业域名时，**企业微信会对该域名做 MX 校验**，
-所以域名必须**已经能收信**。完整顺序是：
-
-```
-① 在 DNSPod / 其它解析商给域名加两条 MX 记录
-     @ MX  mxbiz1.qq.com.  优先级 5
-     @ MX  mxbiz2.qq.com.  优先级 10
-② 在企业微信邮箱控制台把该域名开通、绑好，看到「<域名> — 使用中」
-     → 这一步见 .agents/skills/wecom-mail-domain
-③ 回到本页（#profile/domain）填域名 → 点「绑定域名」
-```
-
-**顺序不能颠倒**：先来本页绑域名，会卡在 MX 校验过不去。
-
-**验证 MX 真的生效了**（别只看解析商后台显示「已添加」，各地缓存不一样）：
-
-```shell
-nslookup -type=MX <域名> 8.8.8.8
-nslookup -type=MX <域名> 119.29.29.29     # 腾讯自己的递归，最贴近企业微信的视角
-```
-
-两条记录都出来才算数。解析商后台显示「添加成功」时往往**权威 NS 已经生效、但递归缓存还没刷新**，
-所以要查递归。
+先按 [邮箱域名技能](../wecom-mail-domain/SKILL.md) 配置 MX 并验证邮箱域名，再填写企业信息页的域名。
 
 ### 7.2 页面上的两种状态
 
@@ -538,79 +465,9 @@ return {card: row ? row.innerText.replace(/\s+/g, ' ').trim() : null};
 
 ## 9. 该站点的通用坑（Vue SPA + hash 路由）
 
-### 9.1 内层滚动容器：`window.scrollTo` 无效
+### 9.4 上传后表单仍空
 
-见 3.3。**记住结论**：滚动一律用 `el.scrollIntoView({block:'center'})`，
-不要碰 `window.scrollTo`（实测 `window.scrollY` 恒为 0，页面根本没动）。
-
-### 9.2 索引失效极快
-
-见 3.2。任何点击 / 异步渲染之后索引全部重算，沿用旧索引会拿到
-「元素不存在或页面已变化」或「索引越界」。
-
-**稳妥节奏**：一次 `get_browser_state` → 只做一个动作 → 再取快照；或者干脆全程用选择器。
-
-### 9.3 视口外元素不进快照
-
-见 3.3。**「找不到元素」先怀疑它在视口外**，不是选择器写错。
-
-**三条解法，按优先级**：
-
-1. **`get_browser_state` 传 `viewportExpansion`**（**最省事，很多人不知道它存在**）：
-
-   ```json
-   {"id":2001,"method":"get_browser_state","params":{"highlight":false,"viewportExpansion":1500}}
-   ```
-
-   视口外扩的像素数，默认 `0`。企业信息这种「一屏放不下」的页面，直接调大到 `1000~2000`
-   就能一次拿到首屏之外的元素索引，**不用滚动**。回执里的 `data.pixels_above` / `data.pixels_below`
-   会告诉你上下还差多少没进快照——**它们不为 0 就说明扩得还不够**。
-2. **改用选择器定位**：`click_element_by_selector` / `input_text_by_selector` /
-   `click_element_by_text`（按 id/class/文本定位，**不依赖快照索引**，也不受视口影响）。
-3. **滚动**：先找到内层滚动容器再滚（见 9.1）。
-
-### 9.4 Vue 组件可能压根没挂事件监听器（`el._vei` 为 null）
-
-这是本后台**最隐蔽**的一个坑，在认证流程的营业执照上传上真踩过。
-
-**怎么判断**：Vue 2 会把事件 invoker 挂在元素上，取 `el._vei`：
-
-```js
-var a = document.querySelector('<某个可点元素的选择器>');
-return {vei: a && a._vei ? Object.keys(a._vei) : null,
-        hasVue: !!(a && a.__vue__)};
-```
-
-- `_vei` **为 `null`** → 这个元素**没有挂事件监听器**，你用 JS 派发 `change` / `click`
-  **到不了框架的 handler**。表现是：`input.files` 明明设对了、事件也派发了，页面**毫无反应**，
-  而且校验还报「请上传××」。
-- 注意 **`_vei` 为 null 不等于元素不可点** —— 也可能是 Vue 3（invoker 存在 WeakMap 里，不挂元素上）。
-  所以这一步只作为「怀疑点」的证据，不是判决。
-
-**这种情况下的出路**（按顺序）：
-
-1. **换个入口**：很多时候同一件事有两条路（比如用 `upload_file` 传 `selector` 走原生上传，
-   就绕开了「必须调组件方法」的问题）——**优先找这种路**；
-2. **直接调组件方法**：沿 `__vue__` 或 `parentElement` 链找到组件实例，调它自己的方法，
-   再**复刻组件自己的状态写回**（这一步最容易漏，漏了就是「接口成功但页面没变」）：
-
-```js
-// 示意：找到实例 → 调它的上传方法 → 把结果按组件自己的方式写回 data + emit
-var el = document.querySelector('<上传组件根元素>');
-var vm = el && el.__vue__;
-if (!vm) return {noVm: true};
-// 1) 调组件方法（参数形状照组件源码给）
-vm.upload({files: fileInput.files}, function onSuccess(res){ /* ... */ }, function onError(e){ /* ... */ });
-// 2) 复刻组件自己的状态写回，否则页面不更新
-vm.list.push({key: res.filekey, loadingIndex: null});
-vm.emitChange();
-return {done: true};
-```
-
-3. **最后才考虑改样式**把元素显示出来（见 4.3 的注意事项）。
-
-**判断这一步到底成没成**：不要看接口返回 200，要看**页面校验错误消没消、以及最终提交时数据在不在**。
-以认证页为例，成功判据是那个上传组件从 `image_uploader form_err` 变回正常、错误文案消失。
+先检查目标输入框与组件状态；不能仅凭 `_vei` 为空断定没有监听器。营业执照上传的组件调用与写回示例见 [企业认证技能](../wecom-register-certify/SKILL.md)。
 
 ### 9.5 弹窗：企业微信自己的类名不一定命中 `get_modals`
 
@@ -661,19 +518,6 @@ var c = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
 return {centerHit: c ? c.tagName + '.' + String(c.className).slice(0, 50) : null};
 ```
 
-### 9.6 点击类命令的 `mode` 与「看起来点成了」
-
-点击类方法都接受 `mode`：`auto`（默认，原生 → 真实鼠标 → JS 派发依次尝试）/ `native` / `mouse`
-（强制真实鼠标，不做可操作性检查）/ `js`（只派发事件，不要求可见、不被遮挡影响）。
-回执里 `data.mode` 是**实际用上的那一档**，`data.fallbackReason` 是降级原因。
-
-- **看到 `data.mode=js` 就要知道「这次没走真实交互」**：点击本身通常有效，但**提交类关键动作**
-  要额外回读确认；
-- **`ok=true` 不代表点中了东西**：实测点悬浮菜单时文本命中的是纯文本容器，方法返回成功、页面毫无变化。
-  连 `data.changed` / `data.effective` 一起看；
-- **确认类控件（二次确认弹窗的按钮）优先 `mode:"mouse"` 或 `mouse_click_by_selector`** ——
-  这类控件对 JS 派发的 click 经常完全无响应，而接口照样回成功。
-
 ### 9.7 别用 JS 点左侧主菜单
 
 左侧导航（首页 / 通讯录 / 协作 / 我的企业 …）是 `<a>` + Vue 事件，**很多没有可用的 href**，
@@ -685,113 +529,13 @@ JS 派发 click 和真实鼠标点击**都可能不跳转**。要切页时**直�
 | 企业域名绑定 | `.../wework_admin/frame#profile/domain` |
 | 邮件（跨域 iframe，见下） | `.../wework_admin/frame#apps/qykit/proxy/exmail` |
 
-### 9.8 跨域 iframe 里的内容读不到
+### 9.8 跨域邮箱控制台
 
-`协作 → 邮件` 打开的是 `exmail.qq.com` 的**跨域 iframe**，有两个后果：
+先尝试 `list_frames` / `includeFrames`；邮箱控制台入口与备用 token 流程见 [邮箱域名技能](../wecom-mail-domain/SKILL.md)。
 
-1. `get_browser_state` 的 `data.text` **只包含外层企业微信外壳**，iframe 里一个字都读不到；
-2. 服务**没有 frame 相关方法**（`get_frames()` / `list_frames()` / `switch_frame()` /
-   `execute_js_in_frame()` 全部返回「不支持的方法」），所以**没法直接操作 iframe 内部**。
+## 11. 交付与收尾
 
-**本文的任务（企业信息）不需要进那个 iframe** —— 企业域名绑定走的是 `#profile/domain`，
-是后台自己的路由。**只有在必须操作邮箱控制台时**才需要绕过它，
-那属于 `.agents/skills/wecom-mail-domain` 的范围。
-
-> 顺带记一条通用教训：**iframe 的 `src` 里的 token 常常是一次性的**。实测把 iframe 的
-> `src` 直接拿去顶层 `go_to_url` 会返回 `500 : HTTP Error 500`，因为 token 已经被 iframe 消费掉了。
-> 遇到这种情况要看的是**页面自己是怎么拿到这个 token 的**（翻 `get_requests` 找发 token 的那个接口），
-> 而不是反复重放旧 URL。
-
-### 9.9 `ok=true` 不是业务成功
-
-再强调一次，因为它在这个后台特别容易骗人：**`ok=true` 只代表动作没抛异常**。
-`data.changed=false` 也不表示点击失败（可能只是观察窗口内没抓到变化）。
-唯一可靠的判据是**回读目标元素 / 页面文本 / 接口响应**。禁止仅凭 `ok` 就重复提交 —— 重复提交
-会把确认框一层层叠起来（实测在别处叠到过 16 个），之后所有「取第一个可见弹窗」的逻辑都在操作最老的那个。
-
-### 9.10 服务端瞬时错误不要当成任务失败
-
-`execute_js` 偶尔会返回网络观察钩子里的空指针（形如
-`Cannot invoke "com.microsoft.playwright.Request.method()" because "request" is null`）。
-**脚本其实已经跑完了**，页面状态也变了。处理方式：**重跑一次同样的回读**，用页面现状判断，
-不要从头重做整个流程。
-
-## 10. 一次典型任务的骨架（脱敏模板）
-
-```json
-{"id": 1001, "method": "start", "params": {"headless": false, "browser": "chrome"}}
-```
-
-```json
-{"id": 1001, "method": "commands", "params": {"stopOnError": false, "commands": [
-  {"go_to_url": {"url": "https://work.weixin.qq.com/wework_admin/frame#profile"}},
-  {"wait": {"seconds": 5}},
-  {"execute_js": {"body": "return [].slice.call(document.querySelectorAll('.profile_enterprise_item')).map(function(e){var k=e.querySelector('.profile_stage_label');var v=e.querySelector('.profile_enterprise_item_main');return (k?k.innerText.trim():'?')+' = '+(v?v.innerText.trim().replace(/\\s+/g,' '):'(空)');});"}}
-]}}
-```
-
-拿到现状之后，**一次只改一个字段**，改完立刻回读。带断言的写法（推荐）：
-
-```json
-{"id": 1001, "method": "commands",
- "params": {"stopOnError": false, "stopOnExpectFailure": true, "commands": [
-  {"go_to_url": {"url": "https://work.weixin.qq.com/wework_admin/frame#profile/domain"}},
-  {"wait_for_stable": {"selector": "body", "quietMs": 800, "timeoutSeconds": 15}},
-  {"input_text_by_selector": {"selector": "#dsh_dom", "text": "<域名>"}},
-  {"click_element_by_selector": {"selector": "a:has-text('绑定域名')", "mode": "mouse"},
-   "expect": {"js": "document.body.innerText.indexOf('已绑定') >= 0", "truthy": true}},
-  {"get_form_state": {}}
-]}}
-```
-
-**为什么用 `expect`**：`click_element_by_selector` 回 `ok:true` 只说明动作发出去了，
-`expect` 才断言「页面上真的出现『已绑定』」。断言没过时批次整体 `code:0`，
-`data.expectFailed` 计数、`msg` 指出是哪一步，**命令本身不算失败**（`data.failed` 仍是 0），
-`data.note` 会说明「命令都执行成功，是断言没过」—— 这正是「点了但没生效」的准确信号。
-
-**等待的选择**（别死等 `wait {seconds:N}`）：
-
-| 场景 | 用什么 |
-| --- | --- |
-| 点一下等它保存完，不知道要多久 | `wait_for_idle`（看「忙不忙」） |
-| 表单 / 页面内容渲染完了要读值 | `wait_for_stable`（看「内容变没变」，顺带返回稳定后的文本） |
-| 等弹窗全部消失 | `wait_for_count` + `max: 0` |
-| 等某个元素出现 | `wait_for_element` |
-| 等页面文本出现关键字 | `wait_for_text` |
-
-批量里推荐的节奏是「**动作段 + 末尾回读**」：一个批次做几个动作，最后用一次 `execute_js`
-或 `get_browser_state` 回读，下一次推理基于新结果决定后续。**不要在批次里塞几十步**。
-
-不确定服务端有什么能力时，先自省再动手：
-
-```shell
-dsb --port 10049 methods      # 或 run list_methods
-dsb --port 10049 config
-dsb --port 10049 tasks
-```
-
-## 11. 交付话术（收尾）
-
-1. **给一张「字段 → 改前 → 改后」的表**，逐行写清楚这次动了哪些、哪些**故意没动**（例如联系电话留空）。
-   用第 3.4 节的那段 JS 回读，**以回读结果为准**，不要凭「我记得点过了」写。
-2. **明确交接没做的部分**：本次没被点名的字段一律没碰；联系电话按用户要求留空。
-3. **提醒不可逆项**：
-   - 企业简称的免费改名次数**已经用掉了**，之后再改要走认证；
-   - 企业域名绑定后该域名的收信指向企业微信邮箱。
-4. **提醒人去客户端核对**：企业名片在网页后台点不动（提示「在桌面端完善」），
-   要完善得在企业微信客户端里做。
-5. **提醒清理**：`logs/trace/**`、`logs/agent/**`、`data/<id>/` 里的截图与结构化文本
-   都含企业信息且**不会自动清理**：
-
-```json
-{"method":"cleanup","params":{"scope":"all","olderThanHours":24,"dryRun":false}}
-{"method":"cleanup","params":{"scope":"data","keepLatest":3,"dryRun":false}}
-```
-
-   （**`dryRun` 默认是 `true`，只预演不删**；要真删必须显式传 `false`。）
-6. **最后关任务**：`close`（关掉这个任务的页签）或 `shutdown`（关掉全部任务与共享浏览器，
-   服务进程不退出）。**规范做法是「先 `close` 任务，再停服务」**，否则强杀服务会留下占着
-   profile 目录的孤儿浏览器，下一次 `start` 可能卡在启动超时。
+报告各字段保存后的实际值、未完成项与所需人工操作。简称需注明是否已消耗免费修改机会。保留页面供用户复核，结束任务用 `close`；仅清理本次不再需要的敏感临时材料。
 
 ## 12. 脱敏约定
 
@@ -801,5 +545,5 @@ dsb --port 10049 tasks
 - **不要把真实值写回技能文档**（真实公司名、统一社会信用代码、企业地址、域名、企业 ID、
   管理员手机号、本机绝对路径）。
 - 给用户看的过程记录里，企业 ID、手机号、统一社会信用代码**只留后 4 位或直接省略**。
-- 截图与结构化文本落在服务端 `data/<id>/` 下，含企业信息，**任务结束记得清理**（见 11.5）。
+- 截图与结构化文本落在服务端 `data/<id>/` 下，含企业信息，**任务结束记得清理**（见第 11 节）。
 - 引用其它技能用**仓库相对路径**（如 `.agents/skills/wecom-mail-domain`），不要写本机绝对路径。

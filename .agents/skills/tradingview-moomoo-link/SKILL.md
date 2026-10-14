@@ -1,15 +1,15 @@
 ---
 name: tradingview-moomoo-link
-description: 用 deepseek-browser-use 在全球站 TradingView 登录并把自己的 moomoo（富途）券商账户连上交易面板的实操手册。讲清三件最容易卡住的事：登录入口藏在**匿名用户菜单**里（页面上没有独立的 Sign in 按钮），`#signin` 哈希跳转必然 ERR_ABORTED，以及 moomoo 连接面板**一个账号密码输入框都没有**——真正的登录发生在 passport.futubull.com 的 OAuth 新页签里。另附「链接全程免费」的判定依据、中国镜像站的坑、交易面板页签文本自带计数（``Orders 2``）导致按文本定位必须用完整标签，以及实时行情页上快照索引为什么曾经永久失效。
+description: 使用 dsb 在 TradingView 全球站登录并连接 moomoo 券商账户，核验 OAuth、连接状态及账户数据；包含图表文本取数和实时页面定位。
 ---
 
-> Claude Code 调用名：`dsb-skills:tradingview-moomoo-link`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:tradingview-moomoo-link`。
 
 # TradingView 连接 moomoo 券商账户
 
-一次真实任务（2026-09-27）的完整记录：登录 tradingview.com，把美国 moomoo 账户连上 TradingView 的 Trading Panel，并读出账户与持仓。用户的验收条件里有一条「如果需要花钱就算了」，所以文中把**哪一步可能涉及付费**单独写清。
+通用 CLI、登录交接和任务管理见 [主技能](../deepseek-browser-use/SKILL.md)。
 
-> **命令一律用 `dsb`（装在 `PATH` 上，任何目录直接敲）。** 服务端不用先起：连不上时 `dsb` 会自动拉起后端并重试。
+以下兼容性与连接流程来自 2026-09 的观察，费用及可用券商以当前页面为准。
 
 ## 站点特征
 
@@ -158,8 +158,7 @@ C  Cerebras Systems Inc.  1D  NASDAQ  O 211.81  H 213.00  L 203.61  C 206.75  +0
 ```
 
 - 默认显示**最新一根**的数值；涨跌的基准是**上一根的收盘价**，不是当天的开盘价。
-- **前一交易日收盘价**可以从同一行里紧跟涨跌的买卖价倒算：`206.40 SELL / 206.50 BUY` 对应前收 206.41
-  （206.75 − 0.34），算出来再用「前收 × (1 + 幅度) == 收盘」自校验一遍。
+- 前收优先取明确字段；同一周期和时点可用收盘价减涨跌额核对，不能从买一／卖一报价推断。
 - 页面标题 `document.title` 也带一份简化版：``CBRS 206.75 ▲ +0.16%``；右侧详情面板的价格块同样是文本。
 - **红绿是配色不是数据**：默认绿涨红跌（国内 A 股软件相反）。判涨跌请看「收盘 vs 前收」，
   别用影线长短或颜色去判。
@@ -170,7 +169,7 @@ C  Cerebras Systems Inc.  1D  NASDAQ  O 211.81  H 213.00  L 203.61  C 206.75  +0
 ```shell
 dsb --port 10049 --id 1003 run mouse_move -p x=990 -p y=280
 dsb --port 10049 --id 1003 run mouse_down -p button=left
-dsb --port 10049 --id 1003 js @读图例.js --retry-on-spurious   # 脚本里取 legend 的 innerText
+dsb --port 10049 --id 1003 js '@读图例.js' --retry-on-spurious   # 脚本里取 legend 的 innerText
 dsb --port 10049 --id 1003 run mouse_up -p button=left          # 别忘了松手
 ```
 
@@ -188,8 +187,7 @@ dsb --port 10049 --id 1003 run mouse_up -p button=left          # 别忘了松�
 实测踩过的具体坑：某次任务在周日进行，图上最后一根是**周五**那根；如果照着「今天涨跌」去理解，
 就会把周五的涨跌说成今天的。**先确认交易日，再谈涨跌。**
 
-**周期决定「一个图形是不是一天」**：图表上方选 ``1D`` 时，一根 K 线 = 一个交易日（影线是盘中最高/最低，
-周末与节假日没有 K 线）；换成 ``5D`` / ``1M`` / ``3M`` 等就是 5 分钟 / 30 分钟 / 1 小时。别默认「一根就是一天」。
+**先核实 K 线周期**：日线每根对应一个交易日；时间范围按钮（如 5D、1M、3M）不等于 K 线间隔，切换后重新读实际周期。
 
 **换标的（切 symbol）**：直接在地址栏拼 ``?symbol=`` 不可靠（实测报 `ERR_ABORTED` 且不一定真的换过去）。
 稳妥两步：点图表左上角的 symbol 按钮（``title="Symbol search"``，实测中心坐标约 `(68, 19)`，

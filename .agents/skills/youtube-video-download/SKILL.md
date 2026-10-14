@@ -1,21 +1,21 @@
 ---
 name: youtube-video-download
-description: 用 dsb 与 yt-dlp 下载用户有权保存的 YouTube 视频；区分公开视频与会员内容、频道最新与栏目最新，安全导出登录凭据、先列格式告知降级、收集后台任务并用 ffprobe 验收。
+description: 使用 dsb 与 yt-dlp 下载用户有权保存的 YouTube 视频；核实栏目与清晰度，安全处理登录凭据，收集下载任务并用 ffprobe 验收。
 ---
 
-> Claude Code 调用名：`dsb-skills:youtube-video-download`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:youtube-video-download`。
 
 # YouTube 视频下载
 
 ## 边界与已验证经验
 
-仅保存用户有权下载的内容，不绕过会员权限。需要浏览器操作时先加载 deepseek-browser-use 技能，由一个所有者独占已交接的数字任务 ID；登录和身份认证交给用户。本文自包含；命令是占位模板，不使用实际账号、视频 ID 或主机路径。模板及安全加固建议未经本次执行验证，不当作历史逐字命令。
+仅保存用户有权下载的内容，不绕过会员权限。需要浏览器操作时先加载 deepseek-browser-use 技能，由一个所有者独占已交接的数字任务 ID；登录和身份认证交给用户。命令是占位模板，需按当前环境核实；不要将模板当作已验证的历史命令。
 
 - Windows 普通 Chrome 人工登录成功，自动化窗口曾被 Google 拒绝；不能据此认定自动化是唯一原因。不能保证 passkey 或关闭调试必可用；二步验证不证明未建 passkey。
 - 同 profile 的 Chrome 单实例会接管新启动，必须核实实际进程参数与 profile。需要切换时协调所有者正常关闭并确认退出，不能强杀全部 Chrome、关闭其他任务或重启共享服务。
 - 全局 Anaconda 安装 yt-dlp[default] 曾导致 requests 冲突；建议独立 venv，任何安装须用户授权。
-- --cookies-from-browser 提取 318 条 cookies 仍失败；同一已登录浏览器的 YouTube 播放可用。缺少 SID 不证明未登录，数量不证明凭据有效。
-- 已验证的成功组合：dsb 按 YouTube URL 导出 → Netscape 转换 → 显式本机代理 + ``youtube:player_client=web``。不能单独归因 cookie 或 client，不能保证重复成功。历史结果为 **360p、H.264、AAC、2508.684 秒、169766681 字节、正常退出，不是 1080p**。
+- --cookies-from-browser 曾导出 cookies 后仍失败；同一已登录浏览器的 YouTube 播放可用。缺少 SID 不证明未登录，数量不证明凭据有效。
+- 已验证的成功组合：dsb 按 YouTube URL 导出 → Netscape 转换 → 显式本机代理 + ``youtube:player_client=web``。不能单独归因 cookie 或 client，不能保证重复成功。历史成功结果仅为 **360p、H.264、AAC**，不能据此承诺 1080p。
 
 ## 1. 明确目标与环境
 
@@ -127,5 +127,3 @@ ffprobe 核对最终文件的实际高度、音视频编码、时长及大小，
 已使用可见浏览器和合成 Cookie 验证：自动结构化 Cookie 留档值变为 `[REDACTED]`，显式 `--out` 仍保留原值；显式 `--id last` 在同一会话按配对请求筛选任务，无匹配报错。不传显式 ID 仍读取目录最新记录。此功能不覆盖任意脚本、页面文字、错误信息、服务端 trace 或历史记录，仍优先 `--no-record` 并保护导出文件。
 
 先检查可用的 JavaScript 运行时（成功实操使用 Deno 解决 JS challenge）；`yt-dlp[default]` 不等于已安装外部运行时。缺失时先征求安装同意，不跳过这一检查或承诺任意版本兼容。
-
-对外只展示简洁计划、必要进度、已核实事实和结论，不输出内部推演，不把尚未验证的建议写成成功经验。

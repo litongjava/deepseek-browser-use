@@ -1,10 +1,9 @@
 ---
 name: cnipa-trademark-register
-description: 用 deepseek-browser-use 在中国商标网（toas.sbj.cnipa.gov.cn）把一件文字商标的注册申请填到「预览」的实操手册：先切 Firefox 引擎（Chromium／本机 Chrome／Edge 在统一身份认证页会白屏，实测只有 Playwright 1.53 + Firefox 139 能渲染登录表单），登录与验证码交给人，然后沿「申请人信息 → 商标声明 → 共同申请信息 → 优先权信息 → 商品 → 商标图样」六步向导逐项填写并暂存，商品按类别检索勾选（每类控制在 10 项内避免超项加收），图样是 jpg 且像素 400×400–1500×1500，最后停在预览页由人确认、提交、缴费。同时给出该站点（ant-design + Vue SPA）的交互坑与写法：点击可操作性超时要用 JS 派发事件、下拉是虚拟列表要先打字过滤、隐藏的 file input 不在快照里、暂存／预览有二次确认弹窗、DOM 里的值与框架模型可能不同步所以必须以站点自己的预览页为准。文内数据全部脱敏，替换占位符即可复用。
-whenToUse: 需要在国家知识产权局商标网上申请系统做商标注册（或续展、变更、异议等同类网申），或需要在 ant-design + Vue 的长表单向导类站点（分步、自动暂存、级联地址、虚拟列表下拉、隐藏上传框）上稳定填表时。
+description: 使用 dsb 在中国商标网填写文字商标注册申请、选择商品并暂存至预览页；包含 Firefox 兼容性、图样上传及表单核验，提交和缴费由用户完成。
 ---
 
-> Claude Code 调用名：`dsb-skills:cnipa-trademark-register`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:cnipa-trademark-register`。
 
 # 中国商标网：文字商标注册申请（实操手册）
 
@@ -25,19 +24,7 @@ whenToUse: 需要在国家知识产权局商标网上申请系统做商标注册
 
 ### 1.1 服务
 
-```json
-POST http://localhost:10049/playwright/command
-{"id": 1001, "method": "start", "params": {"headless": false, "browser": "firefox"}}
-```
-
-- `browser: "firefox"` 是**必须**的，理由见 1.2。也可以用服务端配置 `browser.engine=firefox`（等价）。
-- `headless: false`：这个站点的登录必须由人在真实窗口里完成，有头窗口是前提。
-- 开工前确认健康检查通过；站点**开放时间 08:00–22:00**，夜里跑会连表单都打不开。
-- **`start` 可能第一次慢**：有头 Firefox 启动实测偶发「第一次等满启动超时（默认 60 秒）、服务自动重试后
-  2 秒起来」。所以 `start` 请给足超时（客户端至少 150 秒），**看到第一次卡住不要立刻重发** ——
-  同一个 id 重复 `start` 会直接被拒。若两次都失败，多半是上一次服务被强杀留下了孤儿浏览器占着
-  profile：先结束残留的 firefox 进程再重启服务（详见主技能第 32 条）。
-- **停服务前先 `close` 任务**：关掉最后一个任务时浏览器会一起退出，不会留下孤儿。
+通用命令、等待、人工协助和任务收尾见 [主技能](../deepseek-browser-use/SKILL.md)。 先用 `dsb list_methods` 核实当前能力，浏览器兼容性见 1.2。
 
 ### 1.2 为什么必须是 Firefox
 
@@ -89,19 +76,6 @@ return { ua: navigator.userAgent, webdriver: navigator.webdriver,
 | 联系人 | 姓名、手机号 |
 | 商标 | 类别（可多选，每类一件申请、一份官费）、每类商品/服务项、商标名称、商标说明、图样 |
 | 偏好 | 是否要电子送达、是否需要指定颜色、是否有优先权/共同申请人 |
-
-### 1.4 留档（排查用）
-
-- 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、`NNNNNN-<任务id>-<方法>.json` 完整请求响应、`uploads.log` 上传记录）。
-- 客户端：用仓库里的 `scripts/trace/browse.ps1` 按序号成对落盘 `NNN.req.json` / `NNN.res.json`，
-  **请求在发出前就落盘**，连「服务没起来、请求没发出去」也看得见。跨平台或要写进脚本时用
-  `dsb`（同一套留档格式，退出码区分传输错/业务失败/用法错，服务没起会自动拉起）。
-- 服务端日志**默认脱敏**（手机号、18 位证件号/统一社会信用代码、邮箱、长数字 → `***`，可用
-  `browser.trace.redact` 追加公司名、商标名这类自定义规则），但这是**尽力而为**：姓名、门牌号这类
-  认不出来的个人信息不会被掩掉，而且两份日志**都不会自动清理**。任务结束提醒用户清理。
-- 上传的临时文件（图样、证件 PDF）落在服务端的暂存目录（默认 `<启动目录>/upload`，`start` 回执里
-  的 `data.browser.upload.dir` 能看到实际路径），同样**不会自动清理**；不需要了用
-  `DELETE /playwright/upload?name=<文件名>` 或直接删目录。
 
 ### 1.5 整站维护怎么判断、怎么等到恢复
 
@@ -386,37 +360,9 @@ dsb --port 10049 upload 图样.jpg
 多类别做法：一件申请做完 → 预览页点「继续申请」→ 勾「申请人信息 + 商标图样」→ 保存 → 新申请已经带好
 申请人资料和图样 → 只需换类别重选商品 → 再走到预览。**每类一件申请、一份官费**。
 
-## 7. 校验纪律（决定成败的一条）
+## 7. 核验表单
 
-**以站点自己的预览页为准，不要以 DOM 里的值为准。**
-
-- 用 `execute_js` 直接改 `input.value` **不会**进入框架（Vue）的模型，页面上看着填好了，
-  预览页和提交内容里却是空的。表单字段一律用**真实输入**（`input_text_by_selector` / `input_text` /
-  `type_text`，内部走 Playwright 的 fill/type 会派发正常事件）；原生 setter + `dispatchEvent` 只用于
-  **搜索框**这类「只为触发前端过滤」的场景。走 `"mode":"js"` 时服务会在回执里标 `data.committed=false`，
-  看到它就别指望这个值进得了预览页。
-- 预览页把「详细地址」「商标说明」这类长文本渲染在 **input 里**，`innerText` 读不到，别据此判定「没填上」。
-  用 `get_element_value`，或遍历 `input/textarea` 的 `value` 找关键字。
-- **一次读回整屏表单**用 `get_form_state`（比逐个回读省得多），它直接给 `data.fields` 与 `data.errors`：
-
-```json
-{"id":1001,"method":"get_form_state","params":{"selector":"#form_item_tmDesc","includeHidden":true}}
-```
-
-  返回里每个字段带 `label`/`value`/`visible`/`disabled`/`required`/`invalid`/`error`，`data.errors`
-  是「哪个字段、错在哪」的清单——比下面这段手写 JS 更省事（手写版适合要站点特有的类名时）：
-
-```js
-// 有校验错误的项（标签名 + 错误文案）
-({bad: Array.from(document.querySelectorAll('.ant-form-item-has-error'))
-        .map(i => (i.querySelector('label') || {}).innerText),
-  why: Array.from(document.querySelectorAll('.ant-form-item-explain-error')).map(e => e.innerText)})
-```
-
-- **右上角提示可能是陈旧的**：`.ant-message-notice` 会一直挂着。判断当前这一步之前，先
-  `document.querySelectorAll('.ant-message-notice').forEach(e => e.remove())` 清空，再做动作看新提示。
-- **别读图**：`data.screenshot` 只是地址，读图极贵；「点击生效没有」用回执里的 `data.changed` 或
-  `diff_dom_text` 判断。只有验证码/二维码这类文本表达不了时才取图（优先 `get_element_screenshot`）。
+每步核对字段与校验错误，最终以站点预览页的申请人、商标、类别、商品及图样为准。DOM 中有值不保证框架已接受；必要时用真实输入重新填写。`ok`、`changed` 或 DOM diff 都不能证明暂存／提交成功。操作状态未知时先查记录，不重复提交。
 
 ## 8. 关键字段定位（写法与坑）
 
@@ -676,22 +622,6 @@ because "request" is null`（网络观察钩子里的空指针）。**脚本其�
 JS 派发 click 和真实鼠标点击**都可能不跳转**。要核对草稿列表时，
 **不要在这上面耗时间**：区块暂存的提示语（「××暂存成功…未提交」）本身就是落库证据，
 把「去 我的账户 → 申请管理 → 未提交 核对」写进交付话术交给用户即可。
-
-## 10. 一次典型任务的骨架（脱敏模板）
-
-```json
-{"id": 1001, "method": "start", "params": {"headless": false, "browser": "firefox"}}
-```
-```json
-{"id": 1001, "method": "commands", "params": {"stopOnError": false, "commands": [
-  {"go_to_url": {"url": "https://toas.sbj.cnipa.gov.cn/toas-extra-prod/toas-ui/onlineApplication/applyRegister/registerApply?code=toas_00501"}},
-  {"wait": {"seconds": 4}},
-  {"execute_js": {"body": "const bad=Array.from(document.querySelectorAll('.ant-form-item-has-error')).map(i=>(i.querySelector('label')||{}).innerText);const a=document.querySelector('.ant-steps-item-active');return {step:a?a.innerText.replace(/\\n+/g,' '):'-',bad:bad};"}}
-]}}
-```
-
-批量里推荐的节奏是「**动作段 + 末尾回读**」：一个批次里连做几个动作，最后用一次
-`execute_js` 回读当前步/错误/计数，下一次推理基于新结果决定后续。不要在批次里塞几十步。
 
 ## 11. 交付话术（收尾）
 

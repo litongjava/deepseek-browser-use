@@ -1,10 +1,9 @@
 ---
 name: wechat-channels-video-upload
-description: 用 deepseek-browser-use 把本地一个视频发布到微信「视频号」（视频号助手 channels.weixin.qq.com）的实操手册：登录页二维码 iframe 反复「加载失败」，正解是把 qrconnect 的 URL 单独在新页签打开、把二维码图给人扫；扫码后停在 oauth-callback 空白页是正常的（登录态已进 cookie），直接 go_to_url 到平台首页即可；发表页整页套在 micro-app 的**跨域子 frame**（`https://channels.weixin.qq.com/micro/content/post/create`）里——**传 frame 参数反而匹配不到，不传 frame 才命中**；上传视频后表单才渲染出来；封面由视频帧自动生成、不必须自己传。同时写透三件坑：截图整页熔断（``capture_degraded``）、发表按钮点击回执 `changed:false` 但实际已提交（URL 会跳到 `post/list`）、以及视频号**没有公开的视频链接**（只能在手机微信打开），回读凭证是稿件列表第一行 + 「视频 (N)」计数加一。
-whenToUse: 需要把一个本地视频文件投稿到微信视频号（视频号助手网页版），包括扫码登录、上传视频、填描述、发表并回读确认时。站点是 channels.weixin.qq.com（Vue + micro-app 微前端）。
+description: 使用 dsb 在微信视频号助手上传并发布本地视频；处理二维码登录、跨域表单、自动封面，并通过稿件列表核验发布结果。
 ---
 
-> Claude Code 调用名：`dsb-skills:wechat-channels-video-upload`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:wechat-channels-video-upload`。
 
 # 微信视频号投稿（视频号助手）
 
@@ -126,7 +125,7 @@ dsb --id 5001 run execute_js -p frame=1 -p bodyFile=probe_prog.js --select data.
 ```bash
 dsb --id 5001 run input_text_by_selector \
   -p selector=".input-editor" \
-  --params @desc.json      # {"selector":".input-editor","text":"..."}  （不传 frame！）
+  --params '@desc.json'      # {"selector":".input-editor","text":"..."}  （不传 frame！）
 ```
 
 回读确认：
@@ -201,25 +200,6 @@ capture_note: 截图不可用(熔断中)。这次没有画面留档，不能只�
 
 后果与 B 站一致：**没有画面可看**，只读文本判断不出白屏/样式错乱。画面取证改用文本
 （`get_browser_state` / `diff_dom_text` / `execute_js` 读 DOM），关键步骤请人看一眼。
-
-### 坑 2：登录页二维码 iframe 加载失败
-
-见第 2 步。**不要**在那一页反复点「加载失败，点击重试」，也不要指望 `includeFrames` 能读到二维码
-（实测 iframe 内 0 元素）。**把 qrconnect 的 URL 单独开一个页签**就有二维码。
-
-### 坑 3：`frame` 参数在这些命令上帮倒忙
-
-见第 4 步。表单明明在 frame 1 里，`execute_js -p frame=1` 读得到，
-`upload_file` / `input_text_by_selector` / `get_element_count` 传 `frame=1` 却报
-`ELEMENT_NOT_FOUND`（`count=0`），**不传 frame 才对**。
-
-### 坑 4：发表点击回执 `changed:false`
-
-见第 9 步。**不要因为回执难看就重复点击**（可能重复投稿）。等几秒，看 URL 有没有跳到 `post/list`。
-
-### 坑 5：必须先传视频，表单才存在
-
-见第 5 步。空表单状态下读 `.input-editor` / 短标题 / 封面全是 `undefined`，别误判成「页面坏了」。
 
 ## 四、收尾
 

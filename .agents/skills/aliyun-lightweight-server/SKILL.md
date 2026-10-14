@@ -1,15 +1,15 @@
 ---
 name: aliyun-lightweight-server
-description: 阿里云「轻量应用服务器」（新版控制台 swasnext）的购买与备案实操手册：默认地域是新加坡且套餐标着「免备案」（不能备案）、套餐列表要点「更多实例」才展开、购买时长只能靠 URL 参数 duration 切、扫码登录与支付必须人工接力；含比价口径与下单到收银台的完整请求体
-whenToUse: 需要在真实浏览器里登录阿里云、比较轻量应用服务器的套餐与价格、把订单送到收银台，或者判断某个套餐能不能用于 ICP 备案时
+description: 使用 dsb 在阿里云轻量应用服务器控制台选地域、比较套餐并下单至收银台；包含备案资格、购买时长和人工扫码支付交接。
 ---
 
-> Claude Code 调用名：`dsb-skills:aliyun-lightweight-server`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:aliyun-lightweight-server`。
 
 # 阿里云轻量应用服务器（购买 / 备案）
 
-一次真实任务的产物（2026-09-25）：登录 → 比价 → 选中 2 vCPU / 1 GiB / 30 GiB / 200 Mbps / 华北2（北京）/ 1 年 ￥408.00 → 送到收银台由人付款。
-下面每一节都是「不这么写就会踩」的部分，不是命令罗列。
+通用 CLI、登录交接和任务管理见 [主技能](../deepseek-browser-use/SKILL.md)。
+
+下文价格是 2026-09 的历史示例，购买时重新核实地域、规格、期限与应付总价。
 
 ## 一、站点特征
 
@@ -20,7 +20,7 @@ whenToUse: 需要在真实浏览器里登录阿里云、比较轻量应用服务
 | 旧版控制台 | `https://swas.console.aliyun.com/` 现在会 **302 到** `swasnext.console.aliyun.com/servers/<地域>`，**没有**可比价的旧版购买页了 |
 | 登录页 | `https://account.aliyun.com/login/login.htm`：左侧是「阿里云APP / 支付宝 / 钉钉」扫码；右侧三个**跨域 iframe**（`passport.aliyun.com`）分别是账密、短信、通行密钥 —— 直接读顶层文档是空壳，要 `includeFrames` |
 | 收银台 | `https://finance.aliyun.com/order/trade_pay.htm`（下单成功后自动跳转过来） |
-| 登录态 | 在共享 profile 里（`start` 回执的 `data.browser.profileDir`）；用 `profileSeenBefore` 判断要不要重新登 |
+| 登录态 | 在共享 profile 里（`start` 回执的 `data.browser.profileDir`）；是否登录以当前控制台页面为准 |
 | 未支付订单 | 控制台右上角「未支付订单 N」，或费用中心订单列表；**收银台页关掉也能从那里继续付** |
 
 套餐 ID 形如 ``swas.s.c2m2s40b1.linux``：``c2`` = 2 vCPU、``m2`` = 2 GiB、``s40`` = 40 GiB 系统盘。**不必猜这个 ID** —— 购买台里点选套餐更省事，`planId` 只在你需要用 URL 直达某个套餐时才写。
@@ -40,7 +40,7 @@ whenToUse: 需要在真实浏览器里登录阿里云、比较轻量应用服务
 
 ### 1. 打开购买台（地域别用默认值）
 
-URL 里有 `&`，**在 cmd/PowerShell 里别直接拼命令行**（`&` 会被 cmd.exe 吃掉，只剩第一个参数）：用 `--params @文件.json`
+URL 里有 `&`，**在 cmd/PowerShell 里别直接拼命令行**（`&` 会被 cmd.exe 吃掉，只剩第一个参数）：用 `--params '@文件.json'`
 
 ```json
 {
@@ -50,7 +50,7 @@ URL 里有 `&`，**在 cmd/PowerShell 里别直接拼命令行**（`&` 会被 cm
 
 ```shell
 # 用 dsb 客户端发(Windows 在 PowerShell 里要写 dsb)
-dsb --port 10049 --id 9001 run go_to_url --params @tmp/nav-buy.json
+dsb --port 10049 --id 9001 run go_to_url --params '@tmp/nav-buy.json'
 ```
 
 `regionId` 取中国内地（例如 ``cn-beijing`` / ``cn-hangzhou``），`duration` 是**月数**：`1` / `3` / `12`，它决定「应付」那一行算几个月。页面上的「时长」区在 DOM 里**只有一个广告卡**，真正的时长由这个 URL 参数决定 —— 想比 3 个月与 1 年的价，就换参数重新打开一次。
@@ -126,17 +126,13 @@ dsb --port 10049 --id 9001 run go_to_url --params @tmp/nav-buy.json
 
 - **不要替用户点「支付」**：支付密码/扫码只能本人完成。用 `request_human_input`（`selector` 指页尾的 `button[type=submit]`）+ `bring_to_front`，把窗口留在收银台，然后等用户回话。
 - 想省现金可以先勾「使用账户余额抵扣」（`input[type=checkbox]`，`index` 从快照取），再让人付余额之外的差额。
-- **付款完成前别停服务**：`close` / 停服务会连带关掉浏览器，收银台页随之消失（订单不会丢，从控制台的「未支付订单」还能继续付）。
+- 人工付款期间保留任务与收银台页面；页面关闭后可从「未支付订单」继续。
 
-## 四、这个站点特有的坑
+## 四、补充排查与比价
 
-1. **默认地域是新加坡、套餐标「免备案」** —— 直接下单 = 买到一台不能备案的机器。切地域的入口是页面上那行「地域」文本（下拉里分「香港及海外」与「中国内地」两组）。
-2. **地域下拉里「中国内地」可能是空的**：那说明当前选中的套餐在该地域没有库存/不在售，去「更多实例」里换一个套餐再看，别以为页面坏了。
-3. **`&` 被 shell 吃掉**：带查询串的 URL 一律走 `--params @文件.json`，否则只会打开 `...buy?regionId=cn-beijing`（后面的 `planId`/`duration` 全部丢失），时长会退回默认 1 个月。
-4. **「时长」不是页面上的控件**：DOM 里那块只有广告卡，时长由 URL 的 ``duration`` 决定。
-5. **两个「立即购买」**：时长区的推广卡里也有一个同名按钮，点错了会跳到别的产品活动页。
-6. **这个站点的重活最容易撞上 Playwright 的「事件泵伪故障」**：控制台 XHR 极多，`execute_js` / `get_form_state` / `get_element_box` / `go_to_url` / 自动截图会成串报 `Object doesn't exist: response@… / request@…`（对象与本次命令毫不相干）。只读命令服务端现在会**自动重发**并回 `data.spuriousRetry`；`execute_js` 读页面时记得传 `retryOnSpurious: true`；**点「立即购买」「支付」这类动作绝不要重发**。详见主技能第十一节的那一条。
-7. **比价的正确口径**：只用「月付排序」那一列读绝对价格（`更多实例` 浮层），再回到购买台看「折合 / 应付」的年付价。不要拿「爆款卡」上那个 `¥ 34/月` 直接乘 12 —— 年付是折后价（￥408 而不是 ￥480）。
+- 地域下拉里的「中国内地」为空时，检查当前套餐的库存／在售范围，改选套餐后再查。
+- 事件泵错误先读状态；只读脚本可安全重试，购买和支付不自动重发。
+- 月付、折合月价与年付总价分开记录，以所选期限的应付金额比较，不能用推广卡价格推算。
 
 ## 五、怎么确认每一步真的成了
 

@@ -1,10 +1,9 @@
 ---
 name: kuaishou-research
-description: 用 deepseek-browser-use 在快手网页版（kuaishou.com）做用户需求挖掘、评论采集与舆情分析的实操手册。写透实测坑位：登录态托管在 profile、搜索结果卡片点不进去（只能靠 hover 预览取 clientCacheKey 反推视频 ID）、评论容器自身不滚动而是一个祖先可滚、数字 photoId 也能当 short-video URL、自动连播会在采集前把页面切走、截图熔断（视频自动播放）下的纯文本回退。
-whenToUse: 需要在快手（kuaishou.com）采集视频评论、挖掘产品需求、做用户痛点/舆情分析时使用。
+description: 使用 dsb 在快手网页版检索视频、采集评论并研究需求或舆情；处理 hover 视频 ID、评论滚动容器、自动连播和样本核验。
 ---
 
-> Claude Code 调用名：`dsb-skills:kuaishou-research`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:kuaishou-research`。
 
 # 快手网页版需求调研实操手册
 
@@ -15,48 +14,7 @@ whenToUse: 需要在快手（kuaishou.com）采集视频评论、挖掘产品需
 
 ---
 
-## 零、开发中遇到的问题（按踩坑顺序）
-
-这一节是「当时卡在哪、怎么定位、最后怎么解决」的完整复盘，比结论更值钱。
-
-### 问题 1：登录弹窗的二维码元素截不了图
-- **现象**：`get_element_screenshot -p selector='img[src^="data:image/png;base64"]'` 超时 8000ms，`request_human_input` 也带上 ``imageError``。
-- **误判**：以为选择器错了，反复改 selector。
-- **真相**：该二维码 `<img>` 是 base64 内联、尺寸 170×170，元素截图超时是 Playwright 的老问题；且同一选择器匹配到 7 个元素（`get_element_screenshot` **不支持 ``nth`` 参数**，多匹配时取第一个可接收事件的，未必是二维码）。
-- **解决**：**不截元素图**。直接把有头浏览器 `bring_to_front`，用 `request_human_input` 让用户在可见窗口里扫码；要程序化确认元素存在时，用 `dsb js` 读 `getBoundingClientRect()` 拿坐标与尺寸。
-
-### 问题 2（最主要）：搜索结果卡片点不开，导航不触发
-- **现象**：在 `/search/video?searchKey=...` 上点卡片，`click_element_by_index`、`mouse_click`、`double_click_element_by_index`、对 `.cover` 直接 `el.click()` 全都只弹内嵌 hover 预览，URL 不变。
-- **定位过程（值得复用）**：
-  1. 先确认结果卡有没有 `<a>`：`a[href*="/short-video/"]` 数量为 0 → 说明是 JS 路由，不是链接；
-  2. 挂 `history.pushState` 钩子看点击是否触发路由 → `__navHook` 始终为空，确认**根本没触发导航**；
-  3. `document.elementFromPoint(x,y)` 看点上到底命中了谁 → 命中的是 ``.video-interact-panel``/``mask``，说明点在了预览遮罩上。
-- **解决**：放弃「点开」。改为 **hover 卡片 → 读新出现的 `<video>` 的 ``clientCacheKey`` → 反推视频 ID → 直接 `go_to_url`**（见坑 1）。或者干脆换**话题页 / 发现页**，那里是真 `<a href>`。
-
-### 问题 3：评论加载不动，评论数卡死在个位数
-- **现象**：`.comment-container` 的 `scrollHeight === clientHeight`（1376=1376），对它赋值 ``scrollTop`` 完全无效。
-- **定位**：把 ``elementFromPoint`` 和祖先链打出来，发现**可滚的是评论容器的某个祖先**（``parentElement`` 的 `scrollHeight 1592 / clientHeight 975`）。
-- **解决**：向上找 6 层祖先，取「可滚幅度最大」的那个当滚动对象，并 `dispatchEvent(new Event('scroll',{bubbles:true}))`（见坑 2）。
-
-### 问题 4：采到的评论和视频对不上（自动连播偷换页面）
-- **现象**：刚抓完的评论主题完全是另一个视频（抓「搅拌机」视频得到「教师土地」评论）。
-- **定位**：对比 `document.title`，发现视频播完后页面自动切到了下一条推荐。
-- **解决**：进详情页后**立刻 `video.pause()`**，采集循环里反复 pause，并在落盘前校验 `document.title`（见坑 3）。
-
-### 问题 5：后台脚本与前台命令抢同一个任务（``COMMAND_TIMEOUT``）
-- **现象**：跑批量采集 python 脚本的同时下别的命令，报 `同一个任务上已有命令正在执行，等满 5000 毫秒仍未轮到`。
-- **根因**：**同一个 `--id` 上的命令是串行的**，后台脚本持续占用该任务。
-- **解决**：批处理脚本必须顺序执行、不要与前台命令并发；或给不同任务用不同 `--id`。
-
-### 问题 6：话题页偶发空结果（假故障）
-- **现象**：`/hashtag/效率工具` 打开后 body 只有 423 字符，正文「没有找到合适结果」，但该话题 3916 万播放。
-- **解决**：`reload` 重试；仍不行就换发现页/搜索页取 ID（见坑 6）。
-
-### 问题 7：评论时间戳格式比预想的多
-- **现象**：第一版正则只覆盖「分钟/小时/天前」，提取数为 0；实际评论大量是「**月前 / 年前**」。
-- **解决**：正则补齐 `刚刚|N秒前|N分钟前|N小时前|N天前|N周前|N个月前|N年前`。
-
----
+二维码截图超时或不可见时，保留有头窗口请用户直接扫码，不反复截图。同一任务的采集脚本与状态查询顺序执行。
 
 ## 一、站点核心特征
 
@@ -152,20 +110,16 @@ dsb --id 20261009 js '@<本技能目录>/scripts/harvest_comments.js' --retry-on
 ```
 脚本逻辑：先向上找可滚动祖先、滚两轮（含回顶），再用「时间戳行 → 下一行内容」配对提取，跳过 ``取消/发送/查看更多回复`` 与纯数字点赞数。
 
-### 步骤 5：校验 title 再落盘
-```bash
-dsb --id 20261009 js "() => document.title"
-dsb --id 20261009 js @harvest_comments.js --retry-on-spurious --select data.result --out out.json
-```
+### 步骤 5：核对视频与样本
 
----
+检查步骤 4 的输出及当前 URL / title 是否仍对应目标视频；自动连播导致不一致时丢弃该批数据，重新定位后采集。无需为落盘再次运行采集脚本。
 
 ## 四、怎么确认这一步真的成了
 
 - 登录成功：`.sidebar-login-button` 消失 + cookie 含 ``userId``；
 - 视频对齐：`document.title` 与话题页卡片文案一致；
-- 评论加载成功：提取数 > 20，且 `scrollerFound: true`；
-- 全流程验证：`document.querySelectorAll('.comment-item').length` 随滚动增大。
+- 评论加载：结合滚动前后新增评论及 `scrollerFound` 判断；固定数量阈值不证明完整性。
+- 报告已读、去重和有效样本数；虚拟列表当前 DOM 数量不等于累计评论数。
 
 ## 五、注意事项
 - **同一 `--id` 上的命令是串行的**：不要开后台脚本与前台命令抢同一个任务（会 ``COMMAND_TIMEOUT``）。

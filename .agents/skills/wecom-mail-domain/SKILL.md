@@ -1,10 +1,9 @@
 ---
 name: wecom-mail-domain
-description: 用 deepseek-browser-use 给企业微信开通「免费版企业邮箱」并把企业自有域名绑上去的实操手册：先在 DNS 服务商（DNSPod / 腾讯云解析）加两条 MX 记录（mxbiz1.qq.com 优先级 5、mxbiz2.qq.com 优先级 10，主机记录 @），再去企业微信后台【协作 → 邮件】开通邮箱服务并把域名绑上，最后回到【我的企业 → 企业信息 → 企业域名】完成绑定。本文的核心是解决**邮箱管理控制台藏在跨域 iframe 里、常规手段完全够不着**这件事：企业微信的邮件应用把 exmail.qq.com 的控制台套在一个跨域 iframe 中，服务端的 get_browser_state / execute_js / get_modals / get_interactive_map 全都只作用于顶层文档，快照里一个 iframe 内部元素都没有；而直接打开 iframe 的 URL 会 500，因为里面的 token 是一次性的、已被 iframe 消费。破解办法是**从企业微信后台自己的接口现取一个未使用的新 token**（同源 XHR 调 apps/qykit/login/tokenAndOAuthCode），再用它把控制台当顶层页面打开，之后控制台的路由、按钮、表单全部可读写。同时给出该流程的其它坑：控制台是 hash 路由（可以直接改 location.hash 跳页，比找按钮点更可靠）、开通入口点不动时走路由表直连、DNSPod 改解析要过微信 MFA 扫码、企业域名绑定以 MX 校验为前置（所以顺序不能颠倒）。文内数据全部脱敏，替换占位符即可复用。
-whenToUse: 需要给企业微信 / 腾讯企业邮箱开通邮箱服务、绑定企业自有域名、给成员分配企业邮箱，或需要驱动「主站把第三方控制台套在跨域 iframe 里」这类站点（企业微信的邮件/微盘/文档/会议应用都是这个形态），或需要处理「嵌入式应用用一次性 token 换登录态、token 被 iframe 消费后直连报错」的场景时。
+description: 使用 dsb 为企业微信开通免费企业邮箱并绑定自有域名，配置 MX 记录、操作跨域邮箱控制台并核验绑定结果；包含一次性 token 的备用入口。
 ---
 
-> Claude Code 调用名：`dsb-skills:wecom-mail-domain`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:wecom-mail-domain`。
 
 # 企业微信：开通免费企业邮箱并绑定自有域名（实操手册）
 
@@ -27,20 +26,7 @@ whenToUse: 需要给企业微信 / 腾讯企业邮箱开通邮箱服务、绑定
 
 ### 1.1 服务与浏览器
 
-```json
-{"id": 2001, "method": "start", "params": {"headless": false, "browser": "chrome"}}
-```
-
-- **`headless: false` 是必须的**：企业微信后台登录要人扫码，DNSPod 改解析要人扫 MFA，都要真实窗口。
-- **`browser` 的选择要看你有没有现成的登录态**：企业微信、DNSPod、腾讯云这几家的登录态都在**共享 profile** 里（默认
-  `~/.config/browseruse/profiles/shared`）。**换引擎等于换一套 profile**（Chromium 与 Firefox 的 profile 格式不通用），
-  所以一旦你上次是用 `chrome` 登进去的，这次就必须还是 `chrome`，否则登录态全丢、要重扫一遍。
-- 服务端**默认引擎可能是 firefox**（`browser.engine` 配置项），这时 `start` 不传 `browser` 会起 Firefox。
-  **开工前先 `get_config` 看 `engine` / `configuredType`，或 `start` 后看回执的 `engineHonored` / `effectiveBrowser`**，
-  别等到发现「怎么退登录了」才回头查。
-- 换浏览器/引擎**只能在当前没有其它任务时做**：有任务在跑会直接报「浏览器已经在运行…不能中途切换浏览器类型」。
-  要换就先 `close` 掉在跑的任务，**不用重启服务**。
-- 开工前 `GET /playwright/health` 确认服务活着；`list_tasks` 看现在有哪些任务与共享浏览器的 `profileDir`。
+通用命令、等待、人工协助和任务收尾见 [主技能](../deepseek-browser-use/SKILL.md)。 使用有头 Chrome，扫码期间保留任务，避免中途切换 profile。
 
 ### 1.2 开工前必须问清的字段
 
@@ -53,12 +39,6 @@ whenToUse: 需要给企业微信 / 腾讯企业邮箱开通邮箱服务、绑定
 | 邮箱 | 是否要给全员开通、是否有成员要单独分配、是否需要公共邮箱 |
 | 顺序 | 确认**先加 MX 再绑域名**（反了会卡在校验） |
 
-### 1.3 留档
-
-- 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、`NNNNNN-<任务id>-<方法>.json` 完整请求响应）。
-- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起）或 `scripts/trace/browse.ps1`。
-- **DNS 变更证据要自己留**：把「加记录前」「加记录后」的 `get_requests` / 页面文本各存一份，别只靠口头说加好了。
-
 ## 2. 第一步：加 MX 记录（在 DNS 服务商那边）
 
 ### 2.1 要加什么
@@ -70,7 +50,7 @@ whenToUse: 需要给企业微信 / 腾讯企业邮箱开通邮箱服务、绑定
 | MX | `@`（不填） | `mxbiz1.qq.com` | 5 | 600 |
 | MX | `@`（不填） | `mxbiz2.qq.com` | 10 | 600 |
 
-> 企业微信后台会把这两条**原样列给你**（见 3.3），以页面显示的为准。有的页面给的值带结尾的点
+> 企业微信后台会把这两条**原样列给你**（见 3.4），以页面显示的为准。有的页面给的值带结尾的点
 > （`mxbiz1.qq.com.`），那是 DNS 的绝对域名写法，**填不填点都行**。
 
 ### 2.2 DNSPod / 腾讯云解析：加记录
@@ -177,23 +157,9 @@ foreach($s in @('8.8.8.8','1.1.1.1','119.29.29.29','223.5.5.5')){
 **这一节是本文的核心。** 企业微信后台的「邮件」应用**不是企业微信自己的页面**，而是把
 `exmail.qq.com` 的邮箱管理控制台套在一个**跨域 iframe** 里。
 
-### 3.1 为什么常规手段全都够不着
+### 3.1 跨域控制台与一次性 token
 
-实测结论（2026-09，服务端 113 个方法的那次构建）：
-
-| 手段 | 结果 |
-| --- | --- |
-| `get_browser_state` | 只拿到企业微信后台外壳，**iframe 内部一个元素都没有** |
-| `execute_js` | 在**顶层文档**执行，`document.querySelector` 穿不透跨域 iframe |
-| `get_modals` / `get_interactive_map` | 都只扫顶层 `document`，同上 |
-| `list_methods` 里找 frame 相关命令 | 一个都没有（``get_frames()`` / ``switch_frame()`` / ``execute_js_in_frame()`` 全返回「不支持的方法」） |
-| 直接 `go_to_url` 打开 iframe 的 `src` | **`HTTP Error 500 内部服务器错误`** |
-
-**最后一条的原因**：iframe 的 URL 里带 `token` + ``wwmng_authcode``，**是一次性的**。页面加载时 iframe
-已经把 token 消费掉了，你再拿同一个 URL 去开就是无效 token → 500。
-
-> 顺带说明：Playwright 本身**是能跨 frame 的**（它走 CDP / juggler 协议，不依赖往页面里注入 JS），
-> 所以这不是浏览器能力的限制，而是服务端当时没有把 frame 能力暴露出来。
+邮箱管理页嵌在 `exmail.qq.com` iframe 中。顶层 DOM 读不到其内容，直接重开 iframe 的 src 又可能因一次性 token 已被消费而返回 500。
 
 ### 3.1′ 现在有两条路：直接读 iframe（正规解）还是换 token（兜底解）
 
@@ -250,14 +216,6 @@ type=exmail&srcUrl=exmail.qq.com%2Fmail%2Fmngpage&noopentoken=1
 {"id":2001,"method":"execute_js","params":{"body":"async () => { const r = await fetch('/wework_admin/apps/qykit/login/tokenAndOAuthCode?lang=zh_CN&f=json&ajax=1', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'type=exmail&srcUrl=exmail.qq.com%2Fmail%2Fmngpage&noopentoken=1' }); return (await r.json()).data; }"}}
 ```
 
-<details>
-<summary>老构建（`execute_js` 不 await Promise 时）的同步 XHR 写法，留作兜底</summary>
-
-```json
-{"id":2001,"method":"execute_js","params":{"body":"(()=>{const x=new XMLHttpRequest();x.open('POST','/wework_admin/apps/qykit/login/tokenAndOAuthCode?lang=zh_CN&f=json&ajax=1',false);x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('type=exmail&srcUrl=exmail.qq.com%2Fmail%2Fmngpage&noopentoken=1');return JSON.parse(x.responseText).data})()"}}
-```
-
-</details>
 
 拿到 token 后**立刻**顶层打开（不要先做别的事，token 有短时效）：
 
@@ -268,27 +226,7 @@ https://exmail.qq.com/mail/mngpage?qykit_goto=&locale=zh&token=<token>&wwmng_aut
 **这一步成功的话**，你会看到页面变成腾讯企业邮箱的管理后台，`document.body.innerText` 里出现
 「概况 / 邮箱域名 / 邮箱账号 / 邮箱管理 / 安全管理 / 数据统计 / 操作日志 / 配置」这些导航项。
 
-**完整的两步骨架**：
-
-```json
-{"id":2001,"method":"commands","params":{"stopOnError":false,"commands":[
-  {"go_to_url":{"url":"https://work.weixin.qq.com/wework_admin/frame#apps/qykit/proxy/exmail"}},
-  {"wait":{"seconds":8}},
-  {"execute_js":{"body":"(()=>{const x=new XMLHttpRequest();x.open('POST','/wework_admin/apps/qykit/login/tokenAndOAuthCode?lang=zh_CN&f=json&ajax=1',false);x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');x.send('type=exmail&srcUrl=exmail.qq.com%2Fmail%2Fmngpage&noopentoken=1');return JSON.parse(x.responseText).data})()"}}
-]}}
-```
-
-然后**把上一步返回的 token 与 auth_code 拼进 URL**，再发一次 `go_to_url`。**必须分两次请求**
-（第二次要用第一次的结果），不要试图塞进同一个批次。
-
-> **这个套路可以推广**：企业微信后台的其它嵌入式应用（微盘 `drive.weixin.qq.com`、文档
-> `doc.weixin.qq.com`、会议 `wwmeeting.weixin.qq.com`）走的是**同一个接口**，只是
-> `type` / `srcUrl` 不同——它们都出现在同一个页面的 iframe 列表里，可以从 `iframe.src` 反查
-> 各自的 `type` 与 `srcUrl`（`srcUrl` 就是 iframe src 里 `mngpage` 那段路径去掉参数）。
-> 更一般地：**遇到「主站把第三方控制台套在 iframe 里」时，先试 `get_browser_state` 的
-> `includeFrames:true`（正规解，见 3.1′）；确实不行再去找主站发 token / 换登录态的接口，
-> 用同源 XHR 现取一份、顶层直连第三方**。这条通用套路已经固化成配方
-> `open-console-from-iframe` / `wework-qykit-open-console`（见主技能第十二节）。
+取 token 和使用它导航按依赖顺序执行；不记录或共享 token。通用 frame 读法见 [读页面分册](../deepseek-browser-use/references/reading-pages.md)。
 
 ### 3.3 控制台是 hash 路由：直接改 hash 跳页
 
@@ -362,7 +300,7 @@ https://exmail.qq.com/mail/mngpage?qykit_goto=&locale=zh&token=<token>&wwmng_aut
 
   **坑**：实测第一次点，按钮文本会变成「正在验证中」然后又变回「已完成设置，立即验证」，
   而**没有发出任何校验请求**（`get_requests` 里只有一个埋点 `domain|own|verify|now`）。
-  这种情况**先确认 MX 是否真的全球生效**（第 2.4 节），确认无误后**再点一次**；
+  这种情况**先确认 MX 查询结果与平台校验状态**（第 2.4 节），确认无误后**再点一次**；
   也可以直接 `location.hash='#qyww/domain/list'` 去看域名列表的实际状态——
   **列表显示「使用中」才是真的成功了**，比盯按钮可靠。
 
@@ -414,120 +352,15 @@ https://exmail.qq.com/mail/mngpage?qykit_goto=&locale=zh&token=<token>&wwmng_aut
 
 ## 5. 该流程的通用坑
 
-### 5.1 后台内容区是内层滚动容器，不是 window
-
-企业微信后台的滚动发生在**内层容器**上：
-
-- `window.scrollTo(0, 0)` **无效**（实测 `window.scrollY` 恒为 0，而目标元素在 `y=-192`）。
-- **快照默认只覆盖当前视口**，视口外的元素**不在 `data.text` 里、也没有索引**。所以「找不到元素」
-  先怀疑它不在视口内，而不是选择器写错了。
-
-**三条解法，按优先级**：
-
-1. **`get_browser_state` 传 `viewportExpansion`**（**最省事，很多人不知道它存在**）：
-
-   ```json
-   {"id":2001,"method":"get_browser_state","params":{"highlight":false,"viewportExpansion":1500}}
-   ```
-
-   视口外扩的像素数，默认 `0`。企业微信后台这种「首屏放不下」的页面，直接调大到 `1000~2000`
-   就能一次拿到首屏之外的元素索引，**不用滚动**。回执里 `data.pixels_above` / `data.pixels_below`
-   会告诉你上下还差多少没进快照——**如果它们不为 0，就说明扩得还不够**。
-
-2. **改用选择器定位**：`click_element_by_selector` / `input_text_by_selector` /
-   `click_element_by_text`（按 id/class/文本定位，**不依赖快照索引**）。这是最稳的路子，
-   不受视口和索引失效影响。
-
-3. **滚动**：先找到内层滚动容器再 `scroll`（`scroll` 命令默认操作页面/元素，必要时用
-   `execute_js` 直接改容器的 `scrollTop`）。
-
-### 5.2 索引失效极快
-
-任何点击、异步渲染之后**索引全部重算**，沿用旧索引会得到「元素不存在或页面已变化」或「索引越界」。
-稳妥节奏是「**一次 `get_browser_state` → 只做一个动作 → 再取快照**」，或者全程用选择器。
-主技能第七节的「动作段 + 末尾回读」也是这个意思。
-
-### 5.3 弹窗要主动关，但别只信 `get_modals`
-
-- 浮层会挡住后面的点击。优先 `get_modals` + `close_modal`（**它一律用真实鼠标点**，
-  因为 ant-design 这类框架的弹窗只认真实鼠标事件，JS 派发 `click` 完全无效）。
-- **但要注意**：`get_modals` 的选择器是 ant-design / Element-UI / vxe / layui 专用的
-  （`.ant-modal-wrap`、`.el-dialog`、`.layui-layer`、`[role=dialog]`…），**企业微信自己的弹窗类名
-  不一定命中**。实测发票弹窗的类名是 `.mall_invoice_dialog_container`。
-- **所以 `get_modals` 返回 0 不等于没有弹窗。** 这时用 `execute_js` 自己扫可见浮层：
-
-```js
-(()=>{const all=[...document.querySelectorAll('div')].filter(e=>{
-    const s=getComputedStyle(e); if(s.display==='none'||s.visibility==='hidden') return false;
-    const z=parseInt(s.zIndex); const r=e.getBoundingClientRect();
-    return (s.position==='fixed'||(!isNaN(z)&&z>50)) && r.width>150 && r.height>60;
-  });
-  return all.map(e=>({cls:String(e.className).slice(0,50),
-    pos:getComputedStyle(e).position, z:getComputedStyle(e).zIndex,
-    txt:(e.innerText||'').slice(0,120)}));})()
-```
-
-### 5.4 `ok=true` 不代表点中了东西
-
-点击类方法只保证动作没抛异常。**实测点「开通」返回 `ok=true`、`changed=false`，页面毫无变化。**
-所以：**关键动作后一定要回读页面**（`document.body.innerText` 的片段、或 `expect` 断言），
-不要只看 `ok`。
-
-### 5.5 任务会随服务重启消失
-
-服务重启后**任务 id 全部失效**（实例只在内存里），再操作会得到
-`没有找到对应的浏览器实例：<id>`。**登录态还在 profile 里**，重新 `start` 同一个 id 即可继续。
-`list_tasks` 能随时看到活着的任务。
-
 ### 5.6 企业微信侧的域名校验以 MX 为准
 
 `getdomainDNS` 这类接口会回 `nameserver` / `ns` / **has_cname_record** 等信息；企业微信校验 MX 时
 看的是**该域名权威 NS 上的 MX 记录**。所以第 2.4 节的多解析器验证不是可选项——**先证明 DNS 对了，
 再去点验证按钮**，否则你会在按钮上反复点而不知道问题在 DNS 侧。
 
-## 6. 一次典型任务的骨架
+## 7. 交付
 
-```json
-{"id": 2001, "method": "start", "params": {"headless": false, "browser": "chrome"}}
-```
-
-```json
-{"id":2001,"method":"commands","params":{"stopOnError":false,"commands":[
-  {"go_to_url":{"url":"https://console.dnspod.cn/dns/list"}},
-  {"wait":{"seconds":10}},
-  {"execute_js":{"body":"(()=>({url:location.href,txt:document.body.innerText.slice(0,600)}))()"}}
-]}}
-```
-
-> 加 MX 记录（第 2.2 节，两条）→ 交人过 MFA（第 2.3 节）→ 多解析器验证（第 2.4 节）
-> → 取 token 进控制台（第 3.2 节）→ hash 跳 `#qyww/domain/list` 绑域名（第 3.4 节）
-> → 回 `#profile/domain` 绑企业域名（第 4 节）→ 回读 `#profile` 与邮箱账号页确认（第 3.5 节）。
-
-**节奏**：不要在一个批次里塞几十步。推荐「**动作段 + 末尾回读**」——连做几个动作，最后用一次
-`execute_js` 回读 URL / 关键文本 / 错误，下一次推理基于新结果决定后续。
-
-## 7. 交付话术（收尾）
-
-1. 给一张**记录表**，逐条写清加在哪、值是什么：
-
-   | 主机记录 | 类型 | 记录值 | 优先级 | 状态 |
-   | --- | --- | --- | --- | --- |
-   | `@` | MX | `mxbiz1.qq.com` | 5 | ✅ 已生效 |
-   | `@` | MX | `mxbiz2.qq.com` | 10 | ✅ 已生效 |
-
-2. 说明**DNS 生效情况**：给出验证过的解析器列表（含腾讯的 `119.29.29.29`）与权威 NS 的结果；
-   说明「运营商缓存可能需要几十分钟到几十小时，但主流公共解析器已经能查到」。
-3. 说明**邮箱服务状态**：企业域名 `<域名>` **使用中**、域名指向 企业微信；**基础功能免费**，
-   没有产生费用。
-4. 说明**成员邮箱**：列出 `<成员>@<域名>`（按脱敏约定只留必要部分），并说明是**自动开通**的，
-   不需要手工建。
-5. 说明**企业域名绑定**：企业微信「企业信息 → 企业域名」已显示 `<域名>`。
-6. **提醒用户**：
-   - MX 只影响收信；如果这个域名原来在别处收信，收信已经切到腾讯了。
-   - A / CNAME 记录**没有动**，网站不受影响。
-   - 建议去企业微信客户端或邮箱网页版**实发一封测试邮件**验证收发。
-   - 清理留档：`logs/trace/**`、`logs/agent/**`（可能含账号、域名等信息），
-     或用 `cleanup`（`{"scope":"trace","olderThanHours":24}`，**默认只预演**，要真删加 `"dryRun":false`）。
+分别报告 MX 查询结果、邮箱控制台的域名验证状态、企业信息页的绑定状态，以及未完成项。公共解析器查询只能说明该解析器当时的结果，不能证明全球缓存均已更新。
 
 ## 8. 脱敏约定
 

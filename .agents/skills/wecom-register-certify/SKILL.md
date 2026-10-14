@@ -1,10 +1,9 @@
 ---
 name: wecom-register-certify
-description: 用 deepseek-browser-use 把「注册企业微信 + 提交企业认证 + 支付 ¥300 + 查审核结果」这条线走完的实操手册：有头启动浏览器（认证要法人扫脸、短信码、微信支付，必须 headless:false），登录交给人，然后从「我的企业 → 企业信息 → 前往认证」进入 Vue 单页表单，按「主体信息 → 营业执照 → 法人扫脸 → 确认名称」逐项填写，随时读 Vue 实例 MainValidate.formData 核对字段，最后停在提交前由人完成扫脸、短信验证码与微信支付。重点记录本站点两个最深的坑：一是营业执照用的 ImageUploader 组件其 file input 没有挂 Vue 事件监听器（el._vei 为 null），upload_file 把 files 设好、change 也派发了，页面却永远停在 image_uploader form_err + 「请上传工商营业执照」，必须直接调组件方法 vm.upload({files}) 再复刻 vm.list.push + vm.emitChange 把 filekey 写回表单；二是页面同时挂着两个上传输入框，选错会把营业执照传进「补充证明材料」。另附该后台的通用坑（内容区是内层滚动容器、window.scrollTo 无效、索引易失效要改用选择器、企业微信自有弹窗类名不被 get_modals 命中、hash 路由可直接跳）与提交后的审核结果查法、发票与合同入口。文内数据全部脱敏，替换占位符即可复用。
-whenToUse: 需要在企业微信管理后台（work.weixin.qq.com/wework_admin）注册或开通企业、提交或续办企业微信认证（¥300）、上传营业执照、走法人扫脸与短信验证、完成微信支付，或需要查认证审核结果、申请发票与合同时；也适用于「Vue 组件自带上传逻辑、原生 file input 被架空」这类站点的上传排障。
+description: 使用 dsb 注册或认证企业微信，填写主体信息、上传营业执照并查询审核结果；包含组件上传排障，法人扫脸、短信验证、最终确认和支付交由用户完成。
 ---
 
-> Claude Code 调用名：`dsb-skills:wecom-register-certify`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:wecom-register-certify`。
 
 # 企业微信：注册 + 企业认证 + 支付 ¥300 + 查审核（实操手册）
 
@@ -32,19 +31,7 @@ whenToUse: 需要在企业微信管理后台（work.weixin.qq.com/wework_admin�
 
 ### 1.1 服务与浏览器
 
-```json
-POST http://localhost:10049/playwright/command
-{"id": 1001, "method": "start", "params": {"headless": false, "browser": "chrome"}}
-```
-
-- **`headless: false` 是硬要求**：登录要人扫码、认证要人扫脸、短信码要人念、支付要人扫码——无头实例没法让人操作。
-  主技能第 14 条也提到有头只适合本机调试，但**这个站点恰恰就是那个例外**。
-- `browser` 不用特殊指定，`chrome` / 默认 `auto` 都可以（这个后台不挑引擎，没有商标网那种开发者工具检测）。
-  但记住主技能第二节的两条：**换浏览器/换引擎等于换一套 profile 与登录态**（`edge` 用它自己那份，`firefox` 格式不通用），
-  所以**别在中途换**，不然要重新登录一次。
-- 开工前先 `GET /playwright/health` 确认服务在，再 `start`。
-- `start` 的回执里重点看 `data.browser.profileDir`（登录态就养在这份 profile 里，长期有效）与
-  `data.browser.userProfile`（`false` 说明用的是托管 profile，不是用户日常那份）。
+通用命令、等待、人工协助和任务收尾见 [主技能](../deepseek-browser-use/SKILL.md)。 使用有头 Chrome，扫码期间保留任务，避免中途切换 profile。
 
 ### 1.2 开工前必须问清的字段（一次问全，别填到一半停下来）
 
@@ -59,20 +46,6 @@ POST http://localhost:10049/playwright/command
 > **先确认「企业是否已经存在」再动手**：企业微信一个手机号/微信号可能已经开通过企业。实测踩过——以为要注册，
 > 结果企业早就建好了，白走一遍注册流程。判据：打开后台如果直接进到管理首页（左侧有「我的企业 / 通讯录 / 协作」），
 > 说明**已登录且有企业**，直接从第 3 节开始，不要重新注册。
-
-### 1.3 留档（排查用）
-
-- 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、
-  `NNNNNN-<任务id>-<方法>.json` 完整请求响应、`uploads.log` 上传记录）。
-- 页面留档：`data/<id>/<seq>.png`（截图）与 `data/<id>/<seq>.txt`（同刻的页签 + 可交互结构化文本）。
-  **事后复看某一步**直接 GET `http://localhost:10049/data/<id>/<seq>.txt`，比重新跑一遍便宜得多。
-- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起），
-  写进脚本时用它，不要手拼 `-d '...'`（带中文和引号的 JSON 在 PowerShell 里很容易被吃掉引号，实测 `curl.exe` 会
-  返回 `请求体不是合法 JSON：not allow unquoted fieldName`）。
-- **两份日志都默认脱敏但不会自动清理**：手机号、18 位身份证号/统一社会信用代码、邮箱、长数字会被掩成 `***`，
-  但**姓名、地址、门牌号掩不掉**。任务结束用 `cleanup`（默认只预演，`dryRun:false` 才真删）或手动清。
-- 上传的营业执照落在服务端暂存目录（`start` 回执里的 `data.browser.upload.dir`），**同样不会自动清理**；
-  不需要了用 `DELETE /playwright/upload?name=<文件名>` 删掉——**营业执照是敏感材料，交付前务必提醒用户清理**。
 
 ### 1.4 这个后台的结构特点（先记住，后面全靠它）
 
@@ -112,7 +85,7 @@ POST http://localhost:10049/playwright/command
   **默认已经不回了**（一张图几 KB 到几十 KB，白占上下文），确实要喂视觉模型才传 `inline: true`。
 - 登录成功的判据：页面左侧出现「我的企业 / 通讯录 / 协作 / 应用管理 / 安全与管理」这套菜单，
   并且 `#profile` 能读到企业全称。**不要靠 `document.title` 判断**（标题一直是「企业微信」）。
-- 登录态留在共享 profile 里，**后续任务不用再登**；换 id、换任务都不影响（主技能第九节最后一条）。
+- 登录态留在共享 profile 里，**后续任务不用再登**；换 id、换任务都不影响（主技能对应分册最后一条）。
 
 ### 2.2 进认证入口
 
@@ -220,13 +193,13 @@ POST http://localhost:10049/playwright/command
 }
 ```
 
-- **这是「填完对不对」的权威答案**：DOM 上有值、`formData` 里没有，就是没进模型（主技能第 30 条）。
+- **这是「填完对不对」的权威答案**：DOM 上有值、`formData` 里没有，就是没进模型（主技能对应分册）。
 - `formData.business_license_stuff` 是**数组**，空数组 = 营业执照没上传成功，哪怕页面上看着有图。
 
 ### 3.3 主体信息
 
 - 字段一律用 `input_text_by_selector`（可见字段默认走真实输入，`committed=true`）；
-  **不要用 `execute_js` 直接改 `input.value`**，那样 Vue 的 model 里是空的（主技能第 30 条）。
+  **不要用 `execute_js` 直接改 `input.value`**，那样 Vue 的 model 里是空的（主技能对应分册）。
 - 中文一律不要用 `send_keys`（只认键名，塞中文得到 `Unknown key`）。
 - 填完先用 `get_form_state` 对一遍，再回读一次 3.2 的 `formData`：
 
@@ -266,7 +239,7 @@ POST http://localhost:10049/playwright/command
 ```
 
 2. **原生 `<select>`** → 用 `get_dropdown_options` 拿选项文本，再 `select_dropdown_option` 按文本选
-   （主技能第六节）。**但别假设它一定是原生 select**：本后台大量控件是自绘的，
+   （主技能对应分册）。**但别假设它一定是原生 select**：本后台大量控件是自绘的，
    `get_dropdown_options` 会拿不到选项，这时走第 3 步。
 3. **自绘下拉**（`div`/`span` 当触发器，选项是一堆 `li`/`div`）→ **真实鼠标点开，再点选项文本**，
    分两次调用、中间不要插别的动作（菜单会收起来）：
@@ -281,7 +254,7 @@ POST http://localhost:10049/playwright/command
 ```
 
 4. **单选 / 勾选** → 用 `check_element_by_index` 或直接点它的 `<label>`；
-   **点完等 1–2 秒再回读**（框架状态更新是异步的，主技能第 25 条），
+   **点完等 1–2 秒再回读**（框架状态更新是异步的，主技能对应分册），
    用 `is_checked` 或回读 3.2 的 `formData` 交叉验证。
 5. **协议类勾选框必须真的勾上**再提交（第 8.7 节）。漏勾的表现是提交按钮点了没反应、
    或者报一句含糊的「请先阅读并同意」。
@@ -289,54 +262,14 @@ POST http://localhost:10049/playwright/command
 **判据统一回落到 3.2 的 `formData`**：控件点了、页面上看着选中了，但 `formData` 里没变，
 就是没进模型——换成真实鼠标点（`mode:"mouse"`）再试，别继续在 JS 派发上打转。
 
-## 4. 营业执照上传（重头戏）
+## 4. 营业执照上传
 
-**这一节是本文最值钱的部分。** 实测在这里卡了很久：`upload_file` 明明返回 `ok:true`、
+实测：`upload_file` 明明返回 `ok:true`、
 `input.files` 也设进去了、`change` 事件也派发了，页面却**一直停在 `image_uploader form_err` + 「请上传工商营业执照」**。
 
-### 4.1 根因：组件的 file input 没有挂 Vue 事件监听器
+### 4.1 诊断：文件已放入但组件未读取
 
-这个上传用的是自研的 `ImageUploader` 组件，它的 `<input class="uploadInput">` **根本没有监听器**，
-所以任何 JS 派发的 `change` 事件都不会走到组件的 `upload()` 方法里去——文件"进"了 input，但没人读它。
-
-> **现在不用自己摸 `_vei` 了**：服务端已经有 `get_element_listeners`，而且走的是 CDP 的
-> `DOMDebugger.getEventListeners`（浏览器自己报的清单，原生 `addEventListener` 也算），结论比手写
-> `execute_js` 探 `_vei` 可信：
->
-> ```json
-> {"id":2001,"method":"get_element_listeners","params":{"selector":".uploadInput"}}
-> ```
-> ```json
-> {"ok":true,"data":{"found":true,"tag":"INPUT","hasListeners":false,"detection":"cdp",
->   "listeners":[],"note":"这个元素**没有任何事件监听器**(浏览器自己报的监听器清单是空的)…"}}
-> ```
->
-> `upload_file` 的回执里也会带 `data.consumed`（`listened`/`noListener`/`unknown`）与 `data.hint` ——
-> 看到 `noListener` 就**别再重试上传了**，直接跳到 4.2。
->
-> 下面这段手写 `_vei` 探针保留下来，是因为它能一次把页面上**所有** file input 挨个探一遍（很实用），
-> 而 `get_element_listeners` 一次只探一个元素。
-
-**诊断手法（值得单列，通用）**：Vue 2 把事件回调挂在元素的 `` _vei ``（invoker 表）上。
-
-```js
-// 判断这个元素到底有没有监听器：_vei 为 null 就说明「JS 派发事件没用」
-(() => {
-  const inp = document.querySelector('.uploadInput');
-  if (!inp) return { none: true };
-  return {
-    hasVei: inp._vei !== null,                 // false/null = 没挂监听器
-    veiKeys: inp._vei ? Object.keys(inp._vei) : null,
-    hasVue: !!inp.__vue__,                      // 元素本身通常也没有 __vue__
-    parentVue: inp.parentElement ? !!inp.parentElement.__vue__ : false
-  };
-})()
-```
-
-- **`_vei === null` 是判决书**：这种情况下 `upload_file`（内部就是 `setInputFiles` + 派发事件）
-  **永远不可能成功**，再重试一百次也一样。
-- 反例：同一页面上 logo 的上传框是个普通 `ww_fileInput`（原生 input + 正常监听），
-  用 `upload_file` **一次就成**——**所以「能不能用 upload_file」要按控件分别判断，不要一概而论**。
+`upload_file` 后若仍显示「请上传工商营业执照」，检查目标输入框、`input.files` 与 `formData.business_license_stuff`。用 `get_element_listeners` 和回执的 `consumed` 辅助判断；`_vei` 是框架私有字段，缺失不能单独证明没有监听器。确认当前组件具有下面的方法后再采用 4.2 的写回方案，避免重复上传。
 
 ### 4.2 正解：直接调组件方法，再复刻它的状态写回
 
@@ -445,7 +378,7 @@ POST http://localhost:10049/playwright/command
 ```
 
   实测 `get_element_attribute(index, "id")` 回 `#dsh_up_1` —— 这就是传错了。
-- **更稳的做法：根本不要按索引传，直接用选择器**（主技能第七节第 7 条）：
+- **更稳的做法：根本不要按索引传，直接用选择器**（主技能对应分册）：
   用 `document.querySelectorAll('input[type=file]')` 结合它在 DOM 里的位置/祖先类名挑出营业执照那个，
   给它一个临时 id 再 `upload_file` 传 `selector`。
 - **绝对不要靠「第几个 input」这种顺序假设**：布局一变顺序就变。
@@ -454,7 +387,7 @@ POST http://localhost:10049/playwright/command
 
 - 实测 `#dsh_up_0` 一度在**视口上方**（`y = -192`），于是**它不在快照里、没有索引**，
   按索引怎么都传不进去；直到页面布局变化后才出现索引 `[44]`。
-- **原因**：快照只覆盖当前视口，视口外的元素不进快照（主技能第三节的「元素在快照里找不到」）。
+- **原因**：快照只覆盖当前视口，视口外的元素不进快照（主技能对应分册的「元素在快照里找不到」）。
 - **应对顺序**：
   1. **首选：用 `selector` 而不是 `index`** —— `upload_file` 传 `selector` 不需要元素可见、也不需要索引；
   2. 需要索引时，用 `viewportExpansion` 扩大快照范围，或先把元素滚进视口（滚动见 8.1）；
@@ -467,78 +400,21 @@ POST http://localhost:10049/playwright/command
              y: Math.round(r.top), visible: e.offsetParent !== null }; }); })()
 ```
 
-### 4.6 一个完整的「上传营业执照」批次
+### 4.7 上传排查
 
-```json
-{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
-  {"upload_file":{"selector":"#dsh_up_0","path":"<营业执照文件名>"}},
-  {"wait":{"seconds":1}},
-  {"execute_js":{"body":"(async()=>{const inp=document.querySelector('.uploadInput')||document.querySelector('input[type=file]');let vm=inp&&inp.__vue__;for(let p=inp&&inp.parentElement;!vm&&p;p=p.parentElement){if(p.__vue__&&typeof p.__vue__.upload==='function')vm=p.__vue__;}if(!vm)return{err:'no vm'};const f=inp.files;if(!f||!f.length)return{err:'no files'};const key=await new Promise((res,rej)=>vm.upload({files:f},res,rej));vm.list.push({key:key,loadingIndex:null});vm.emitChange();return{filekey:key};})()"}}
-]}}
-```
-
-> `upload_file` 的 `path` 是**服务端**能打开的路径。客户端-服务器模式下先把文件 `POST /playwright/upload` 送上去，
-> 再用回执里的 `path`/`relativePath`（主技能第四节的「上传文件」）。
-
-### 4.7 上传失败排查决策树（照这个顺序走，别乱试）
-
-一条命令拿到全部判据：
-
-```js
-(() => {
-  const inputs = [...document.querySelectorAll('input[type=file]')].map((e, i) => {
-    const r = e.getBoundingClientRect();
-    return { i, id: e.id || '-', accept: e.accept || '-', cls: String(e.className).slice(0, 24),
-             fileCount: e.files ? e.files.length : -1, fileName: e.files && e.files[0] ? e.files[0].name : null,
-             y: Math.round(r.top), inViewport: r.top >= 0 && r.bottom <= innerHeight,
-             hasVei: e._vei !== null, hasVue: !!e.__vue__ };
-  });
-  // 找带 upload() 的 Vue 实例
-  const anchor = document.querySelector('.uploadInput') || document.querySelector('input[type=file]');
-  let vm = anchor && anchor.__vue__;
-  for (let p = anchor && anchor.parentElement; !vm && p; p = p.parentElement)
-    if (p.__vue__ && typeof p.__vue__.upload === 'function') vm = p.__vue__;
-  const root = document.querySelector('.image_uploader');
-  return {
-    inputs,
-    vmFound: !!vm,
-    vmMethods: vm ? Object.keys(vm.$options.methods || {}).slice(0, 20) : null,
-    listKeys: vm ? (vm.list || []).map(x => x.key).filter(Boolean) : null,
-    rootClass: root ? String(root.className) : null,
-    errText: /请上传工商营业执照/.test(document.body.innerText)
-  };
-})()
-```
-
-| 现象 | 判据 | 动作 |
-| --- | --- | --- |
-| 页面红字「请上传工商营业执照」不放 | `errText: true` | 继续往下看，别重复点提交 |
-| `inputs[].fileCount` 为 0 | 文件根本没进去 | 检查 `upload_file` 的 `selector` 是否指向了**存在且可写**的 file input；先 `POST /playwright/upload` 确认服务端能读到该文件 |
-| `fileCount > 0` 但 `listKeys` 为空 | **文件进了 input，组件没读** | 就是 4.1 的根因：`hasVei` 大概率是 `false` → 走 4.2 直调 `vm.upload()` + `emitChange()` |
-| `vmFound: false` | 找不到组件实例 | 换找法：`$children` 递归找带 `upload` 的组件；或确认选择器 `.uploadInput` 是否改版（回读 `vmMethods` 看方法名） |
-| `listKeys` 非空但表单仍空 | 状态没写回 | 补 `vm.emitChange()`（4.2 第 4 点），或直接回读 `formData.business_license_stuff` 确认 |
-| `inputs[]` 里 `inViewport: false`（`y < 0`） | 元素在视口外、**快照里没有索引** | 改用 `selector` 定位（4.5），或 `viewportExpansion` 扩大快照 |
-| `fileCount > 0` 但传的是 `#dsh_up_1` | **传错输入框** | 换到营业执照那个（4.4），用 `get_element_attribute(index,"id")` 确认 |
-
-**纪律**：同一个动作失败两次就换判据、换手段，**不要第三次重试同一个调用**。
-这个站点上「`upload_file` 反复传同一张图」是最典型的无效重试——因为根因在组件监听器上，重试永远不成功。
+| 现象 | 检查与处理 |
+| --- | --- |
+| `input.files` 为空 | 检查服务器路径及营业执照输入框选择器 |
+| 文件非空、组件列表为空 | 核对监听器和组件方法，按 4.2 上传并写回 |
+| 组件列表非空、表单字段为空 | 检查 `emitChange` 与 `formData.business_license_stuff` |
+| 找不到组件实例 | 核对当前版本的祖先实例、方法名和列表字段，不套用旧代码 |
+| 快照没有上传框 | 隐藏或视口外输入框用选择器，见 4.4、4.5 |
 
 ## 5. 短信验证码与法人扫脸（都由人做，但流程要写对）
 
-### 5.1 用正式的人机协同 API，别自己截图
+### 5.1 短信码交接
 
-主技能第九节那套 `request_human_input` / `submit_human_input` / `get_human_input` 就是为这种场景设计的，
-**比我这次的做法（自己 `get_element_screenshot` 存盘 + 在聊天里贴图片 URL）规范得多**：
-
-```json
-{"id":1001,"method":"request_human_input",
- "params":{"prompt":"请输入收到的短信验证码","selector":"#sms_code","timeoutSeconds":300}}
-```
-
-- 传 `selector`/`index` 指向二维码/验证码图时，服务会把该元素截图落盘并回 **`data.imageUrl`**
-  （默认**不**回 `data.imageBase64`，要内联才传 `inline: true`），同时把页签带到窗口最前——**人既能看到浏览器，也能拿到图**。
-- 人答复后 `submit_human_input`（`requestId` + `answer`）回填，或直接让他在浏览器里自己填。
-- 取答复用 `get_human_input`（可传 `timeoutSeconds` 长轮询）。`data.status` 为 `pending` / `answered` / `expired`。
+用 `request_human_input` 请用户处理验证码，保留有头页面；参数与答复处理见 [人机协同分册](../deepseek-browser-use/references/human-in-loop.md)。不要将验证码写入技能或报告。
 
 ### 5.2 法人扫脸（二维码）
 
@@ -569,7 +445,7 @@ POST http://localhost:10049/playwright/command
 重新点「重新发送验证码」拿到新码后**立刻**提交才成功。两次验证码之间的间隔只有几分钟，
 所以**不要以为「码还在手上」就慢慢来**。
 
-- 验证码**有时效**（主技能第九节提到税务系统的图验约 120 秒；短信码同样是分钟级），
+- 验证码**有时效**（主技能对应分册提到税务系统的图验约 120 秒；短信码同样是分钟级），
   所以流程是：`request_human_input` → 人给码 → **`submit_human_input` 之后立刻 `input_text` + 点提交**，
   不要中间插别的动作、不要攒着。
 - 过期了就**重新发一次要新码**，**不要拿旧码反复重试**（重试必然失败，还会浪费一轮）。
@@ -577,7 +453,7 @@ POST http://localhost:10049/playwright/command
 
 ## 6. 提交前自检与支付
 
-### 6.1 提交前的自检清单（每次都要做）
+### 6.1 提交前的自检清单
 
 ```json
 {"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
@@ -596,20 +472,9 @@ POST http://localhost:10049/playwright/command
 6. `formData.mp_operator_phone` / `formData.mp_operator_email` 是用户给的；
 7. 第 3 步的**企业简称 + 命名依据**已确认（见 3.4）。
 
-### 6.2 用 `expect` 断言「动作真的生效了」
+### 6.2 提交后核验
 
-主技能第七节最值钱的习惯：**回执 `ok:true` 不代表页面真的变了**。提交类动作一定带断言：
-
-```json
-{"id":1001,"method":"commands","params":{"stopOnError":false,"stopOnExpectFailure":true,"commands":[
-  {"click_element_by_selector":{"selector":"<提交按钮选择器>","mode":"mouse"},
-   "expect":{"js":"document.body.innerText.includes('<提交后的标志文案>')"}},
-  {"wait_for_stable":{"quietMs":900,"timeoutSeconds":20}}
-]}}
-```
-
-- `expectResult.passed === false` 就是「动作发了、状态没变」，当场就能发现，不用等到后面莫名失败。
-- 断言脚本写错选择器也会记成 `passed:false`，错误在 `expectResult.error`。
+用户完成提交后回读订单与审核状态。`expect` 可以等待具体后置条件；断言失败可能是等待不足或条件错误，不证明提交未发生，先观察再决定下一步。
 
 ### 6.3 支付：由人做
 
@@ -631,7 +496,7 @@ POST http://localhost:10049/playwright/command
 ```
 
 1. **拿到并记下订单号**（`order_id=<订单号>`）——后面查审核、开发票、申请合同全靠它；
-2. **确认订单状态已从「待支付」变成正常态**（订单页能读到「支付方式: 微信支付」就说明这一单成立）；
+2. **确认订单显示已支付或相应业务状态**；仅出现「支付方式: 微信支付」不能证明付款完成；
 3. **把订单号脱敏后写进交付说明**（只留后 4 位）。
 
 **支付没走完的两种情况**：
@@ -639,7 +504,7 @@ POST http://localhost:10049/playwright/command
 - **人还没付**：订单会停在待支付。**不要代替人重试支付、不要连点支付按钮**——把状态告诉用户，等他付完再回读。
   重新进订单页的路径就是上面的 `go_to_url`，比在界面上找入口稳。
 - **付了但页面没跳**：不要凭「页面没变」判断失败。按上面批次**直接 `go_to_url` 订单详情页回读**，
-  这才是权威状态（主技能第 21 条：`ok:true` 与 `changed` 都不证明业务结果）。
+  这才是权威状态（主技能对应分册：`ok:true` 与 `changed` 都不证明业务结果）。
 
 > **订单号是这一整条线的锚点**：支付、审核进度、发票、合同四个页面都挂在它上面。
 > 一旦拿到就记进任务笔记，别指望后面再从界面里翻出来。
@@ -669,33 +534,9 @@ POST http://localhost:10049/playwright/command
 > 实测：审核期间订单页的「订单发票」写的是「审核完成后可申请」；过一段时间再打开，它变成了「申请发票」，
 > 同时 `#profile` 出现「当前认证有效期至 <日期>」。**别在审核期间反复刷页面**，隔几小时看一次就够。
 
-### 7.3 顺手可办的：发票与合同
+### 7.3 发票与合同
 
-**发票**（订单详情页 →「申请发票」）：
-
-- 弹窗 `.mall_invoice_dialog_container`，含：开票项目、**电子发票类型**（增值税普通发票 / 增值税专用发票）、
-  抬头类型（企业 / 组织 / 个人）、发票抬头、纳税人识别号、（选填）开户银行、银行账号。
-- **抬头与税号通常是自动带出的**，核对即可；开户银行/银行账号是**选填**，普票不用填。
-- **普票 vs 专票要问用户，不要自己拍**：
-
-  | | 增值税普通发票 | 增值税专用发票 |
-  | --- | --- | --- |
-  | 抵扣 | 不可抵扣 | 可抵扣进项税 |
-  | 前提 | 无 | **必须是一般纳税人**；小规模纳税人拿到专票也**不能抵扣**（简易计税，无进项概念） |
-  | 资料 | 名称 + 税号 | 另需开户行、账号、注册地址、电话 |
-
-  > **小规模纳税人不能抵扣**这条要主动讲给用户：为小规模企业开专票是零收益 + 多填资料。
-  > 认证费金额小，专票能抵的税额也就十几块，不值得为它跑一趟客服。
-- **提交后没有自助修改入口**：实测订单页只留「审核中 / 查看发票」，要改类型只能找审核机构客服
-  （订单页上就写着客服微信号、邮箱、电话、工作时间）。**所以类型一定要在提交前问清**。
-
-**合同**（订单详情页 →「申请合同」）：
-
-- 两条路：**申请电子合同**（可在线签署并加盖双方电子签章，**首次签署需先申请企业电子签章**）、
-  **申请纸质合同**（下载打印后加盖鲜章，约 **15 个工作日**寄回）。
-- **点「申请电子合同」可能会被弹回电子签章流程**——如果企业电子签章还没批下来，
-  按钮状态会显示「企业电子签章申请中」，点了就跳回签章申请的步骤页。**这不是出错，是前置依赖没满足**，
-  把依赖关系讲清楚交给用户，不要在那儿反复点。
+认证完成后按用户需求转 [发票、合同与电子签章技能](../wecom-invoice-contract/SKILL.md)。先核实可申请状态及已确认的发票类型；电子合同依赖企业电子签章。
 
 ### 7.4 审核被退回 / 迟迟没有结果
 
@@ -738,7 +579,7 @@ POST http://localhost:10049/playwright/command
 **但更好的做法是根本不滚动**：
 
 - 需要哪个元素就用 **`click_element_by_selector` / `input_text_by_selector` 按 id/class 定位**——
-  这类方法不依赖快照索引，元素在视口外也照样能操作（主技能第七节第 7 条就是为这种情况写的）。
+  这类方法不依赖快照索引，元素在视口外也照样能操作（主技能对应分册就是为这种情况写的）。
 - 只有「必须让元素进视口」时（例如要截图给人看）才去操作内层容器：
 
 ```js
@@ -779,24 +620,20 @@ POST http://localhost:10049/playwright/command
   `closed:false` 再退回上面的自扫 + `mouse_click` 坐标。
 - 关不掉的企业微信弹窗，**用 `mouse_click` 点它的关闭按钮坐标**（`get_modals` 给的 `closePoint` 思路一样，
   只是坐标要自己从 `getBoundingClientRect()` 算）。
-- **提交/支付类按钮不要用 JS 派发去点**：主技能第 30 条说过，`mode=js` 意味着没走真实交互。
+- **提交/支付类按钮不要用 JS 派发去点**：主技能对应分册说过，`mode=js` 意味着没走真实交互。
   关键动作用 `mode:"mouse"`。
 
 ### 8.3 索引随时失效，回读要用选择器
 
-- 认证表单是分步的，**每点一次「下一步」索引全部重算**（主技能第 3 条）。沿用旧索引会得到
+- 认证表单是分步的，**每点一次「下一步」索引全部重算**（主技能对应分册）。沿用旧索引会得到
   `click_element_by_index 失败：元素不存在或页面已变化,请重新调用 get_browser_state 获取元素索引`。
 - **实测踩过**：上一批次拿到的 `[35]`，下一次调用就报上面这句；同一个元素换成
   `click_element_by_selector` 或 `document.querySelector(...)` 立刻就好。
 - 结论：**这个站点上优先用选择器定位，把索引当一次性用品**。
 
-### 8.4 `changed=false` 不代表点击失败，但也不能当成成功
+### 8.4 点击结果
 
-- 实测点「免费开通」这类按钮时，`click_element_by_index` 回 `ok:true, changed:false`，
-  **但网络面板里确实打出了对应的接口请求**（说明点击生效了，只是 500ms 观察窗口内没看到 DOM 变化）。
-- 判据顺序：**`data.changed` → `diff_dom_text` → 网络请求（`get_requests` / `get_response_body`）→ 页面文案**。
-  主技能第 21 条说得对：`ok:true` 只保证动作没抛异常。
-- **不要为了判断这个去读截图**（省 token 铁律，主技能第 28 条）。
+`changed` 与网络埋点不能证明提交成功；回读本次订单、表单或审核状态。动作不确定时先观察，不重复提交。
 
 ### 8.5 hash 路由可以直接跳，比点菜单稳
 
@@ -806,7 +643,7 @@ POST http://localhost:10049/playwright/command
 
 ### 8.6 校验纪律：以 Vue 的 `formData` 为准，不以 DOM 为准
 
-- **DOM 里有值 ≠ 进了框架模型**（主技能第 30 条）。这个站点的权威答案在 3.2 那个 `MainValidate.formData` 里。
+- **DOM 里有值 ≠ 进了框架模型**（主技能对应分册）。这个站点的权威答案在 3.2 那个 `MainValidate.formData` 里。
 - `input_text_by_selector` 对可见字段默认走真实输入（`committed=true`）；
   看到 `data.committed=false` 就重填一遍，别继续加值。
 - 密码类字段快照里是 `[redacted]`，别指望从快照读出来。
@@ -819,93 +656,15 @@ POST http://localhost:10049/playwright/command
 - 企业微信后台的协议勾选（如电子签章要勾《系统使用须知》《电子认证协议》《用户隐私协议》）
   **必须真的勾上**再提交，勾选后等 1–2 秒再回读 `is_checked`（框架状态更新是异步的）。
 
-### 8.8 报错信息对照表（看到这句就做这件事）
+### 8.8 常见业务提示
 
-| 报错 / 提示 | 含义 | 动作 |
-| --- | --- | --- |
-| `click_element_by_index 失败：元素不存在或页面已变化,请重新调用 get_browser_state 获取元素索引` | 索引已失效（页面变过） | **换 `click_element_by_selector`**（8.3），比重新取快照再点更稳 |
-| `click_element_by_selector 失败：没匹配到可操作的元素(不存在或不可见)` | 选择器没命中，或元素不可见 | 用 `execute_js` 回读 `querySelectorAll` 的真实结果与 `offsetParent`；隐藏元素改用 `mode:"js"` 或先显示出来 |
-| `[ACTION_TIMEOUT] 等待元素可操作超时` | 元素在但不可操作（被遮挡/有动画） | 换 `mode:"mouse"`（真实鼠标，不做可操作性检查）；回执里 `data.coveredBy` 指出是谁挡着 |
-| `input_text_by_selector 失败：[ELEMENT_HIDDEN] 元素当前不可见` | 目标是隐藏输入框 | 优先切到它所在的那一步；不行才用 `mode:"js"`，并注意回执的 `data.committed=false` |
-| `upload_file 失败：缺少参数 index` | 这个构建的 `upload_file` 要求 `index` | 改用/补上 `selector`（4.4、4.5）；本站在这里**优先选择器** |
-| `send_keys 失败：Unknown key: "..."` | `send_keys` 只认键名 | 中文一律用 `input_text_by_selector`（8.6） |
-| `请求体不是合法 JSON：not allow unquoted fieldName` | 客户端把 JSON 拼坏了（PowerShell 吃引号、手拼 `-d '...'` 常见） | 改用 `dsb` 客户端：`dsb ...`，参数带中文时写进 `--params @文件.json`；别在命令行手拼中文 JSON |
-| `不支持的方法：xxx` | 服务端这个版本没有该方法 | **先 `list_methods` 确认能力再写脚本**；老版本发布包可能没有 `wait_for_idle` / `get_form_state` 等新方法，缺失就用 `execute_js` 自己实现等价逻辑 |
-| `没有找到对应的浏览器实例：<id>` | 实例不在（服务重启过 / id 写错 / 已 `close`） | `list_tasks` 看活着的任务，再决定 `start` 还是改用已有 id |
-| `start 失败：该 id 已经有正在运行的浏览器实例：<id>` | 同 id 重复 `start` | 先 `close` 或换 id（主技能第 12 条） |
-| 页面红字 **「请上传工商营业执照」** | 营业执照没进表单 | 走第 4 节，尤其 4.1 的组件直调与 4.7 的决策树 |
-| 页面提示 **「短信验证码过期」** | 码超时了 | 重新点「重新发送验证码」要新码，**立刻**提交（5.3） |
-| 提交按钮点了没反应 | 可能漏勾协议 / 有遮挡层 | 查 `data.coveredBy`；回读协议勾选状态（8.7） |
+- 「请上传工商营业执照」：按第 4 节检查目标输入框及表单 filekey。
+- 「短信验证码过期」：重新获取并及时处理，不重试旧码。
+- 提交无响应：先查订单是否已创建，再检查协议、遮挡与字段错误。通用 CLI / 索引故障见主技能分册。
 
-> **通用纪律**：这个后台的报错大多是「索引失效」或「控件没进框架模型」两类。
-> 前者换选择器，后者换真实鼠标 / 真实输入——**都不需要重启服务，也不需要重做整个流程**。
+## 10. 交付
 
-## 9. 一次典型任务的骨架（脱敏模板）
-
-```json
-{"id":1001,"method":"start","params":{"headless":false,"browser":"chrome"}}
-```
-
-```json
-{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
-  {"go_to_url":{"url":"https://work.weixin.qq.com/wework_admin/frame#/authCenter/?from=cert_vbutton"}},
-  {"wait_for_stable":{"quietMs":900,"timeoutSeconds":25}},
-  {"get_browser_state":{}}
-]}}
-```
-
-```json
-{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
-  {"input_text_by_selector":{"selector":"<企业全称输入框>","text":"<企业全称>"}},
-  {"input_text_by_selector":{"selector":"<信用代码输入框>","text":"<18 位统一社会信用代码>"}},
-  {"input_text_by_selector":{"selector":"<管理员手机号输入框>","text":"<管理员手机号>"}},
-  {"input_text_by_selector":{"selector":"<管理员邮箱输入框>","text":"<管理员邮箱>"}},
-  {"get_form_state":{"includeHidden":true}}
-]}}
-```
-
-```json
-{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
-  {"upload_file":{"selector":"#dsh_up_0","path":"<营业执照文件名>"}},
-  {"wait":{"seconds":1}},
-  {"execute_js":{"body":"(async()=>{const inp=document.querySelector('.uploadInput')||document.querySelector('input[type=file]');let vm=inp&&inp.__vue__;for(let p=inp&&inp.parentElement;!vm&&p;p=p.parentElement){if(p.__vue__&&typeof p.__vue__.upload==='function')vm=p.__vue__;}if(!vm)return{err:'no vm'};const f=inp.files;if(!f||!f.length)return{err:'no files'};const key=await new Promise((res,rej)=>vm.upload({files:f},res,rej));vm.list.push({key:key,loadingIndex:null});vm.emitChange();return{filekey:key};})()"}}
-]}}
-```
-
-```json
-{"id":1001,"method":"request_human_input",
- "params":{"prompt":"请法定代表人用微信扫码完成人脸识别","selector":"<二维码元素选择器>","timeoutSeconds":600}}
-```
-
-```json
-{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
-  {"execute_js":{"body":"const i=document.querySelector('.uploadInput');let vm=i&&i.__vue__;for(let p=i&&i.parentElement;!vm&&p;p=p.parentElement){if(p.__vue__&&typeof p.__vue__.upload==='function')vm=p.__vue__;}return {keys:vm?(vm.list||[]).map(x=>x.key).filter(Boolean):[],txt:document.body.innerText.slice(-600)};"}}
-]}}
-```
-
-**节奏建议**：一个批次 = 一个计划段（「填一屏字段」/「上传 + 验证」/「提交 + 断言」），
-末尾放一次回读（`get_browser_state` 或 `execute_js`），下一次推理基于新结果决定后续。
-**不要在一个批次里塞几十步**（主技能第 19 条：批次是顺序执行的，前面的失败会影响后面）。
-
-**收尾**：确认没有别的任务在跑之后 `close`（最后一个任务关闭时浏览器才一起退出，不留孤儿进程）。
-等人工扫脸/支付期间**不要 close**，任务还没结束。
-
-## 10. 交付话术（收尾）
-
-1. **说清做到了哪一步、卡在哪一步需要人做什么**，用四件事的清单：扫脸 / 短信码 / 支付 / 最终确认。
-2. **给脱敏后的关键信息**：企业全称（可保留）、信用代码**只留后 4 位**、订单号**只留后 4 位**、
-   管理员手机号**只留后 4 位**。**不要把这些完整值写进交付说明**。
-3. **说明审核状态与后续动作**：
-   - 审核中 → 提醒「**订单发票**从『审核完成后可申请』变成『申请发票』就代表审核结束」，别让用户天天刷；
-   - 已通过 → 给「当前认证有效期至 `<日期>`」，提醒到期要续（认证一年一续）。
-4. **发票类型要用户确认**（普票 / 专票），并把「小规模纳税人不能抵扣」讲清楚；提交后不能自助改。
-5. **合同说明依赖**：电子合同需先有企业电子签章；没有签章时只能走纸质合同（约 15 个工作日寄回）。
-6. **提醒清理**（重要，涉及敏感材料）：
-   - `logs/trace/**` 与 `logs/agent/**`（含手机号、证件号、地址，脱敏只是尽力而为）；
-   - **服务端暂存目录里的营业执照**（`DELETE /playwright/upload?name=<文件名>` 或直接删目录）；
-   - `data/<id>/` 里的截图与结构化文本（一次完整流程能攒下上百个文件）。
-   用 `cleanup` 时注意它**默认只预演**，要真删得传 `"dryRun":false`。
-7. **别把「已提交」说成「已通过」**：审核由第三方机构做，通过与否只能以 7.2 的三个判据为准。
+报告表单、付款、审核各自的实际状态及认证有效期；「已提交」不等于「已通过」。给出待办的扫脸、短信码、支付或最终确认步骤，发票和合同按 7.3 转入对应技能。敏感记录按第 11 节处理。
 
 ## 11. 脱敏约定
 

@@ -1,19 +1,15 @@
 ---
 name: douyin-research-and-outreach
-description: 用 deepseek-browser-use 在抖音（douyin.com / 抖音精选）完成用户痛点挖掘、视频检索、深度穿透虚拟列表阅读评论、以及向目标用户定向发送私信确认软件需求的完整实操手册。写透七大实测核心坑位：扫码登录与验证码弹窗、视频帧自动播放导致截图熔断（circuit-open）的规避与纯文本回退策略、虚拟列表（.route-scroll-container）必须 dispatchEvent('scroll') 才能加载 300+ 深度评论的机制、动态刷新导致快照索引瞬间失效（STALE_ELEMENT）的坐标与 DOM 穿透方案、长耗时滚动中的 SPURIOUS_DISPATCH 重试、contenteditable 富文本私信输入框的 insertText 注入范式、以及平台单向私信隐私限制与防封号规则。
-whenToUse: 需要在抖音（douyin.com）进行产品需求调研、痛点评论挖掘、舆情分析，或通过私信向潜在客户确认需求与意向时使用。
+description: 使用 dsb 在抖音网页版检索视频、阅读虚拟列表评论并研究用户需求；用户明确授权私信时可定向联系，包含富文本输入和平台消息限制。
 ---
 
-> Claude Code 调用名：`dsb-skills:douyin-research-and-outreach`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:douyin-research-and-outreach`。
 
 # 抖音需求调研与定向私信实操手册
 
-一次真实生产级任务（2026-10-09）的完整实操沉淀：通过 `dsb` 驱动 Chrome，在抖音网页版上完成从扫码登录、痛点视频检索、突破虚拟列表拉取 350+ 条深层用户需求评论，到自动定位目标用户主页并成功发送软件需求确认私信的全流程。
+通用命令、等待、人工协助和任务收尾见 [主技能](../deepseek-browser-use/SKILL.md)。
 
-> **统一命令行规范**：一律通过 `dsb` 执行（已安装在 `PATH` 上，任何目录直接敲）。
-> **跨调用复用同一个数字 `--id`**（例如 `--id 2026100902`）。
-
----
+仅在用户明确授权后发送私信；单纯调研不包含联系他人。
 
 ## 一、 站点核心特征与关键架构
 
@@ -38,17 +34,7 @@ whenToUse: 需要在抖音（douyin.com）进行产品需求调研、痛点评�
 ### 坑 2：评论“假加载”——仅修改 scrollTop 无法渲染新评论
 - **现象**：很多外层 `<div>`（如 `.comment-mainContent`）看似有高度，但对其 `scrollTop` 赋值后，评论数始终定死在 15 条，无法加载新数据。
 - **根本原因**：抖音采用 React 虚拟列表，滚动监听挂载在顶层容器 `.route-scroll-container` 上，并且必须派发标准的浏览器滚动事件才能触发 React 的状态刷新。
-- **最佳实操写法**：
-```javascript
-// 必须同时做累加与 dispatchEvent
-const container = document.querySelector('.route-scroll-container');
-for (let i = 0; i < 6; i++) {
-  container.scrollTop += 1200;
-  container.dispatchEvent(new Event('scroll', { bubbles: true }));
-  window.dispatchEvent(new Event('scroll', { bubbles: true }));
-  await new Promise(r => setTimeout(r, 800));
-}
-```
+- 写法见步骤 3 的脚本：更新容器 scrollTop 后派发 scroll 事件。虚拟列表只保留当前渲染项，需要累计时逐轮提取并去重。
 
 ### 坑 3：动态刷新导致快照索引瞬间失效（STALE_ELEMENT）
 - **现象**：刚调完 `get_browser_state` 拿到索引 86，紧接着调用 `click_element_by_index -p index=86`，立即报错 `索引越界/当前没有页面快照`。
@@ -57,9 +43,9 @@ for (let i = 0; i < 6; i++) {
   - 优先用 JS 获取元素的实际屏幕坐标（`getBoundingClientRect()`），然后用 `dsb run mouse_click -p x=.. -p y=..` 点击；
   - 或者直接在 JS 内执行 `el.click()`。
 
-### 坑 4：长耗时脚本中的 SPURIOUS_DISPATCH 噪声
-- **现象**：执行循环滚动 10 次的脚本时，偶发报错 `Object doesn't exist: request@...`。
-- **解决方案**：这是 Chrome CDP 管道的瞬态噪声，在命令后追加 `--retry-on-spurious` 即可自动重试恢复。
+### 坑 4：SPURIOUS_DISPATCH
+
+只读脚本可用 `--retry-on-spurious`。滚动、输入或发送中报错时先回读状态，不自动重发；重发滚动脚本可能跳过评论。
 
 ### 坑 5：私信输入框是 contenteditable 富文本编辑器，传统输入命令无效
 - **现象**：私信窗口的输入区是一个类名为 `.messageEditorinputArea` 的 `<div contenteditable="true">`，不是原生 `<input>` 或 `<textarea>`，调用 `input_text` 无法触发组件的 React 模型。
@@ -103,8 +89,8 @@ dsb --id 2026100901 run go_to_url -p url='https://www.douyin.com/video/<视频ID
 # 1. 点击评论图标（通过 JS 找到评论按钮并点击）
 dsb --id 2026100901 js "() => { const b = document.querySelector('[data-e2e="comment-icon"]') || Array.from(document.querySelectorAll('*')).find(e => e.getAttribute('aria-label')?.includes('评论')); b?.click(); }"
 
-# 2. 深度滚动拉取 300+ 评论并导出带主页链接的优质评论
-dsb --id 2026100901 js @scroll_and_extract.js --retry-on-spurious
+# 2. 滚动后提取当前渲染的评论，不保证覆盖全部评论
+dsb --id 2026100901 js '@scroll_and_extract.js' --out comments.json
 ```
 
 `scroll_and_extract.js` 脚本模板：
@@ -137,7 +123,7 @@ async () => {
 dsb --id 2026100901 run go_to_url -p url='<用户主页URL>'
 
 # 2. 唤起私信窗口并注入文本
-dsb --id 2026100901 js @send_dm.js --retry-on-spurious
+dsb --id 2026100901 js '@send_dm.js'
 
 # 3. 敲回车完成发送
 dsb --id 2026100901 run send_keys -p keys=Enter
@@ -155,7 +141,7 @@ async () => {
   if (!editor) return { error: "未找到私信输入框" };
 
   editor.focus();
-  const msg = "你好，我是一个独立开发者李通，我在抖音评论看到了你的需求，我可以帮你开发，请问你的需求还存在吗？开发完成后你计划付费多少？";
+  const msg = "<用户已确认的身份、来意和需求问题>";
   document.execCommand('insertText', false, msg);
   return { ok: true, preview: editor.innerText };
 }

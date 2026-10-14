@@ -1,13 +1,13 @@
 ---
 name: cloudflare-domain-redirect
-description: 使用 deepseek-browser-use 在 Cloudflare 配置域名 HTTP/HTTPS 跳转，检查已有 DNS、精确匹配主机名、部署 Redirect Rule 并验证解析与边缘响应。适用于域名迁移或别名跳转，不用于一般 DNS 管理。
+description: 使用 dsb 在 Cloudflare 配置域名 HTTP/HTTPS 跳转，检查 DNS、部署精确主机名匹配的 Redirect Rule 并验证边缘响应。适用于域名迁移或别名跳转。
 ---
 
-> Claude Code 调用名：`dsb-skills:cloudflare-domain-redirect`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:cloudflare-domain-redirect`。
 
 # Cloudflare 域名跳转
 
-通过本项目的 [deepseek-browser-use](../deepseek-browser-use/SKILL.md) 和 dsb 客户端操作已登录的 Cloudflare 控制台。本文来自一次真实任务，域名、IP 和账号均替换为示例；不要套用固定账号 URL 或元素索引。
+通用 CLI、登录交接和任务管理见 [主技能](../deepseek-browser-use/SKILL.md)。 示例域名和账号路径需替换为本次目标。
 
 ## 配置范围
 
@@ -44,8 +44,6 @@ description: 使用 deepseek-browser-use 在 Cloudflare 配置域名 HTTP/HTTPS 
 - 实测 Deploy 返回 ``SPURIOUS_DISPATCH``，规则却已创建。不能重复点击部署；先读规则列表或相关响应。新回执的 ``actionStatus:unknown`` 也应如此处理。
 - ``snapshotConsistent:false`` 或 ``indicesUsable:false`` 表示本次索引不可用。等目标内容后重新取快照。即使 ``snapshotConsistent:true``，也只说明读取期间没有检测到变化，不证明异步业务已完成。
 - 新版 DNS 编辑区域使用具名按钮、Proxy status 开关、Save。优先按真实的 aria-label 定位所需记录，避免点错多个 Edit 中的一个。
-- 用 `dsb state --text-only` 阅读，或 `dsb run get_form_state --select data.fields` 筛字段，仍保留客户端留档与统一退出码。复杂选择器、表达式和批量参数放 JSON 文件，不为缩短输出绕过 dsb。
-- 一条命令仍在运行时，先等它完成，再发依赖它的下一步；不能一边点击部署，一边并发读取同一任务。
 
 ## 验证与结论
 

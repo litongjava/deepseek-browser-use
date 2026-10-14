@@ -1,9 +1,9 @@
 ---
 name: deepseek-platform-topup-invoice
-description: 用 deepseek-browser-use 在 DeepSeek 开放平台（platform.deepseek.com）完成「充值 + 开发票」的实操手册：登录态不在任何一份 profile 里（Cookies 库里只有 WAF cookie），必须人工在有头窗口登录；充值走 Top up 页，金额与支付方式两组 radio **初始都不选中**（金额是 ``input[name=topUpAmount]`` 的 10/20/50/100/300/500 与 -1=Custom，支付方式是 ``input[name=paymentMethod]`` 的 alipay/wechat），点 Next step 后在**同一页**弹出收银台对话框，二维码是一个 160×160 的 ``<canvas>``、15 分钟内有效；发票在 Billing 页（/transactions）的 Invoices 页签，表单抬头是自定义下拉 ds-select、**往里打字不落库**（必须点开下拉再点里面的 option），Submit 按钮落在视口之外（实测 y≈978 而视口只有 944 高）因此**不进快照、没有索引**，且表单明写两条硬规则：提交后不可修改、已开金额不退。本文写透三个真正卡住人的坑：① 二维码截出来人扫不出来，根因是 get_browser_state 画的彩色高亮层被截进了图里（用像素直方图确诊，只有纯黑白才可用）；② ``click_element_by_text`` 传 Submit 会点中「once submitted」那段说明文字（包含匹配 + 取文档顺序第一个候选），回执 ok=true 而真按钮一动没动；③ ``get_form_state`` 对 ds-select 这类自定义下拉会**同时**撒两个谎——把已填好的必填项报成空值、把字段已经报红报成 errorCount=0。文内另给出充值前后余额对照与开票成功的三重返读（UI 回执 + Invoice records 行 + ``/api/v0/fapiao/apply`` 响应 code=0），金额、邮箱、抬头、税号、订单号全部脱敏。
+description: 使用 dsb 在 DeepSeek 开放平台查询余额、充值及申请发票；包含人工扫码支付、自定义抬头下拉框、提交前核对和充值／发票记录验证。
 ---
 
-> Claude Code 调用名：`dsb-skills:deepseek-platform-topup-invoice`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:deepseek-platform-topup-invoice`。
 
 # DeepSeek 开放平台：充值 + 开发票（实操手册）
 
@@ -47,7 +47,7 @@ description: 用 deepseek-browser-use 在 DeepSeek 开放平台（platform.deeps
 2. **读接口**（要精确的数字、或要把「充值 / 赠送 / 累计消费」分开时）：
 
    ```
-   dsb --port 10049 --id <ID> js @余额.js      # 是子命令 js,不是 run js
+   dsb --port 10049 --id <ID> js '@余额.js'      # 是子命令 js,不是 run js
    ```
 
    ```javascript
@@ -69,13 +69,10 @@ description: 用 deepseek-browser-use 在 DeepSeek 开放平台（platform.deeps
 
 ## 2. 开工前
 
-### 2.1 服务端：发行版 jar 可能落后于源码（实测踩过）
+### 2.1 服务
 
-仓库 `dist/` 下的发行版 jar 是**构建产物**，不保证与当前源码同步。实测 `dist/` 里的 windows-x64 jar
-连 `list_methods`、`get_config`、`shutdown` 都不支持——拿它开工会在半路撞上「不支持的方法」，
-而且报错长得像自己命令写错了。
+通用命令、等待、人工协助和任务收尾见 [主技能](../deepseek-browser-use/SKILL.md)。 使用 `dsb list_methods` 核实当前服务能力。
 
-```shell
 # 第一步永远是这一条:确认手上这份服务有哪些方法
 dsb --port 10049 run list_methods
 ```
@@ -90,53 +87,9 @@ dsb --port 10049 run list_methods
 - 启动脚本的 `/playwright/config` 那一步在老服务上会 404（`get_config` 不存在），**不影响启动**：
   健康检查过了就是起来了，用 `run list_methods` 复核即可。
 
-### 2.2 登录态：别指望 profile 里有现成的
+### 2.2 登录状态
 
-**实测结论：DeepSeek 的登录态不在任何一份共享 profile 里。** 把 `.config/browseruse/profiles/*`
-下的 `Default/Network/Cookies`（注意 Chrome 新版在这里，不在 `Default/Cookies`）全扫一遍，
-只有 `platform.deepseek.com` 的 `HWWAFSESID` / `HWWAFSESTIME` / `smidV2` 这类**WAF/风控 cookie**，
-没有会话 token。所以：
-
-1. `start` 时用**有头**模式（`--headful`），因为接下来一定要人登录、还要人扫码付钱：
-
-   ```shell
-   dsb --port 10049 --id <数字ID> start --browser chrome --headful
-   ```
-
-2. 直接用 `go_to_url` 打开 `https://platform.deepseek.com/transactions`，再 `get_url` 看是否被
-   踢到 `/sign_in`——这是判断登录态最快的办法（比读 cookie 靠谱）。
-3. 没登录就按主技能第七节请人介入：
-
-   ```json
-   {
-     "prompt": "请在已弹出的 Chrome 窗口里完成 DeepSeek 平台登录（手机号+短信验证码 / 账号密码 / 微信扫码 三种任选其一）",
-     "timeoutSeconds": 600,
-     "steps": [{"id": "s1", "prompt": "在浏览器窗口里完成 DeepSeek 登录，登录成功后回填「已登录」"}]
-   }
-   ```
-
-   ```
-   dsb --port 10049 --id <ID> run request_human_input --params @tmp\hr-login.json
-   ```
-
-   **优先让人在浏览器窗口里自己登**（不要人在聊天里发密码）；有头模式下 `request_human_input`
-   会把页签带到窗口最前。
-4. 等待登录完成**不要靠轮询对话**，用一条会阻塞的等待最省事：
-
-   ```json
-   {"expression": "() => !location.pathname.includes('sign_in')", "timeoutSeconds": 240}
-   ```
-
-   ```
-   dsb --port 10049 --id <ID> --timeout 300 run wait_for_function --params @tmp\wait-login.json
-   ```
-
-   登录成功后平台会自己跳到 `/usage`；**再 `get_browser_state` 复核一次**（地址 + 页面上出现
-   `Topped-up balance` 才算数）。
-
-> **登录态是持久的、跟着 profile 走**：实测 `close` 掉任务（浏览器退出）之后，新起一个任务直接
-> `go_to_url` 到 `/transactions` **不会再跳登录**。所以同一台机器上第二次做这个任务可以省掉人工登录——
-> 但每次都要先读一次地址确认，别假定还在。
+打开 `https://platform.deepseek.com/transactions`，若跳到 `/sign_in` 则请用户在有头窗口登录。登录后重新进入受保护页面并读余额或账户信息确认；不能凭 profile 存在或仅有 WAF cookie 判断已登录。本站也使用 localStorage 保存认证信息，不为判断登录导出凭据。
 
 ### 2.3 开工前必须问清的字段
 
@@ -223,50 +176,9 @@ Amount goes to account 199******49
 - 付完之后**同一个对话框**会变成 `Payment successful, click done to view billing.`，点 `Done` 才跳到
   `/transactions`。这句话就是"这笔记账成功了"的第一手证据。
 
-### 3.3 二维码扫不出来：高亮层被截进图里了（本节最重要）
+### 3.3 支付二维码
 
-**症状**：把二维码交给用户，用户说"扫不出来 / 颜色太多了 / 花屏"，而你自己看回执里
-`data.url` 那张图"明明有内容"。
-
-**根因**：`get_browser_state` 默认 `highlight: true`，会在页面上画一层
-`#playwright-highlight-container`（每个可交互元素一个彩色框）。`get_element_screenshot` 是
-**带 clip 的整页截图**，高亮层是 `position: fixed` 的全屏覆盖层，于是**被一起截了进去**——
-支付二维码上叠了橙、钢蓝、绯红几色的框，扫得出来才怪。
-
-**确诊办法（不要靠眼睛看图，用像素直方图）**：把 PNG 的颜色统计出来，正常二维码只该有黑白灰；
-出现 `255,165,0`（橙 `orange`）、`70,130,180`（钢蓝 `steelblue`）、`220,20,60`（绯红 `crimson`）
-这些**高亮层专用色**就实锤了：
-
-```powershell
-Add-Type -AssemblyName System.Drawing
-$img=[System.Drawing.Image]::FromFile("<截图路径>"); $bmp=New-Object System.Drawing.Bitmap($img)
-$colors=@{}; for($y=0;$y -lt $bmp.Height;$y+=2){ for($x=0;$x -lt $bmp.Width;$x+=2){
-  $p=$bmp.GetPixel($x,$y); $k="$($p.R),$($p.G),$($p.B)"; $colors[$k]=1+$colors[$k] } }
-$colors.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 10
-```
-
-- 污染版实测：`distinctColors=16+`，头部是 `26,0,0` / `255,229,229` / `255,165,0` / `70,130,180` / `220,20,60`。
-- 干净版实测：`distinctColors=5`，只有 `0,0,0` / `255,255,255` / `128,128,128`（抗锯齿灰）。
-
-**现在的服务端已经修掉了这件事**：`screenshot`、`get_element_screenshot` 与**每次动作后的自动截图**
-在拍之前都会把高亮层 `display: none`、拍完还原，所以拿到手的二维码就是纯黑白的。
-（回归用例：`BrowserObservationUpgradeTest#elementScreenshotExcludesHighlightOverlay` 与
-`#actionCaptureAlsoExcludesHighlightOverlay`。）
-
-**如果手上是还没修的服务端**（回执里看不出高亮层被处理过），在截图前手工摘掉它再截：
-
-```json
-{"body": "() => { const c=document.getElementById('playwright-highlight-container'); let n=0; if(c){c.remove();n++;} document.querySelectorAll('.playwright-highlight-label').forEach(e=>{e.remove();n++;}); return {removed:n}; }", "retryOnSpurious": true}
-```
-
-```
-dsb --port 10049 --id <ID> run execute_js --params @tmp\clear-highlight.json
-dsb --port 10049 --id <ID> run get_element_screenshot -p selector=canvas
-```
-
-注意顺序：**先摘高亮层、再截图**；中间不要再调 `get_browser_state`（它会把高亮层重新画回来）。
-
-> 补充：摘掉高亮层同时让**浏览器窗口本身**也干净了，人可以对着窗口直接扫——多数情况下这比传图片更省事。
+二维码在当前页的收银台对话框中，优先单独截取并交给用户扫码。旧构建若把彩色高亮层截进二维码，先移除 `#playwright-highlight-container` 再截；当前截图接口会隐藏高亮。二维码过期后重新获取，不能凭用户扫码就认定付款成功。
 
 ### 3.4 请人支付
 
@@ -274,7 +186,7 @@ dsb --port 10049 --id <ID> run get_element_screenshot -p selector=canvas
 `http://localhost:10049/data/<id>/shot-N.png` 更好用，用户点开就能看）；② 让人看已经带到最前的浏览器窗口。
 
 ```
-dsb --port 10049 --id <ID> run request_human_input --params @tmp\hr-pay.json
+dsb --port 10049 --id <ID> run request_human_input --params '@tmp\hr-pay.json'
 ```
 
 `hr-pay.json` 里传 `selector: "canvas"` 让服务端把二维码一起截下来（回执里有 `imageUrl`），
@@ -378,7 +290,7 @@ dsb --port 10049 --id <ID> run request_human_input --params @tmp\hr-pay.json
 
 ### 4.4 填 → 核对 → 提交
 
-**填**（选择器一律走 `--params @文件.json`，避免 PowerShell 吃引号，见第 5.5 节）：
+**填**（选择器一律走 `--params '@文件.json'`，避免 PowerShell 吃引号，见第 5.5 节）：
 
 ```json
 [
@@ -403,7 +315,7 @@ dsb --port 10049 --id <ID> run request_human_input --params @tmp\hr-pay.json
    ```
 
    ```
-   dsb --port 10049 --id <ID> run get_browser_state --params @tmp\state-expand.json
+   dsb --port 10049 --id <ID> run get_browser_state --params '@tmp\state-expand.json'
    ```
 
    （`state-expand.json` = `{"viewportExpansion": 1500, "highlight": false}`）
@@ -444,7 +356,7 @@ PDF, OFD, and XML formats will be available for download in the email.
 
 ### 4.6 三重返读（这一步不能省）
 
-开票这类操作，`ok:true` 不是结论。三条独立证据都拿到才算成了：
+开票这类操作，`ok:true` 不是结论。核对以下平台内部证据，区分申请已提交与发票已开具：
 
 1. **页面回执**：`Submission successful...` + `Invoice records` 里那一行 `Pending`；
 2. **接口请求体**（证明税号/邮箱真的发出去了——UI 里看不到税号）：
@@ -463,7 +375,7 @@ PDF, OFD, and XML formats will be available for download in the email.
 3. **接口响应**：用回执里的 `requestId` 取响应体（`get_response_body` 是**回看**，跳页也读得到）：
 
    ```
-   dsb --port 10049 --id <ID> run get_response_body -p requestId=<requestId> --no-redact
+   dsb --port 10049 --id <ID> run get_response_body -p requestId=<requestId>
    ```
 
    ```
@@ -475,34 +387,6 @@ PDF, OFD, and XML formats will be available for download in the email.
 
 ## 5. 该站点的通用坑
 
-### 5.1 免责/规则文字会污染文本匹配
-
-这一页的 `Invoice Rules` 是一大段英文，里面有 `submitted`、`amounts` 这些**跟按钮文字撞车**的词。
-凡是"按文本点"的操作，先想一下会不会撞上正文。
-
-### 5.2 `click_element_by_text` 的包含匹配会点错元素（通用坑，不只这个站）
-
-`page.getByText(<字符串>)` 是**大小写不敏感的包含匹配**，而老版本取的是**文档顺序第一个候选**。
-实测 `text=Submit` 命中的是规则文字里的 "once **submit**ted"。
-
-现在的服务端按元组 `[是否完全相等, 是否有可点击祖先, 是否可见, 文本长度]` 打分取最优，
-并把结果写进回执，**先看这几个字段再决定信不信这次点击**：
-
-| 字段 | 含义 |
-| --- | --- |
-| `textMatch` | `exact` = 完全相等；`contains` = 只是包含（**命中长文本时要警惕**） |
-| `textLength` | 命中元素的文本长度（2000 多说明点中了正文，不是按钮） |
-| `textCandidates` | 这次查询有几个候选 |
-| `textClickable` | 命中的元素有没有可点击祖先（`false` 时点它很可能什么都不发生） |
-| `textMatchNote` | 上面任一情况可疑时给出的下一步建议 |
-
-**仍然建议**：能拿到索引就用索引点，能写选择器就用选择器点，`click_element_by_text` 是兜底手段。
-
-### 5.3 表单页的按钮可能在视口外
-
-`data.pixels_below` 非 0 就是有内容没进快照。Submit 这类按钮在长表单底部是常态：
-先 `scrollIntoView` + 重取快照按索引点，或用 `click_element_by_selector`（它会自己滚动）。
-
 ### 5.4 `wait_for_idle` 在带轮询的页面上永远等不到
 
 实测 `/top_up` 页上 `wait_for_idle` 20 秒都没安静下来（在途请求 21 个、DOM 变更 1157 次）——
@@ -511,39 +395,6 @@ PDF, OFD, and XML formats will be available for download in the email.
 顺带一个批量里的坑：`commands` 默认 `stopOnError: true`，一条 `wait_for_idle` 超时会让**后面所有步骤都不跑**
 （实测后面的 `get_browser_state` 就没执行，白等一轮）。批量里显式加 `--keep-going`（客户端）
 或 `stopOnError:false`。
-
-### 5.5 Windows 下选择器一律进文件
-
-`-p selector=div[role=button]` 这种参数在 PowerShell 里会被 `[` `]` 和引号坑掉（报 `unrecognized arguments`
-或 `Missing argument in parameter list`），带逗号的 `-Dtest=A,B,C` 也一样。**把参数写进 JSON 文件**：
-
-```
-dsb --port 10049 --id <ID> run input_text_by_selector --params @tmp\fill.json
-dsb --port 10049 --id <ID> batch tmp\batch-fill.json --keep-going
-```
-
-### 5.6 钱的事要留余额证据
-
-充值前后各读一次 `Topped-up balance` 并**算给用户看**（差额 − 期间 API 消耗 = 充值金额）。
-平台自己的用量数据可能延迟 5 分钟，所以 `Total cost` 对不上零头是正常的，别慌。
-
-## 6. 一次典型任务的骨架
-
-```
-① dsb run list_methods                     # 先确认服务的能力(旧 jar 在这里就露馅)
-② dsb server status                       # 需要时:确认服务在跑、用的是哪个 jar(没起就自动拉起/`dsb server start`)
-③ dsb --id <ID> start --browser chrome --headful
-④ go_to_url https://platform.deepseek.com/transactions  →  get_url 看是否被踢到 /sign_in
-⑤ 没登录:request_human_input + wait_for_function 等人登录,再复核地址与 Topped-up balance
-⑥ 充值:读 /usage 记余额 → /top_up 选金额 + 选渠道 → Next step → 摘高亮层 → 截二维码
-        → request_human_input 请人扫码付 → 等 "Payment successful" → Done
-⑦ 核验:Topped-up 首行 Success + 余额差额对上
-⑧ 开票:问了金额/邮箱/票据类型/抬头/税号 → Invoices → 选计费方式与两种类型 → 填四个文本框
-        → 抬头走 ds-select 三步 → get_form_state + ds-select__select 双重复核
-        → 列表格给用户确认 → scrollIntoView 后按索引点 Submit
-⑨ 三重返读:UI 回执 + Invoice records 行 + get_requests/get_response_body 的请求体与 code=0
-⑩ close                                    # 收工(登录态留在 profile 里)
-```
 
 ## 7. 脱敏约定
 

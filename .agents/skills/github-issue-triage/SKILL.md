@@ -1,14 +1,13 @@
 ---
 name: github-issue-triage
-description: 在 GitHub issue 上「回复 + 贴本地截图 + 关闭」的完整套路：登录态判定、只读正文与全部评论、往评论框贴本地图片（评论框没有 file input，要注入 input 再派发 paste）、提交必须用真实鼠标点击、以及发布后的双重核验。适用于 issue 维护、批量答疑、把仓库里的答案回给提问者的任务。
+description: 使用 dsb 阅读 GitHub issue 及评论，在获得发布授权后回复、粘贴本地截图和关闭 issue；包含图片粘贴、真实鼠标提交与时间线核验。
 ---
 
-> Claude Code 调用名：`dsb-skills:github-issue-triage`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:github-issue-triage`。
 
 # GitHub issue：回复、贴本地截图、关闭
 
-这份手册是一次真实任务的复盘：某个仓库的 4 个 open issue 全部「读题 → 回复 → 贴本地配图 → 关闭」。
-流程本身不长，但**有两处回执会骗人**（点了返回成功却什么都没发生），照下面的顺序做可以一次跑通。
+通用 CLI、登录交接和任务管理见 [主技能](../deepseek-browser-use/SKILL.md)。
 
 ## 一、站点特征（先认清这四件事）
 
@@ -19,7 +18,7 @@ description: 在 GitHub issue 上「回复 + 贴本地截图 + 关闭」的完�
 | 评论框**没有** `input[type=file]`（回形针按钮走 File System Access API） | 贴本地图不能用 `upload_file` 直接指过去，见第三节 |
 | 登录态在共享 profile 里、与任务 ID 无关 | 开工先读 `meta[name=user-login]`；没登录就请人在有头浏览器里登录，别猜、别用后台口令 |
 
-登录态一读即知（多行脚本放文件里，用 `--params @文件.json` 传，别在命令行里拼引号）：
+登录态一读即知（多行脚本放文件里，用 `--params '@文件.json'` 传，别在命令行里拼引号）：
 
 ```json
 { "body": "() => ({ user: (document.querySelector('meta[name=user-login]')||{}).content, title: document.title, url: location.href })" }
@@ -86,9 +85,9 @@ click_element_by_text     text=Close issue                        # 关闭（Com
 3. **别用 `innerText` 里出现评论正文当作「已发布」**：预览面板会把草稿渲染成 DOM 文本，看着像发出去了。核验看 `textarea.value` 是否清空 + 时间线是否出现 `private-user-images` 图片（见第六节）。
 4. **`new_tab` 报 `SPURIOUS_DISPATCH` 时，页签可能已经建好但没切过去**，后面的输入与上传会全部落到**上一个页签**（我因此把 A issue 的草稿写进了 B issue）。这类「无法判断是否生效」的报错之后，先 `get_tabs` 看 `current` 或读一次 `location.href`；填错的草稿用 `clear_text` 清掉。较新的构建会自己核对页签数：回 `data.effective` / `data.warning` 说「已生效、别重发」，或 `retryable:true` 说「未生效、可安全重发」——按它给的结论走，但仍要用 `data.currentIndex` 复核一次当前页签。
 5. **`get_element_value` 只认 `index`**，按选择器读输入框请用 `execute_js` 读 `textarea.value`。
-6. 选择器里带 `[`、`]`、引号的参数**一律走 `--params @文件.json`**：Windows 的 PowerShell 会吃掉方括号与逗号，报的却是「缺少参数」这种指不到原因的话。
+6. 选择器里带 `[`、`]`、引号的参数**一律走 `--params '@文件.json'`**：Windows 的 PowerShell 会吃掉方括号与逗号，报的却是「缺少参数」这种指不到原因的话。
 
-## 六、发布前核验（一条都别省）
+## 六、发布后核验（一条都别省）
 
 | 看什么 | 期望 |
 | --- | --- |

@@ -1,10 +1,9 @@
 ---
 name: wecom-invoice-contract
-description: 用 deepseek-browser-use 完成企业微信（work.weixin.qq.com 管理后台）「订单发票申请 + 订单合同申请 + 电子签章申请」的实操手册：先在订单详情页回读状态判断「现在到底能不能开发票」（认证审核没完时那里写着「审核完成后可申请」，审核通过后才变成可点的「申请发票」），再进 `.mall_invoice_dialog_container` 弹窗选电子发票类型与抬头类型（两个 radio 初始都没选中，必须点一下后面的「发票抬头 / 纳税人识别号」才会展开，且抬头与企业全称、税号会自动带出），提交后页面变成「审核中 / 查看发票」且没有任何自助修改或撤销入口；合同侧「申请电子合同」会被电子签章卡住（跳回签章申请页），纸质合同则要打印盖鲜章寄回约 15 个工作日；电子签章是四步向导，前两步补充企业信息与个人实名认证（扫脸）、第三步对公打款验证（用公司账户打一笔随机小金额）、第四步企业授权要下载授权书模板、只盖企业公章、扫描成 ≤5MB 的 PDF 再上传并勾选三个协议，而盖章只能由人做且可能要等几天，是必须停下来等的交接点。文内还写透了「小规模纳税人不能抵扣进项税、所以开专票是零收益」这个业务判断，以及该站点特有的坑：后台是内层滚动容器而非 window、快照只覆盖当前视口、索引失效极快、企业微信自己的弹窗类名不一定被 get_modals 命中（本次是 `.mall_invoice_dialog_container`）、隐藏的 `input[type=file][accept=".pdf"]` 要用 upload_file 传 selector、ok=true 不等于成功必须回读断言。数据全部脱敏，替换占位符即可复用。
-whenToUse: 需要在企业微信管理后台处理认证/服务的订单收尾（开发票、签合同、申请企业电子签章），或需要在 work.weixin.qq.com 这类 hash 路由 + 内层滚动容器的后台里，用「先回读状态再动手」的方式走一个多步向导，并且其中若干步（扫脸、对公打款、盖章扫描）必须交给真人完成时。
+description: 使用 dsb 在企业微信后台申请订单发票、合同及企业电子签章；包含认证前置条件、发票类型、签章四步流程及人工实名认证、打款和盖章交接。
 ---
 
-> Claude Code 调用名：`dsb-skills:wecom-invoice-contract`。由 `dsb-skills` 插件提供命名空间；源技能名与目录名保持不变。
+> Claude Code：`dsb-skills:wecom-invoice-contract`。
 
 # 企业微信：订单发票 + 订单合同 + 电子签章（实操手册）
 
@@ -27,7 +26,7 @@ whenToUse: 需要在企业微信管理后台处理认证/服务的订单收尾�
 ## 0. 边界与合规
 
 - **做到哪一步为止**：把发票申请提交掉、把签章推进到「只差盖章」、把合同推进到「只差签章」。
-  **提交动作本身**（点「提交申请」「提交」）在本文场景里是允许的，因为它是**业务流程的必经步骤且可撤回/可查**；
+  **提交动作本身**（点「提交申请」「提交」）在本文场景里是允许的，前提是用户已授权该申请且资料已确认；**发票提交后没有自助修改入口**；
   但下面这些**一律由人做**。
 - **必须由人做的部分**：
   | 环节 | 为什么必须人做 |
@@ -48,34 +47,7 @@ whenToUse: 需要在企业微信管理后台处理认证/服务的订单收尾�
 
 ### 1.1 服务与浏览器
 
-```json
-POST http://localhost:10049/playwright/command
-{"method":"start","params":{"headless":false,"browser":"chrome"}}
-```
-
-- **`headless:false` 是必须的**：这条链路里有扫脸、扫码、盖章三处要人接手，无头窗口人看不见。
-- **`browser` 不传就等价于本机 Google Chrome**（没装才退回内置 Chromium）。这里**不需要像中国商标网那样切
-  Firefox** —— 企业微信后台在 Chromium 系下工作正常（实测 Chrome 全流程通过）。
-- **换引擎/换浏览器等于换 profile 与登录态**：`chrome`／`chromium` 共用 `browser.profileDir` 那一份；
-  `edge` 与 `firefox` 各有自己一份。企业微信的登录态跟着 profile 走，**换过去要重新登录一次**。
-  要复用已登录的会话就别乱换。
-- 开工前先自检，避免「服务没起来 / 引擎不是你要的」这类白跑：
-
-```shell
-dsb --port 10049 health
-dsb --port 10049 selftest
-```
-
-- 服务方法名拿不准就先问它（**别猜**，猜错只会拿到一句「不支持的方法」）：
-
-```json
-{"method":"list_methods","params":{"filter":"modal"}}
-{"method":"get_config"}
-{"method":"list_tasks"}
-```
-
-- **收工前先 `close` 任务再停服务**，否则强杀服务会留下孤儿浏览器占着 profile，下一次 `start` 卡在启动超时
-  （详见主技能第 32 条）。全部收掉可以直接用 `shutdown`。
+通用命令、等待、人工协助和任务收尾见 [主技能](../deepseek-browser-use/SKILL.md)。 使用有头 Chrome，扫码期间保留任务，避免中途切换 profile。
 
 ### 1.2 开工前必须问清的字段
 
@@ -89,16 +61,6 @@ dsb --port 10049 selftest
 | 签章 | 管理员姓名、身份证号、对公账户（户名/账号/开户行） | 签章第 2、3 步要用 |
 | 合同 | 要电子合同还是纸质合同 | 决定走哪条路 |
 | 授权书 | **能不能盖章、大概几天能盖好** | 这是**排期信息**，决定这一轮做到哪里停 |
-
-### 1.3 留档（排查用）
-
-- 服务端：`logs/trace/<yyyyMMdd>/`（`steps.log` 时间线、`calls.jsonl` 逐条 JSON、`NNNNNN-<任务id>-<方法>.json`
-  完整请求响应、`uploads.log` 上传记录）。
-- 客户端：`dsb`（退出码区分传输错/业务失败/用法错、**原样留档不做脱敏**、服务没起会自动拉起），或
-  `scripts/trace/browse.ps1`（PowerShell 习惯）。
-- 追踪日志**默认脱敏**（手机号、18 位证件号/统一社会信用代码、邮箱、长数字 → `***`），但这是**尽力而为**：
-  企业名、姓名、门牌号这类认不出来的不会被掩掉。任务结束提醒用户清理（`cleanup`，**默认只预演**）。
-- 上传的临时文件（授权书 PDF）落在服务端暂存目录（`start` 回执的 `data.browser.upload.dir`），**不会自动清理**。
 
 ## 2. 订单详情页与状态判断
 
@@ -147,7 +109,7 @@ dsb --port 10049 selftest
 })()
 ```
 
-### 2.3 状态是会变的：先读再判断（本节最重要）
+### 2.3 状态是会变的：先读再判断
 
 **「能不能开发票」不取决于你，取决于认证审核状态。** 实测同一条订单在两天内出现过两种文案：
 
@@ -165,19 +127,6 @@ dsb --port 10049 selftest
 
 而订单详情页的「有效期」也会从空变成 `<起>-<止>`。**这两处是判断「审核过没过」最省事的信号**，
 比去翻通知快。
-
-所以每轮开工的第一件事固定是：
-
-```json
-{"method":"commands","params":{"stopOnError":false,"commands":[
-  {"execute_js":{"body":"(()=>{var t=document.body.innerText;var i=t.indexOf(\"订单发票\");return {url:location.href,seg:i>=0?t.slice(i,i+260):t.slice(-600)}})()"}},
-  {"expect":{"js":"document.body.innerText.indexOf('审核完成后可申请') < 0","truthy":true}}
-]}}
-```
-
-> **`expect` 的用法**：断言在命令执行**之后**求值，断言没过时批次整体仍是 `code:0`、`data.failed` 仍是 0，
-> 但 `data.expectFailed` 会计数、`msg` 会指出是哪一步没过，`data.note` 说明「命令都执行成功，是断言没过」。
-> 这是「动作发了、状态没变」唯一能当场暴露出来的办法。
 
 ### 2.4 两个 id 不是一回事（踩过）
 
@@ -285,8 +234,8 @@ dsb --port 10049 selftest
 {"method":"commands","params":{"stopOnError":false,"commands":[
   {"execute_js":{"body":"(()=>{var d=document.querySelector('.mall_invoice_dialog_container');if(d){var b=[].slice.call(d.querySelectorAll('a,button')).filter(function(e){return e.innerText.trim()==='完成'})[0];if(b)b.click()}return {ok:true}})()"}},
   {"wait":{"seconds":6}},
-  {"execute_js":{"body":"(()=>{var t=document.body.innerText;var i=t.indexOf('订单发票');return {seg:i>=0?t.slice(i,i+160):null}})()"}},
-  {"expect":{"js":"document.body.innerText.indexOf('审核中') >= 0","truthy":true}}
+  {"execute_js":{"body":"(()=>{var t=document.body.innerText;var i=t.indexOf('订单发票');return {seg:i>=0?t.slice(i,i+160):null}})()"},
+   "expect":{"js":"document.body.innerText.indexOf('审核中') >= 0","truthy":true}}
 ]}}
 ```
 
@@ -320,75 +269,9 @@ dsb --port 10049 selftest
 > 遇到这种情况的交付话术：**别自己承诺「我帮你改」**。如实说「已提交、页面没有修改入口，
 > 要改需要联系客服，我可以帮你起草消息（附订单号 + 要改成的类型 + 需要补的资料）」。
 
-### 3.4 普票还是专票：纳税人资格决定（这一节写透）
+### 3.4 发票类型
 
-**这是本 skill 最该讲清的业务判断，因为用户真的会问「小规模能不能抵扣」。**
-
-#### 结论先给
-
-| 纳税人身份 | 进项税能否抵扣 | 该开哪种 |
-| --- | --- | --- |
-| **小规模纳税人** | ❌ **不能** | **普票**（专票零收益 + 多填资料） |
-| **一般纳税人** | ✅ 能 | 专票（若在乎那十几块钱） |
-
-#### 为什么小规模不能抵扣
-
-小规模纳税人适用**简易计税**：
-
-```
-一般纳税人：应纳税额 = 销项税 − 进项税      ← 有「进项税」这一环，所以专票能抵
-小规模纳税人：应纳税额 = 销售额 × 征收率    ← 整条链里没有「进项税」这个概念
-```
-
-小规模按 **3%**（现行优惠期常为 **1%**）的**征收率**直接对销售额计税，**不存在进项抵扣的机制**。
-所以：
-
-> **取得增值税专用发票 ≠ 可以抵扣。抵扣的前提是你是一般纳税人。**
-
-拿到专票也只能**价税合计全额计入成本/费用**，和拿普票的账务结果一样。
-
-#### 三个常见误区
-
-1. **「小规模不能收专票」——错。** 小规模**可以**合法取得增值税专用发票（包括电子专票），不违法；
-   只是**没有抵扣收益**，还让供应商多填一堆资料（开户行、账号、地址、电话）。
-2. **「小规模期间先囤专票，等转成一般纳税人再抵」——行不通。** 小规模期间取得的专票，
-   转为一般纳税人后**不得追溯抵扣**，只能从**转登记日的下期**起对之后取得的专票抵扣。
-   为了「以后抵」去开专票是白费。
-3. **「专票一定比普票好」——对小规模不成立。** 唯一区别是专票的红冲流程更麻烦。
-
-#### 落到一笔 ¥300 的认证服务上
-
-即使是一般纳税人，能抵的也就十几块：
-
-| 若按 | 进项税 ≈ |
-| --- | --- |
-| 6%（现代服务） | ¥300 ÷ 1.06 × 6% ≈ **¥16.98** |
-| 3% | ≈ **¥8.74** |
-
-**所以「小规模直接开普票」不只是合规上正确，经济上也几乎没损失。**
-
-#### 怎么确认纳税人资格（问用户，不要猜）
-
-**这个信息不在公开渠道**，公开检索查不到，必须让用户自己看：
-
-- **电子税务局 → 我的信息 → 纳税人资格信息**（看「增值税一般纳税人」资格的生效日期）
-- 或者直接问**代账会计**（最省事，一句话的事）
-
-判断参考：
-
-- 年应税销售额**超过 500 万**会被强制登记为一般纳税人；
-- **新成立的小公司默认是小规模**；
-- 一般纳税人通常会有「一般纳税人资格认定」的记录。
-
-#### 标准问法（照抄）
-
-> 「这笔 ¥300 的认证费发票，你们公司是**小规模纳税人**还是**一般纳税人**？
-> 如果是小规模，**开普票就行**——小规模是简易计税，拿到专票也不能抵扣进项税，
-> 开专票只是让我们多填开户行、账号、地址、电话，没有任何收益。
-> 如果是一般纳税人，专票能抵，但 ¥300 也就抵十几块钱。」
-
-**用户答「小规模」→ 直接开普票，不要再纠缠。** 用户答「不确定」→ 让他去电子税务局看一眼，
-或者**先别提交**（见 3.3：提交后改不了）。
+按用户或财务已确认的票种填写；未明确时先确认。通常小规模纳税人不能抵扣进项税，一般纳税人能否抵扣还取决于业务和凭证条件。不要仅凭纳税人身份自动选票种，填写要求以当前表单为准。提交后没有自助修改入口，详见 3.3。
 
 ## 4. 合同申请
 
@@ -633,43 +516,6 @@ dsb --port 10049 upload <授权书.pdf>
 
 ## 6. 该站点的通用坑
 
-### 6.1 后台内容区是内层滚动容器，不是 `window`
-
-**这是本站点最基础的一个坑**：企业微信后台的滚动发生在**内层容器**上。
-
-```js
-window.scrollY        // 恒为 0
-window.scrollTo(0, 0) // 无效
-```
-
-**后果**：靠「滚到顶部再取快照」来让元素进入视口是**没用的**。
-**正解是别依赖滚动** —— 优先用**选择器/文本**定位，它们不需要元素在视口里：
-
-```json
-{"click_element_by_selector":{"selector":"a:has-text('申请发票')","mode":"auto"}}
-{"click_element_by_text":{"text":"申请合同","mode":"auto"}}
-```
-
-### 6.2 快照只覆盖当前视口，而且索引失效极快
-
-- `get_browser_state` 的 `data.text` **只包含当前视口内的元素**。视口外的元素**没有 `[index]`**，
-  你会在快照里完全看不到它（不是「不存在」，是「没进来」）。
-  **要一次拿到首屏之外的元素，给 `get_browser_state` 传 `viewportExpansion`**（视口外扩像素，默认 `0`）：
-
-  ```json
-  {"id":2001,"method":"get_browser_state","params":{"highlight":false,"viewportExpansion":1500}}
-  ```
-
-  回执里的 `data.pixels_above` / `data.pixels_below` 会告诉你上下还差多少没进快照——
-  **它们不为 0 就说明扩得还不够**。
-- **索引失效快**：这个后台异步渲染多，**动作之后必须重新取快照**，否则会拿到
-
-```
-click_element_by_index 失败：元素不存在或页面已变化,请重新调用 get_browser_state 获取元素索引
-```
-
-- **结论**：在这个站点上，**能用选择器就别用索引**。索引只适合「刚取完快照、立刻点」的场景。
-
 ### 6.3 弹窗：企业微信自己的弹窗类名要靠启发式兜底才认得出来
 
 - `get_modals` / `close_modal` 是**弹窗的正确工具**（内部走**真实鼠标点击**，
@@ -728,178 +574,6 @@ click_element_by_index 失败：元素不存在或页面已变化,请重新调�
   {"execute_js":{"body":"(()=>{var d=document.querySelector('.mall_invoice_dialog_container');return {txt:d.innerText.slice(0,900)}})()"}}
 ]}}
 ```
-
-### 6.5 `ok=true` 不代表成功
-
-**这是主技能反复强调、在这个站点上尤其致命的一条。**
-
-- 点击类方法只保证「动作没抛异常」。实测在这个后台里，**点「免费开通」「开通」这类按钮经常返回
-  `ok=true` 且 `data.changed=false`，页面毫无变化**（弹窗没渲染出来，或路由没跳）。
-- 判断标准：
-
-| 看什么 | 说明 |
-| --- | --- |
-| `data.changed` | 是否观察到变化（`false` 不代表失败，但也不代表成功） |
-| `data.effective` | 这次点击有没有真的改变页面 |
-| `data.mode` | **实际用上的**那一档（`native`/`mouse`/`js`）。**看到 `js` 就当没点成** |
-| `data.coveredBy` | 目标中心点实际命中的是别人（被遮罩挡住）→ 先关遮挡物再点 |
-
-- **最可靠的做法是加 `expect` 断言**，让「动作发了、状态没变」当场暴露：
-
-```json
-{"method":"commands","params":{"stopOnError":false,"stopOnExpectFailure":true,"commands":[
-  {"click_element_by_selector":{"selector":"a:has-text('申请发票')","mode":"auto"}},
-  {"wait":{"seconds":8}},
-  {"expect":{"js":"!!document.querySelector('.mall_invoice_dialog_container')","truthy":true}}
-]}}
-```
-
-- **回读页面文本**永远是最稳的确认方式（本文档每个关键动作后面都跟了一次 `execute_js` 回读）。
-
-### 6.6 hash 路由：直接跳比点菜单稳
-
-企业微信后台是 hash 路由 SPA。**知道目标路由时，直接 `go_to_url` 带 hash 的完整 URL**
-比「点左侧菜单 → 等 → 再点子菜单」少好几次往返，也少几个「点了没反应」的机会。
-
-已知路由（`<...>` 处替换）：
-
-| 页面 | 路由 |
-| --- | --- |
-| 企业信息 | `#profile` |
-| 企业域名 | `#profile/domain` |
-| 订单详情 | `#/authCenter/orderDetail?order_id=<订单号>` |
-| 合同选择类型 | `#/businessCommon/contract/signIndex/certification/<订单id>` |
-| 电子签章申请 | `#/businessCommon/contract/signApply?businessType=certification&orderId=<订单id>` |
-
-> 路由是站点自己的实现，**版本升级可能变**。用之前先 `execute_js` 读一次 `location.href` 确认，
-> 不要当永久契约。
-
-### 6.7 人机协同用 `request_human_input`，不要在聊天里贴路径
-
-扫脸、短信码、盖章这类**必须由人做**的事，用正式的人机协同 API 把请求和人绑定：
-
-| 步骤 | 调用 | 做什么 |
-| --- | --- | --- |
-| 1 | `request_human_input`（`prompt`、可选 `index`/`selector`、`timeoutSeconds`） | 建待办；传 `selector` 会把元素截图落盘并回 `data.imageUrl`（默认不回 `data.imageBase64`），**并把页签带到窗口最前** |
-| 2 | 人看图 → 操作 | 通过 `submit_human_input`（`requestId`+`answer`）提交，**或者**直接在有头浏览器里自己做完 |
-| 3 | `get_human_input`（`requestId`、`timeoutSeconds`） | 取答复，`data.status` 为 `pending`/`answered`/`expired` |
-
-**为什么不要自己在聊天里贴截图路径**：`request_human_input` 会**自动把页签带到最前**，
-人不用去找窗口；而且请求与答复是**有记录、可追踪**的（`requestId`、`expiresAt`）。
-贴路径既没有这个效果，也没法回填。
-
-**但「把图贴进聊天」这件事本身是对的 —— 要贴成图片，不是贴路径。** 实测用户明确要求：
-> 「以后再遇到验证码显示在聊天框方便我扫码」
-
-`request_human_input` 回执里有 `data.imageUrl`（可直接 GET 的地址，形如
-`/data/<任务id>/shot-N.png`）。**在回复里用 markdown 图片语法把它贴出来**，用户就能在对话里
-直接看到二维码并扫码，不用去浏览器窗口找、也不用点开链接：
-
-```markdown
-![签约二维码](http://localhost:10049/data/2001/shot-3.png)
-```
-
-三条要点：
-
-1. **给绝对地址**（补上 `http://<host>:<port>`）——`data.imageUrl` 只是站内相对路径，
-   在聊天里点不开。
-2. **同时仍然要 `bring_to_front`**：二维码有短时效（实测 900 秒），让用户能立刻看到有头窗口里的
-   那一份最稳妥；聊天里的图是**方便**，不是替代。
-3. **别去要 `data.imageBase64`**——它很大（一张 180×180 的二维码就有几十 KB base64），而且模型多半
-   读不了图；服务端现在默认也不回了（要内联才传 `inline: true`）。要图就给 URL。
-
-配合 `bring_to_front` 可以把任意页签推到人眼前（只切窗口、**不改当前操作页**）。
-
-## 7. 一次典型任务的骨架
-
-**推荐节奏**：一个批次 = 一个计划段（「动作段 + 末尾回读」）。批次里先做动作，
-末尾放一次 `execute_js` 回读，下一次推理基于新结果决定后续。**不要在批次里塞几十步。**
-
-### 阶段 1：确认状态
-
-```json
-{"method":"start","params":{"headless":false,"browser":"chrome"}}
-```
-```json
-{"method":"commands","params":{"stopOnError":false,"commands":[
-  {"go_to_url":{"url":"https://work.weixin.qq.com/wework_admin/frame#/authCenter/orderDetail?order_id=<订单号>"}},
-  {"wait":{"seconds":12}},
-  {"execute_js":{"body":"(()=>{var t=document.body.innerText;var i=t.indexOf('订单发票');var j=t.indexOf('有效期');return {url:location.href,invoice:i>=0?t.slice(i,i+200):null,valid:j>=0?t.slice(j,j+60):null}})()"}}
-]}}
-```
-
-**根据回读结果分支**：
-
-- 看到「审核完成后可申请」→ **别开发票**，转去推进签章（阶段 4）。
-- 看到「申请发票」→ 进阶段 2。
-- 看到「审核中」→ 发票已提交，结束这条线。
-
-### 阶段 2：问清纳税人资格（**必须先问，不能跳**）
-
-见 3.4 的标准问法。**在拿到答复之前不要提交发票申请**（3.3：提交后改不了）。
-
-### 阶段 3：提交发票申请
-
-```json
-{"method":"commands","params":{"stopOnError":false,"stopOnExpectFailure":true,"commands":[
-  {"click_element_by_selector":{"selector":"a:has-text('申请发票')","mode":"auto"}},
-  {"wait":{"seconds":8}},
-  {"expect":{"js":"!!document.querySelector('.mall_invoice_dialog_container')","truthy":true}},
-  {"execute_js":{"body":"(()=>{var d=document.querySelector('.mall_invoice_dialog_container');var r=d.querySelectorAll('input[type=radio]');r[0].click();return {checked:r[0].checked}})()"}},
-  {"wait":{"seconds":4}},
-  {"execute_js":{"body":"(()=>{var d=document.querySelector('.mall_invoice_dialog_container');return {txt:d.innerText.slice(0,900)}})()"}}
-]}}
-```
-
-**回读确认抬头与税号已自动带出**，再提交：
-
-```json
-{"method":"commands","params":{"stopOnError":false,"stopOnExpectFailure":true,"commands":[
-  {"execute_js":{"body":"(()=>{var d=document.querySelector('.mall_invoice_dialog_container');var b=[].slice.call(d.querySelectorAll('a,button')).filter(function(e){return e.innerText.trim()==='提交申请'})[0];if(!b)return {noBtn:true};b.click();return {ok:true}})()"}},
-  {"wait":{"seconds":10}},
-  {"expect":{"js":"document.body.innerText.indexOf('申请已提交') >= 0","truthy":true}},
-  {"execute_js":{"body":"(()=>{var d=document.querySelector('.mall_invoice_dialog_container');if(d){var b=[].slice.call(d.querySelectorAll('a,button')).filter(function(e){return e.innerText.trim()==='完成'})[0];if(b)b.click()}return {ok:true}})()"}},
-  {"wait":{"seconds":6}},
-  {"execute_js":{"body":"(()=>{var t=document.body.innerText;var i=t.indexOf('订单发票');return {seg:i>=0?t.slice(i,i+160):null}})()"}}
-]}}
-```
-
-### 阶段 4：合同 → 被签章卡住 → 转签章
-
-```json
-{"method":"commands","params":{"stopOnError":false,"commands":[
-  {"execute_js":{"body":"(()=>{var a=[].slice.call(document.querySelectorAll('a')).filter(function(e){return e.offsetParent!==null&&e.innerText.trim()==='申请合同'})[0];if(!a)return {none:true};a.click();return {ok:true}})()"}},
-  {"wait":{"seconds":10}},
-  {"execute_js":{"body":"(()=>{var t=document.body.innerText;return {url:location.href,tail:t.slice(-900)}})()"}}
-]}}
-```
-
-**从跳转后的 URL 里记下 `<订单id>`**（第 2.4 节），后面都要用。
-
-### 阶段 5：签章推进到第 4 步，然后停
-
-```json
-{"method":"commands","params":{"stopOnError":false,"commands":[
-  {"go_to_url":{"url":"https://work.weixin.qq.com/wework_admin/frame#/businessCommon/contract/signApply?businessType=certification&orderId=<订单id>"}},
-  {"wait":{"seconds":12}},
-  {"execute_js":{"body":"(()=>{var t=document.body.innerText;return {url:location.href,tail:t.slice(-1100)}})()"}}
-]}}
-```
-
-**回读确认停在第 4 步后，交接给人（5.5），结束这一轮。**
-
-### 收工
-
-```json
-{"method":"close","params":{}}
-```
-
-```json
-{"method":"cleanup","params":{"scope":"trace","olderThanHours":24}}
-```
-
-> `cleanup` **默认只预演**（`dryRun:true`），要真删必须显式传 `"dryRun":false`。
-> `scope` 取 `all`/`data`/`trace`/`upload`；`all` 不会动 `upload`（暂存文件可能正在被任务使用）。
 
 ## 8. 交付话术（收尾）
 
