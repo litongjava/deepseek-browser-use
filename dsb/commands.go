@@ -226,6 +226,15 @@ func cmdShutdown(client CommandAPI, args *Args, out *Printer) (int, error) {
 
 // cmdRun 执行一条命令。
 func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
+	stdinSources := 0
+	for _, source := range []*string{args.Params, args.Expect, args.Readback} {
+		if source != nil && *source == "-" {
+			stdinSources++
+		}
+	}
+	if stdinSources > 1 {
+		return 0, usageErrorf("stdin can supply only one of --params, --expect, or --readback; use files for the others")
+	}
 	params, err := loadPayload(args.Params, args.Param)
 	if err != nil {
 		return 0, err
@@ -236,6 +245,34 @@ func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if args.RetrySpur {
 		params.Set("retryOnSpurious", true)
 	}
+	if args.Expect != nil {
+		expectation, err := loadPayload(args.Expect, nil)
+		if err != nil {
+			return 0, err
+		}
+		if objStr(expectation, "js") == "" {
+			return 0, usageErrorf("--expect requires js")
+		}
+		params.Set("expect", expectation)
+	}
+	if args.Readback != nil {
+		script, err := readTextSource(*args.Readback)
+		if err != nil {
+			return 0, err
+		}
+		params.Set("readback", script)
+	}
+	if args.CommandTimeoutMs != nil {
+		ms, err := strconv.Atoi(*args.CommandTimeoutMs)
+		if err != nil || ms < 1 || ms > 900000 {
+			return 0, usageErrorf("--command-timeout-ms must be 1..900000")
+		}
+		params.Set("commandTimeoutMs", numberFromInt(ms))
+	}
+	if args.Sensitive {
+		params.Set("sensitive", true)
+	}
+
 	method := "run"
 	if args.Method != nil {
 		method = *args.Method
@@ -719,4 +756,28 @@ func waitTimeoutValue(args *Args) float64 {
 		return 600.0
 	}
 	return *args.WaitTimeout
+}
+
+func cmdControl(client CommandAPI, args *Args, out *Printer) (int, error) {
+	method := "get_diagnostics"
+	params := NewObj()
+	if args.Command == "cancel" {
+		method = "cancel_command"
+		if args.CommandID == nil {
+			return 0, usageErrorf("cancel requires COMMAND_ID from diagnose")
+		}
+		params.Set("commandId", *args.CommandID)
+	}
+	response, err := client.Command(method, params, nil, 0, method)
+	if err != nil {
+		return 0, err
+	}
+	value, handled, err := prepare(response, args, out)
+	if err != nil {
+		return 0, err
+	}
+	if !handled {
+		out.JSON(value)
+	}
+	return verdict(response), nil
 }

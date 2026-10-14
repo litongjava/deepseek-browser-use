@@ -86,6 +86,8 @@ func report(code int, err error, out *Printer) int {
 // dispatch 把子命令派给它自己的实现。
 func dispatch(client *Client, args *Args, out *Printer) (int, error) {
 	switch args.Command {
+	case "diagnose", "cancel":
+		return cmdControl(client, args, out)
 	case "health":
 		return cmdHealth(client, args, out)
 	case "methods", "list_methods":

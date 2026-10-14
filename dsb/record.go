@@ -16,6 +16,22 @@ func (c *Client) recordCall(label string, payload Value, response *Response, sen
 	if !c.Record {
 		return
 	}
+	// Redact copies only; callers still receive the original live response.
+	sensitive := sensitiveRequest(payload)
+	if response != nil {
+		copy := *response
+		copy.Envelope = redactCookieRecords(response.Envelope)
+		if sensitive {
+			if envelope := asObj(copy.Envelope); envelope != nil {
+				envelope.Set("data", ObjOf("redacted", true))
+				envelope.Set("msg", redactedCookieValue)
+			}
+		}
+		response = &copy
+	}
+	if sensitive {
+		sendError = redactedCookieValue
+	}
 	index, err := c.claimRecordIndex()
 	if err != nil {
 		if c.Verbose {

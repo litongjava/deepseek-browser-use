@@ -13,7 +13,7 @@
 需要字段筛选时用 `dsb run get_form_state --select data.fields` 或
 `dsb run get_browser_state --select data.text`。`--select` 输出 JSON，支持点分隔对象键和数字数组下标
 （如 `data.fields.0`），不执行表达式；缺少路径报用法错误，显式 null 保留为 null。
-它只筛终端输出，日志仍记录完整响应。
+它只筛终端输出，日志仍记录响应结构，并应用凭据及输入内容的脱敏规则。
 **失败响应同样按路径投影**（业务退出码不变）：批量回执里只要有一步失败、整批 `ok` 就是 `false`，
 但 `data.results[N]` 仍在，所以 `--select data.results.N.…` 恰好是「只看失败那一步」的正确用法。
 **路径不存在时：stdout 打 `null`、退出码 `3`（用法错）。** 以前是「退回打印整封 + 退出码仍是 0」——
@@ -177,7 +177,7 @@ dsb --port 10049 last                            # 重放最近一次响应
   （响应精简模式）不是一回事；后者要用 `--response-mode compact` 传（**信封级字段**，不是 `params` 里的）。
   摘要为空时（`get_tabs`/`get_console_logs`/`get_dialog` 这类没有可摘要字段的方法）dsb 会自动退回打印一行
   JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了。
-- **Cookie 留档保护**：自动请求/响应留档会将结构化 `cookies` 数组及 `set_cookie` 参数中的 Cookie 值替换为 `[REDACTED]`，不修改实时请求、stdout 或显式 `--out` 导出。任意脚本、页面文本、错误消息、HTTP 头、服务端 trace 与历史记录不在此功能覆盖范围，不能把它当成通用脱敏。敏感导出优先 `--no-record`，并使用受限临时目录；不要公开任何原始凭据。
+- **凭据留档保护**：自动留档遮蔽结构化 Cookie、password、Authorization、token、API key、secret，以及输入命令参数和相关响应。含秘密的任意脚本使用 `run --sensitive`；实时 stdout、显式 `--out`、截图和页面文本产物仍保留原有行为。服务端 trace 在启用脱敏时采用相应保护；`--no-record` 仅关闭客户端记录。边界与示例见 [命令可靠性](command-reliability.md)。
 - **任务筛选**：`last` 使用相同的 `--session` 和留档目录；显式 `--id` 按配对请求记录筛选最新响应，无匹配报错，不回退其他任务。缺失/损坏请求不参与筛选。`--record-dir` 是最终目录，不追加 session；不传显式 ID 时仍读取目录最新响应。
 - **多行脚本不要写在命令行里**：经 cmd/PowerShell 传参会只剩第一行。用 `js '@脚本.js'`、`--params '@文件.json'`
   或 `batch cmds.json`。

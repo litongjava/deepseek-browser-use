@@ -112,6 +112,17 @@ func (p *Printer) Response(response *Response, label string, hasIndex bool, inde
 		if !response.Ok() && response.Msg() != "" {
 			detail += " msg=" + response.Msg()
 		}
+		if p.Mode == "compact" {
+			for _, key := range []string{"result", "expectResult", "readback", "execution"} {
+				if value := objGet(response.Data(), key); value != nil {
+					encoded := []rune(EncodeJSON(redactCookieRecords(value), encCompact))
+					if len(encoded) > 600 {
+						encoded = append(encoded[:600], []rune("...(truncated; use --select)")...)
+					}
+					detail += " " + key + "=" + string(encoded)
+				}
+			}
+		}
 		p.printLine(head + detail)
 		// 摘要为空时**不能**只回一行「OK 27ms」:那等于把答案吞了(实测 get_tabs / get_console_logs
 		// / get_dialog 都是这样,让人以为「没有数据」)。这时退回一行 JSON,信息不丢、也还是一行。

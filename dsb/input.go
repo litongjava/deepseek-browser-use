@@ -69,7 +69,7 @@ func loadPayload(source *string, kv []string) (*Obj, error) {
 		default:
 			text = *source
 		}
-		loaded, err := DecodeJSON(text)
+		loaded, err := DecodeJSON(strings.TrimPrefix(text, "\ufeff"))
 		if err != nil {
 			return nil, usageErrorf("参数不是合法 JSON:%v", err)
 		}
@@ -118,7 +118,7 @@ func readTextSource(source string) (string, error) {
 		if err != nil {
 			return "", usageErrorf("读标准输入失败:%v", err)
 		}
-		return string(data), nil
+		return strings.TrimPrefix(string(data), "\ufeff"), nil
 	}
 	if strings.HasPrefix(source, "@") {
 		return readLocalFile(source[1:])
@@ -133,7 +133,7 @@ func readBatchSource(source *string) (string, error) {
 		if err != nil {
 			return "", usageErrorf("读标准输入失败:%v", err)
 		}
-		return string(data), nil
+		return strings.TrimPrefix(string(data), "\ufeff"), nil
 	}
 	path := *source
 	if strings.HasPrefix(path, "@") {

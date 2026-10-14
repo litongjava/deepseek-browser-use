@@ -5,8 +5,12 @@ import nexus.io.tio.utils.validator.ParameterValidationException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
@@ -14,6 +18,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -193,7 +198,7 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
    * @param method 命令名,决定要不要重发
    * @param call   真正执行命令的动作;每次重发都会重新调用一次
    */
-  static RespBodyVo dispatchWithSpuriousRetry(String method, java.util.function.Supplier<RespBodyVo> call) {
+  static RespBodyVo dispatchWithSpuriousRetry(String method, Supplier<RespBodyVo> call) {
     return dispatchWithSpuriousRetry(method, null, call);
   }
 
@@ -203,7 +208,7 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
    * @param params 命令参数;为 {@code null} 时按「没有声明任何许可」处理
    */
   static RespBodyVo dispatchWithSpuriousRetry(String method, JSONObject params,
-      java.util.function.Supplier<RespBodyVo> call) {
+      Supplier<RespBodyVo> call) {
     int maxAttempts = retrySafeFor(method, params) ? spuriousMaxAttempts() : 1;
     if ((method.equals("screenshot") || method.equals("get_element_screenshot"))
         && params != null && Boolean.TRUE.equals(params.getBoolean("force"))) maxAttempts = 1;
@@ -333,6 +338,80 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
    * @param params 命令参数,可以为空
    */
   public RespBodyVo execute(Long id, String method, JSONObject params) {
+    if ("get_diagnostics".equals(method)) {
+      return RespBodyVo.ok(CommandControl.diagnostics(id));
+    }
+    if ("cancel_command".equals(method)) {
+      String commandId = params == null ? null : params.getString("commandId");
+      if (commandId == null || commandId.isBlank()) {
+        return RespBodyVo.fail(400, "cancel_command requires commandId from get_diagnostics");
+      }
+      return RespBodyVo.ok(CommandControl.cancel(id, commandId));
+    }
+    if ("get_job".equals(method) || "cancel_job".equals(method) || "list_jobs".equals(method)) {
+      return run(id, method, params);
+    }
+    if ("commands".equals(method) && params != null && Boolean.TRUE.equals(params.getBoolean("async"))) {
+      if (id == null) { return RespBodyVo.fail(400, "Async commands require id"); }
+      JSONObject jobParams = new JSONObject(params);
+      jobParams.remove("async");
+      JobRegistry.Job job = JobRegistry.submit("commands", id, started ->
+          started.result = executeBatchJob(id, jobParams, started.id));
+      return RespBodyVo.ok(Kv.by("jobId", job.id).set("status", job.status).set("browserId", id));
+    }
+    if (CommandControl.current() != null) {
+      return executeSerialized(id, method, params);
+    }
+    CommandControl control = CommandControl.claim(id, method);
+    if (control == null) {
+      RespBodyVo busy = commandBusyFailure(method);
+      ((Kv) busy.getData()).set("diagnostics", CommandControl.diagnostics(id));
+      return busy;
+    }
+    CommandControl.bind(control);
+    RespBodyVo result = null;
+    try {
+      result = executeSerialized(id, method, params);
+      return result;
+    } catch (CancellationException cancelled) {
+      result = RespBodyVo.fail("Command cancelled before the next execution stage");
+      result.setData(Kv.by("errorCode", "COMMAND_CANCELLED").set("retryable", false));
+      return result;
+    } finally {
+      control.finish(result != null && result.isOk());
+      if (result != null) {
+        Kv data = result.getData() instanceof Kv existing ? existing : Kv.by("result", result.getData());
+        data.set("execution", control.describe());
+        result.setData(data);
+      }
+      CommandControl.bind(null);
+    }
+  }
+
+  private RespBodyVo executeBatchJob(Long id, JSONObject params, String jobId) {
+    CommandControl control = CommandControl.claim(id, "commands");
+    if (control == null) { return commandBusyFailure("commands"); }
+    CommandControl.bind(control);
+    RespBodyVo result = null;
+    try {
+      long limit = params.getLongValue("commandTimeoutMs", PlaywrightService.commandHardTimeoutMs());
+      if (limit < 1 || limit > 900000) {
+        result = RespBodyVo.fail(400, "commandTimeoutMs must be between 1 and 900000");
+      } else {
+        result = awaitWithLimit(limit, "commands", () -> batchExecute(id, params, jobId));
+      }
+      return result;
+    } finally {
+      control.finish(result != null && result.isOk());
+      if (result != null && result.getData() instanceof Kv data) {
+        data.set("execution", control.describe());
+      }
+      CommandControl.bind(null);
+    }
+  }
+
+  private RespBodyVo executeSerialized(Long id, String method, JSONObject params) {
+    CommandControl.checkpoint("queue");
     BrowserInstance instance = id == null ? null : svc.getInstance(id);
     if (instance == null || TASK_SCOPE.get() == instance) {
       // 没有实例(例如 start 本身)或已经在同一任务的执行域里(批量中的一步):直接跑
@@ -362,25 +441,15 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
 
   /** 同一个任务上已有命令在跑:这条没开始执行,重发是安全的。 */
   static RespBodyVo commandBusyFailure(String method) {
-    RespBodyVo busy = RespBodyVo.fail(method + " 未执行：同一个任务上已有命令正在执行，等满 "
-        + SERIALIZE_WAIT_MS + " 毫秒仍未轮到（[" + ActionError.COMMAND_TIMEOUT + "]）");
+    RespBodyVo busy = RespBodyVo.fail(method + " was not started: another command owns this task");
     busy.setData(Kv.by("errorCode", ActionError.COMMAND_TIMEOUT).set("retryable", true)
         .set("started", false).set("retryAfterMs", 1000).set("serialized", true)
-        .set("note", "同一个任务的命令是**串行**执行的（Playwright 的 Connection 不能被并发驱动）。"
-            + "这条命令没有开始执行，稍后重发即可；长批量进行中时，轮询类命令会排在它后面"));
+        .set("note", "Use get_diagnostics to inspect the active command. Wait for its workers to exit before retrying."));
     return busy;
   }
 
   private RespBodyVo executeLocked(Long id, String method, JSONObject params) {
-    RespBodyVo result = runBounded(id, method, params);
-    if (result != null && !result.isOk()) {
-      // 超时回执**不要再补页面上下文**:补它要再发一次 Playwright 调用,而此刻正是「底层调不动」
-      // 的时候 —— 那一下会把刚拿到结论的 HTTP 线程重新挂死,把兜底的意义全抹掉。
-      if (!ActionError.COMMAND_TIMEOUT.equals(errorCodeOf(result))) {
-        attachPageContext(result, id);
-      }
-    }
-    return result;
+    return runBounded(id, method, params);
   }
 
   /** 失败回执里已写的错误码(用于少数需要按码分支的公共装饰) */
@@ -428,7 +497,21 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     long limit = LONG_RUNNING.contains(method)
         ? PlaywrightService.commandHardTimeoutMs()
         : PlaywrightService.commandTimeoutMs();
-    return awaitWithLimit(limit, method, () -> run(id, method, params));
+    if (params != null && params.getLong("commandTimeoutMs") != null) {
+      long requested = params.getLongValue("commandTimeoutMs");
+      if (requested < 1 || requested > 900000) {
+        return RespBodyVo.fail(400, "commandTimeoutMs must be between 1 and 900000");
+      }
+      limit = requested;
+    }
+    return awaitWithLimit(limit, method, () -> {
+      RespBodyVo result = run(id, method, params);
+      if (result != null && !result.isOk() && !ActionError.COMMAND_TIMEOUT.equals(errorCodeOf(result))) {
+        CommandControl.checkpoint("failure-observation");
+        attachPageContext(result, id);
+      }
+      return result;
+    });
   }
 
   /**
@@ -462,76 +545,78 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
   private static final long SERIALIZE_WAIT_MS = 5000;
 
   static RespBodyVo awaitWithLimit(long limitMs, String method,
-      java.util.function.Supplier<RespBodyVo> body) {
+      Supplier<RespBodyVo> body) {
     if (limitMs <= 0) {
       return body.get();
     }
     AtomicBoolean started = new AtomicBoolean(false);
-    Future<RespBodyVo> future;
-    if (Boolean.TRUE.equals(IN_COMMAND_POOL.get())) {
-      // 已经在池里(批量中的一步):改用一次性线程。
-      // 既不占共享池(不会和外层互相堵死),又保留「这一步自己的超时兜底」——
-      // 直接内联跑会丢掉内层超时,等于悄悄改变了每一步的语义。
-      //
-      // 任务执行域要跟着传下去:派生线程不重入外层线程的锁,不传的话每一步都会在
-      // 「同一任务串行锁」外面等到超时,整批全废。
-      BrowserInstance inheritedScope = TASK_SCOPE.get();
-      FutureTask<RespBodyVo> step = new FutureTask<>(() -> {
-        started.set(true);
-        if (inheritedScope != null) {
-          TASK_SCOPE.set(inheritedScope);
-        }
-        try {
-          return body.get();
-        } finally {
-          TASK_SCOPE.remove();
-        }
-      });
-      Thread thread = new Thread(step, "dsb-command-step");
-      thread.setDaemon(true);
-      thread.start();
-      future = step;
-    } else {
+    AtomicInteger gate = new AtomicInteger();
+    CommandControl control = CommandControl.current();
+    BrowserInstance inheritedScope = TASK_SCOPE.get();
+    if (control != null) { control.retain(); }
+    FutureTask<RespBodyVo> future = new FutureTask<>(() -> {
+      if (!gate.compareAndSet(0, 1)) { throw new CancellationException(); }
+      started.set(true);
+      CommandControl.bind(control);
+      IN_COMMAND_POOL.set(Boolean.TRUE);
+      if (inheritedScope != null) { TASK_SCOPE.set(inheritedScope); }
       try {
-        BrowserInstance inheritedScope = TASK_SCOPE.get();
-        future = commandPool().submit(() -> {
-          started.set(true);
-          IN_COMMAND_POOL.set(Boolean.TRUE);
-          if (inheritedScope != null) {
-            TASK_SCOPE.set(inheritedScope);
-          }
-          try {
-            return body.get();
-          } finally {
-            TASK_SCOPE.remove();
-            IN_COMMAND_POOL.remove();
-          }
-        });
-      } catch (RejectedExecutionException overloaded) {
-        // 池与队列都满了:明确回一条「没开始执行、可以重发」的回执。
-        // 以前池是无界队列、永远不会走到这里 —— 也正因为无界,过载时调用方只会一直干等,
-        // 连一点「服务端忙不过来了」的信号都拿不到。
-        return commandOverloadedFailure(method, limitMs);
-      } catch (RuntimeException rejected) {
-        // 池已关闭等极端情况:退回同步执行,宁可没有兜底也不要让命令发不出去
+        CommandControl.checkpoint("execution");
         return body.get();
+      } finally {
+        CommandControl.bind(null);
+        TASK_SCOPE.remove();
+        IN_COMMAND_POOL.remove();
+        if (control != null) { control.release(); }
       }
-    }
+    }) {
+      @Override protected void done() {
+        if (gate.compareAndSet(0, 2) && control != null) { control.release(); }
+      }
+    };
+    if (control != null) { control.watch(future); }
     try {
+      if (Boolean.TRUE.equals(IN_COMMAND_POOL.get())) {
+        Thread thread = new Thread(future, "dsb-command-step");
+        thread.setDaemon(true);
+        thread.start();
+      } else {
+        commandPool().execute(future);
+      }
       return future.get(limitMs, TimeUnit.MILLISECONDS);
+    } catch (RejectedExecutionException overloaded) {
+      future.cancel(false);
+      return commandOverloadedFailure(method, limitMs);
     } catch (TimeoutException timeout) {
+      if (control != null) { control.cancel(); }
       future.cancel(true);
       return commandTimeoutFailure(method, limitMs, started.get());
+    } catch (CancellationException cancelled) {
+      if (control != null) { control.cancel(); }
+      future.cancel(true);
+      return commandCancelledFailure(method, started.get());
     } catch (InterruptedException interrupted) {
+      if (control != null) { control.cancel(); }
+      future.cancel(true);
       Thread.currentThread().interrupt();
       return commandTimeoutFailure(method, limitMs, started.get());
-    } catch (java.util.concurrent.ExecutionException failed) {
+    } catch (ExecutionException failed) {
       Throwable cause = failed.getCause();
-      if (cause instanceof RuntimeException runtime) {
-        throw runtime;
+      if (cause instanceof CancellationException) {
+        return commandCancelledFailure(method, started.get());
       }
-      throw new IllegalStateException(cause == null ? failed.getMessage() : cause.getMessage(), cause);
+      if (cause instanceof RuntimeException runtime) { throw runtime; }
+      throw new IllegalStateException(cause);
+    } finally {
+      if (control != null) { control.unwatch(future); }
     }
+  }
+
+  private static RespBodyVo commandCancelledFailure(String method, boolean started) {
+    RespBodyVo result = RespBodyVo.fail(method + " cancellation requested; already dispatched browser work may still complete");
+    result.setData(Kv.by("errorCode", "COMMAND_CANCELLED").set("started", started)
+        .set("retryable", !started).set("outcomeUnknown", started));
+    return result;
   }
 
   /** 过载(池与队列都满):这条命令没开始执行,重发是安全的。 */
@@ -761,17 +846,6 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
       return RespBodyVo.fail("缺少参数 method");
     }
     if ("commands".equals(method)) {
-      // 长批次可以异步跑:立刻回 jobId,再用 get_job 取结果。客户端超时不再等于「任务失败」
-      if (params != null && Boolean.TRUE.equals(params.getBoolean("async"))) {
-        if (id == null) {
-          return RespBodyVo.fail("异步执行 commands 需要参数 id");
-        }
-        JSONObject jobParams = params;
-        JobRegistry.Job job = JobRegistry.submit("commands", id, started -> started.result = batchExecute(id,
-            jobParams, started.id));
-        return RespBodyVo.ok(Kv.by("jobId", job.id).set("status", job.status).set("browserId", id)
-            .set("hint", "批次已在后台执行:用 get_job 轮询结果,用 cancel_job 取消(取消会在下一步之前生效)"));
-      }
       return batchExecute(id, params);
     }
     CommandTable.Executor executor = CommandTable.get(method);
@@ -783,16 +857,60 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     // 把 request_human_input 的 timeoutSeconds 写成 expiresInSeconds,待办按默认 300 秒建好,
     // 人还没看到请求就已经过期,而回执里一个字都没提。
     TrackedArgs args = new TrackedArgs(params);
+    args.getLong("commandTimeoutMs");
+    args.getBoolean("sensitive");
+    JSONObject expectation = args.getJSONObject("expect");
+    String readback = args.getString("readback");
+    Long snapshotVersion = args.getLong("snapshotVersion");
+    if (snapshotVersion != null) {
+      BrowserInstance instance = svc.getInstance(id);
+      if (instance == null || instance.snapshotInvalidated || instance.snapshotVersion.get() != snapshotVersion) {
+        RespBodyVo stale = RespBodyVo.fail("[STALE_SNAPSHOT] Snapshot version is no longer current; read state again");
+        stale.setData(Kv.by("errorCode", "STALE_SNAPSHOT").set("actionExecuted", false));
+        return stale;
+      }
+    }
+    if (expectation != null && (expectation.getString("js") == null || expectation.getString("js").isBlank())) {
+      return RespBodyVo.fail(400, "expect requires a js expression");
+    }
+    if (expectation != null && (expectation.getLongValue("timeoutMs") < 0 || expectation.getLongValue("timeoutMs") > 120000)) {
+      return RespBodyVo.fail(400, "expect.timeoutMs must be between 0 and 120000");
+    }
     // 页签类命令的效果可以直接读回来(见 verifyTabsAfterSpurious):发命令前先记一份页签状态,
     // 万一撞上伪故障,就能把「到底生效没有」写成事实,而不是留给调用方猜。
     Kv tabsBefore = SPURIOUS_VERIFIABLE.contains(method) ? tabState(id) : null;
     try (RetryBudget commandBudget = RetryBudget.open(30000)) {
-      RespBodyVo result = dispatchWithSpuriousRetry(method, args, () -> executor.run(svc, id, args));
+      RespBodyVo result = dispatchWithSpuriousRetry(method, args, () -> {
+        CommandControl.dispatch();
+        return executor.run(svc, id, args);
+      });
+      if (result.isOk()) {
+        Kv observed = result.getData() instanceof Kv existing ? existing : Kv.by("result", result.getData());
+        CommandControl.actionCompleted();
+        if (expectation != null) {
+          Kv checked = checkExpectation(id, expectation);
+          observed.set("expectResult", checked).set("actionSucceeded", true)
+              .set("businessSucceeded", checked.getBoolean("passed"));
+          if (!Boolean.TRUE.equals(checked.getBoolean("passed"))) {
+            result = RespBodyVo.fail("Action completed, but the business expectation did not pass; do not repeat the action");
+          }
+        }
+        if (readback != null) {
+          CommandControl.checkpoint("readback");
+          RespBodyVo read = svc.executeJs(id, readback);
+          observed.set("readback", read.getData()).set("readbackSucceeded", read.isOk());
+          if (!read.isOk()) {
+            observed.set("readbackError", read.getMsg()).set("actionSucceeded", true);
+            result = RespBodyVo.fail("Action completed, but readback failed; observe before repeating the action");
+          }
+        }
+        result.setData(observed);
+      }
       if (!result.isOk() && result.getMsg() != null) {
-        java.util.regex.Matcher match = java.util.regex.Pattern.compile("\\[([A-Z_]+)\\]").matcher(result.getMsg());
+        Matcher match = Pattern.compile("\\[([A-Z_]+)\\]").matcher(result.getMsg());
         String errorCode = match.find() ? match.group(1) : ActionError.code(result.getMsg());
         Kv detail = result.getData() instanceof Kv ? (Kv) result.getData() : new Kv();
-        if (detail.get("errorCode") != null) errorCode = detail.getStr("errorCode");
+        if (detail.get("errorCode") != null) { errorCode = detail.getStr("errorCode"); }
         detail.set("errorCode", errorCode);
         // 可重试性与建议退避:调用方据此自动重试,不必去猜中文提示
         boolean retryable = ActionError.retryable(errorCode);
@@ -919,7 +1037,7 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
       errorCode = ((Kv) result.getData()).getStr("errorCode");
     }
     if (errorCode == null) {
-      java.util.regex.Matcher match = java.util.regex.Pattern.compile("\\[([A-Z_]+)\\]").matcher(
+      Matcher match = Pattern.compile("\\[([A-Z_]+)\\]").matcher(
           message == null ? "" : message);
       errorCode = match.find() ? match.group(1) : ActionError.code(message);
     }
@@ -955,14 +1073,33 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     if (js == null || js.isBlank()) {
       return Kv.by("passed", false).set("error", "expect 需要 js 字段(要断言的表达式)");
     }
-    RespBodyVo evaluated = svc.executeJs(browserId, js);
-    if (!evaluated.isOk()) {
-      return Kv.by("passed", false).set("error", evaluated.getMsg());
+    long timeout = expect.getLongValue("timeoutMs");
+    if (timeout < 0 || timeout > 120000) {
+      return Kv.by("passed", false).set("error", "expect.timeoutMs must be between 0 and 120000");
     }
-    Object data = evaluated.getData();
-    Object actual = data instanceof Kv ? ((Kv) data).get("result") : data;
-    Boolean passed = compareExpectation(expect, actual);
-    Kv report = Kv.by("passed", passed).set("actual", actual).set("js", js);
+    long deadline = System.nanoTime() + timeout * 1_000_000;
+    Object actual;
+    Boolean passed;
+    int attempts = 0;
+    do {
+      CommandControl.checkpoint("expectation");
+      int remaining = (int) Math.max(1, (deadline - System.nanoTime()) / 1_000_000);
+      RespBodyVo evaluated = svc.executeJs(browserId, js, null, null, null, timeout == 0 ? 5000 : remaining);
+      attempts++;
+      if (!evaluated.isOk()) {
+        return Kv.by("passed", false).set("error", evaluated.getMsg()).set("attempts", attempts);
+      }
+      Object data = evaluated.getData();
+      actual = data instanceof Kv ? ((Kv) data).get("result") : data;
+      passed = compareExpectation(expect, actual);
+      if (passed || System.nanoTime() >= deadline) { break; }
+      try { Thread.sleep(Math.min(50, Math.max(1, (deadline - System.nanoTime()) / 1_000_000))); }
+      catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new CancellationException("Expectation interrupted");
+      }
+    } while (true);
+    Kv report = Kv.by("passed", passed).set("actual", actual).set("js", js).set("attempts", attempts);
     for (String key : new String[] {"equals", "notEquals", "min", "max", "contains", "truthy"}) {
       if (expect.containsKey(key)) {
         report.set("expected", expect.get(key)).set("matcher", key);
@@ -1102,6 +1239,7 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     boolean stopOnExpectFailure = Boolean.TRUE.equals(params.getBoolean("stopOnExpectFailure"));
 
     for (int i = 0; i < commands.size(); i++) {
+      CommandControl.checkpoint("batch-step");
       // 异步任务的取消是协作式的:在每一步之间生效,不会把已经发出的那一步打断
       if (jobId != null && JobRegistry.cancelRequested(jobId)) {
         stopReason = "cancelled";

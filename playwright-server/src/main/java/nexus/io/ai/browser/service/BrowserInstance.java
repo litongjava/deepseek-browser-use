@@ -78,6 +78,7 @@ public class BrowserInstance {
   public final AtomicInteger captureSeq = new AtomicInteger();
   /** A detected mixed snapshot must not fall back to the unrelated CSS index space. */
   public boolean snapshotInvalidated;
+  public final java.util.concurrent.atomic.AtomicLong snapshotVersion = new java.util.concurrent.atomic.AtomicLong();
 
   /**
    * 手动截图(screenshot / get_element_screenshot)的序号

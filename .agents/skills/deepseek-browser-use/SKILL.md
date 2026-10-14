@@ -9,6 +9,8 @@ description: 使用 dsb 命令行操作真实浏览器，完成需要 JavaScript
 
 执行前读取 [可靠执行与任务协作](references/reliable-execution.md)。数字、价格、时间和表格任务同时读取 [网页取数规范](../web-data-as-text/SKILL.md)；12306 查询再读取 [铁路技能](../railway-12306-ticket/SKILL.md)。站点操作按需加载对应技能。
 
+超时、取消、同名按钮、业务断言、上传和敏感留档按 [命令可靠性](references/command-reliability.md) 执行：卡住时用 `diagnose`，按 commandId 取消；动作结果未知时先观察。普通 `run` 可带 `--expect` 和 `--readback`，含凭据的脚本加 `--sensitive`。
+
 ## 使用 dsb
 
 `dsb` 已在 PATH 上，直接调用；不要用 curl 或 Invoke-WebRequest 手拼请求。默认服务地址为 `http://localhost:10049`，本机服务未启动时普通命令会自动启动后端并重试一次。远端目标用 `--host` / `--port` 或已登记的 `--use` 指定。
@@ -35,7 +37,7 @@ dsb --id 1001 --session example batch commands.json --async --wait
 ## 读取与交互
 
 1. 导航后用 `get_browser_state` / `dsb state` 读页签和 `data.text`；文本中的 `[index]` 是可交互元素索引。
-2. 执行动作，使用当前索引或明确的选择器。点击、导航、异步渲染后重新取快照；`indicesUsable:false` 或 `snapshotConsistent:false` 时不使用该次索引。
+2. 执行动作，优先用限定 scope 的 role/name/exact 或唯一选择器；按索引时带上当前 snapshotVersion。点击、导航、异步渲染后重新取快照；`indicesUsable:false` 或 `snapshotConsistent:false` 时不使用该次索引。
 3. 用有界的 `wait_for_text` / `wait_for_function` / `wait_for_response` 等待目标结果。轮询页不适合 `wait_for_idle`，可改用 `wait_for_stable` 或具体业务条件。
 4. 填完表单用 `get_form_state` 核对。自定义下拉还要核对显示值、选中项和错误状态；DOM 中有值不保证已进入框架模型。
 5. 回读业务后置条件，如目标订单状态、稿件列表或申请记录。`ok`、`changed`、`effective` 和 DOM diff 都不能单独证明业务成功或失败。
@@ -46,7 +48,7 @@ dsb --id 1001 --session example batch commands.json --async --wait
 | 顶层页面读不到内容 | `list_frames` → `state --include-frames`；索引自带 frame，选择器和 JS 按需传 `frame` |
 | 只找一段文本 | `find_text`；表格用 `list_tables` + `extract_markdown` 保留行列关系 |
 | 需要元素属性 | `get_interactive_map`、`get_element_attribute` 或只读 JS |
-| 多个同名元素 | 核对 `matched` / `chosenIndex`，缩小选择器或用 `nth` |
+| 多个同名元素 | role 定位返回 `AMBIGUOUS_LOCATOR` 时读 candidates，缩小 scope 或明确 nth |
 | 上传后表单仍空 | 核对目标 file input、`consumed` 和 `get_element_listeners`，再检查组件状态；不盲目重传 |
 | 有遮挡或弹窗 | `get_modals` / `close_modal`；未识别时读 DOM 定位可见浮层 |
 | 需要接口响应 | `get_response_body` 回看或 `wait_for_response` 等待；`get_requests` 只有请求元数据 |
@@ -92,6 +94,7 @@ dsb --id 1001 --session example batch commands.json --async --wait
 | 分册 | 内容 |
 | --- | --- |
 | [可靠执行](references/reliable-execution.md) | CLI 引用、任务独占、异步标识、业务断言、维护与同步 |
+| [命令可靠性](references/command-reliability.md) | diagnose/cancel、超时边界、expect/readback、语义定位、文件选择器、凭据留档 |
 | [客户端](references/client.md) | 完整 CLI、输出筛选、留档、后端管理 |
 | [读页面](references/reading-pages.md) | 状态字段、索引、表格、跨域 iframe |
 | [命令表](references/commands.md) | 方法参数、返回字段、站点配方与 OCR |
@@ -122,6 +125,6 @@ dsb --id 1001 --session example batch commands.json --async --wait
 | 浏览器设置 | `set_viewport`、`set_geolocation`、`set_offline`、`set_headers`、`set_credentials`、`set_media` |
 | 弹窗与控制台 | `get_dialog`、`get_js_dialog`、`clear_dialog`、`clear_js_dialog`、`set_dialog_behavior`、`get_modals`、`close_modal`、`get_console_logs`、`clear_console_logs` |
 | 网络 | `route`、`unroute`、`get_requests`、`wait_for_response`、`get_response_body` |
-| 其它与服务自省 | `extract_structured_data`、`extract_markdown`、`find_text`、`list_tables`、`download_image`、`execute_js`、`list_methods`、`get_config`、`list_tasks`、`cleanup`、`list_recipes`、`run_recipe`、`get_job`、`cancel_job`、`list_jobs` |
+| 其它与服务自省 | `extract_structured_data`、`extract_markdown`、`find_text`、`list_tables`、`download_image`、`execute_js`、`list_methods`、`get_config`、`list_tasks`、`get_diagnostics`、`cancel_command`、`cleanup`、`list_recipes`、`run_recipe`、`get_job`、`cancel_job`、`list_jobs` |
 | 人机协同 | `request_human_input`、`ask_user`、`submit_human_input`、`get_human_input`、`ocr_image` |
 | profile 与批量 | `list_profiles`、`clone_profile`、`press_key`、`get_page_snapshot`、`diff_dom_text`、`get_interactive_map`、`get_form_state`、`commands` |

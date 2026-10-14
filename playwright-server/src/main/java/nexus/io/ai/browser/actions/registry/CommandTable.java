@@ -15,6 +15,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.jfinal.kit.Kv;
 
 import nexus.io.ai.browser.service.PlaywrightService;
+import nexus.io.ai.browser.service.CommandControl;
 import nexus.io.model.body.RespBodyVo;
 
 /**
@@ -30,6 +31,21 @@ import nexus.io.model.body.RespBodyVo;
  */
 public class CommandTable {
 
+  private static Double waitSeconds(JSONObject args) {
+    Double seconds = args.getDouble("timeoutSeconds");
+    Double millis = args.getDouble("timeoutMs");
+    if (millis != null && (!Double.isFinite(millis) || millis <= 0 || millis > 900000)) {
+      throw new IllegalArgumentException("timeoutMs must be between 1 and 900000");
+    }
+    if (seconds != null && (!Double.isFinite(seconds) || seconds <= 0 || seconds > 900)) {
+      throw new IllegalArgumentException("timeoutSeconds must be between 0 and 900 (exclusive lower bound)");
+    }
+    if (seconds != null && millis != null && Math.abs(seconds * 1000 - millis) > 0.001) {
+      throw new IllegalArgumentException("timeoutMs and timeoutSeconds disagree");
+    }
+    return millis == null ? seconds : millis / 1000;
+  }
+
   public interface Executor {
     RespBodyVo run(PlaywrightService svc, Long id, JSONObject args);
   }
@@ -37,6 +53,8 @@ public class CommandTable {
   private static final Map<String, Executor> TABLE = new LinkedHashMap<>();
 
   static {
+    put("get_diagnostics", (svc, id, a) -> RespBodyVo.ok(CommandControl.diagnostics(id)));
+    put("cancel_command", (svc, id, a) -> RespBodyVo.ok(CommandControl.cancel(id, reqStr(a, "commandId"))));
     // ---------- 实例生命周期 ----------
     put("start", (svc, id, a) -> {
       // Show the browser window unless headless mode is explicitly requested.
@@ -127,6 +145,11 @@ public class CommandTable {
     // **两个都是 0×0 隐藏**——「优先挑可见的」在这里无从判断,只能按文档顺序取第一个。所以除了要能
     // 指定 nth,回执里还必须报出 matched 与 chosenIndex,否则调用方连「这里有没有歧义」都不知道
     put("upload_file", (svc, id, a) -> {
+      String trigger = optStr(a, "trigger");
+      if (trigger != null) {
+        return svc.uploadFileChooser(id, trigger, reqStr(a, "path"), a.getInteger("timeoutMs"),
+            optStr(a, "frame"), optStr(a, "responseUrl"));
+      }
       if (optStr(a, "contentBase64") != null || optStr(a, "url") != null) {
         return svc.uploadFileInline(id, a.getInteger("index"), optStr(a, "selector"), optStr(a, "filename"),
             optStr(a, "contentType"), optStr(a, "contentBase64"), optStr(a, "url"), a.getInteger("timeoutMs"),
@@ -184,7 +207,8 @@ public class CommandTable {
         reqStr(a, "text"), optStr(a, "mode"), optStr(a, "frame"), a.getInteger("nth")));
     put("click_element_by_text", (svc, id, a) -> svc.clickElementByText(id, reqStr(a, "text"), optStr(a, "mode")));
     put("click_element_by_role",
-        (svc, id, a) -> svc.clickElementByRole(id, reqStr(a, "role"), optStr(a, "name"), optStr(a, "mode")));
+        (svc, id, a) -> svc.clickElementByRole(id, reqStr(a, "role"), optStr(a, "name"), optStr(a, "mode"),
+            optStr(a, "scope"), optStr(a, "frame"), a.getInteger("nth"), a.getBoolean("exact"), a.getInteger("timeoutMs")));
     put("input_text_by_label",
         (svc, id, a) -> svc.inputTextByLabel(id, reqStr(a, "label"), reqStr(a, "text"), optStr(a, "mode")));
     put("clear_text", (svc, id, a) -> svc.clearText(id, a.getInteger("index"), optStr(a, "selector")));
@@ -202,24 +226,24 @@ public class CommandTable {
 
     // ---------- 等待 ----------
     put("wait_for_element",
-        (svc, id, a) -> svc.waitForElement(id, reqStr(a, "selector"), a.getDouble("timeoutSeconds"),
+        (svc, id, a) -> svc.waitForElement(id, reqStr(a, "selector"), waitSeconds(a),
             optStr(a, "frame")));
-    put("wait_for_text", (svc, id, a) -> svc.waitForText(id, reqStr(a, "text"), a.getDouble("timeoutSeconds")));
-    put("wait_for_url", (svc, id, a) -> svc.waitForUrl(id, reqStr(a, "url"), a.getDouble("timeoutSeconds")));
-    put("wait_for_load", (svc, id, a) -> svc.waitForLoad(id, optStr(a, "state"), a.getDouble("timeoutSeconds")));
+    put("wait_for_text", (svc, id, a) -> svc.waitForText(id, reqStr(a, "text"), waitSeconds(a)));
+    put("wait_for_url", (svc, id, a) -> svc.waitForUrl(id, reqStr(a, "url"), waitSeconds(a)));
+    put("wait_for_load", (svc, id, a) -> svc.waitForLoad(id, optStr(a, "state"), waitSeconds(a)));
     put("wait_for_function",
-        (svc, id, a) -> svc.waitForFunction(id, reqStr(a, "expression"), a.getDouble("timeoutSeconds")));
+        (svc, id, a) -> svc.waitForFunction(id, reqStr(a, "expression"), waitSeconds(a)));
     // 等页面安静下来:连续 quietMs 毫秒既没有 DOM 变更、也没有在途请求(比固定 wait 可靠,比手写
     // wait_for_function 省事);selector/text 是额外条件
-    put("wait_for_idle", (svc, id, a) -> svc.waitForIdle(id, a.getInteger("quietMs"), a.getDouble("timeoutSeconds"),
+    put("wait_for_idle", (svc, id, a) -> svc.waitForIdle(id, a.getInteger("quietMs"), waitSeconds(a),
         optStr(a, "selector"), optStr(a, "text")));
     // 等内容稳定:正文/表单值/表格内容连续 quietMs 毫秒不再变化。查/搜索结果是异步刷新的,
     // 点完「查询」立刻读会读到上一次的结果,先 wait_for_stable 再读就不会错位
     put("wait_for_stable", (svc, id, a) -> svc.waitForStable(id, optStr(a, "selector"), a.getInteger("quietMs"),
-        a.getDouble("timeoutSeconds")));
+        waitSeconds(a)));
     // 等选择器的命中数量达标:等弹窗全部消失用 max:0,等结果行出现用 min:1
     put("wait_for_count", (svc, id, a) -> svc.waitForCount(id, reqStr(a, "selector"), a.getInteger("min"),
-        a.getInteger("max"), a.getInteger("equals"), a.getDouble("timeoutSeconds")));
+        a.getInteger("max"), a.getInteger("equals"), waitSeconds(a)));
 
     // ---------- 鼠标 ----------
     put("mouse_move", (svc, id, a) -> svc.mouseMove(id, reqDouble(a, "x"), reqDouble(a, "y")));
@@ -284,7 +308,7 @@ public class CommandTable {
     put("get_requests", (svc, id, a) -> svc.getRequests(id, optStr(a, "filter"), optStr(a, "resourceType"),
         a.getInteger("limit"), a.getLong("since")));
     put("wait_for_response", (svc, id, a) -> svc.waitForResponse(id, reqStr(a, "urlPattern"),
-        a.getDouble("timeoutSeconds"), a.getInteger("maxChars"), a.getInteger("lookBackSeconds")));
+        waitSeconds(a), a.getInteger("maxChars"), a.getInteger("lookBackSeconds")));
     put("get_response_body", (svc, id, a) -> svc.getResponseBody(id, optStr(a, "filter"), a.getInteger("index"),
         a.getInteger("maxChars"), optStr(a, "requestId")));
 

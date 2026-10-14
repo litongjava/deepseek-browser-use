@@ -16,6 +16,7 @@ import java.util.Base64;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -50,6 +51,7 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.BrowserType.LaunchPersistentContextOptions;
 import com.microsoft.playwright.Frame;
+import com.microsoft.playwright.FileChooser;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Mouse;
 import com.microsoft.playwright.Page;
@@ -2581,7 +2583,7 @@ public class PlaywrightService {
             .set("snapshotLastMutation", endStamp.get("lastMutation"))
             .set("snapshotHint", "页面在读取期间变化或部分读取失败；本次索引已作废，请等待目标内容后重新读取快照。");
       } else {
-        kv.set("indicesUsable", true);
+        kv.set("indicesUsable", true).set("snapshotVersion", inst.snapshotVersion.get());
         // 默认判据下页面完全可能「动过但索引仍然有效」(实时行情、时钟、状态灯)。不说明一句的话,
         // 调用方看到 snapshotMutations 不为 0 会以为索引不可信,又白跑一遍重取快照。
         boolean contentChanged = !java.util.Objects.equals(
@@ -3676,7 +3678,8 @@ public class PlaywrightService {
    * @return 索引越界或没有对应元素时返回 null
    */
   private Locator resolveIndex(BrowserInstance inst, int index, String selector) {
-    if (inst.snapshotInvalidated) return null;
+    CommandControl.checkpoint("locating");
+    if (inst.snapshotInvalidated) { return null; }
     DOMState state = inst.domState;
     if (state != null) {
       DOMElementNode node = state.getSelectorMap().get(index);
@@ -3856,6 +3859,7 @@ public class PlaywrightService {
 
   /** 给一份快照记上「什么时候建的」与「当时页面变过多少次」,供报错时解释索引为什么失效 */
   private static void recordSnapshot(BrowserInstance inst, DOMState state) {
+    inst.snapshotVersion.incrementAndGet();
     inst.domState = state;
     inst.snapshotInvalidated = false;
     inst.domStateAt = System.currentTimeMillis();
@@ -4193,7 +4197,10 @@ public class PlaywrightService {
 
   /** 按次覆盖的超时:没传就用全局配置 */
   private static double actionTimeoutMs(Integer timeoutMs) {
-    return timeoutMs == null || timeoutMs <= 0 ? actionTimeoutMs() : timeoutMs;
+    CommandControl.checkpoint("action");
+    double configured = timeoutMs == null || timeoutMs <= 0 ? actionTimeoutMs() : timeoutMs;
+    RetryBudget budget = RetryBudget.current();
+    return budget == null ? configured : Math.max(1, Math.min(configured, budget.remainingMs()));
   }
 
   /** 原生点击超时后是否自动降级为 JS 派发事件 */
@@ -4326,6 +4333,8 @@ public class PlaywrightService {
    *             {@code mouse}(只用真实鼠标)、{@code js}(只用 JS 派发)
    */
   private static void clickWithMode(Locator locator, String mode, ActionOutcome outcome, Runnable nativeAction) {
+    CommandControl.checkpoint("locating");
+    if (locator.count() == 0) { throw new PlaywrightException("[ELEMENT_NOT_FOUND] Target disappeared before click"); }
     String resolved = normalizeMode(mode);
     boolean covered = recordBlocker(locator, outcome);
     if ("js".equals(resolved)) {
@@ -4343,12 +4352,14 @@ public class PlaywrightService {
       return;
     }
     try {
+      CommandControl.checkpoint("action");
       nativeAction.run();
       outcome.mode = "native";
     } catch (PlaywrightException nativeFailure) {
       if (!"auto".equals(resolved) || ActionError.isSpuriousDispatch(nativeFailure.getMessage())) {
         throw nativeFailure;
       }
+      CommandControl.checkpoint("fallback");
       outcome.fallbackReason = briefMessage(nativeFailure.getMessage());
       if (covered || recordBlocker(locator, outcome)) {
         // 不穿透弹窗点击背景提交按钮；页面可能在原生操作等待期间新增遮挡层。
@@ -4388,6 +4399,7 @@ public class PlaywrightService {
       if (box == null || box.width <= 0 || box.height <= 0) {
         return false;
       }
+      CommandControl.checkpoint("mouse-dispatch");
       target.page().mouse().click(box.x + box.width / 2, box.y + box.height / 2);
       return true;
     } catch (PlaywrightException e) {
@@ -4461,6 +4473,7 @@ public class PlaywrightService {
   }
 
   private static void jsClick(Locator locator) {
+    CommandControl.checkpoint("javascript-dispatch");
     locator.first().evaluate(JS_CLICK);
   }
 
@@ -5057,6 +5070,7 @@ public class PlaywrightService {
   }
 
   private static double timeoutMillis(Double seconds) {
+    CommandControl.checkpoint("waiting");
     return seconds == null ? DEFAULT_WAIT_TIMEOUT_MS : seconds * 1_000;
   }
 
@@ -5810,6 +5824,50 @@ public class PlaywrightService {
         data.set("hint", note);
       }
     }
+  }
+
+  /** Capture chooser events, including detached inputs created by framework dialogs. */
+  public RespBodyVo uploadFileChooser(Long browserId, String trigger, String path, Integer timeoutMs,
+      String frame, String responseUrl) {
+    Path file = UploadStore.resolve(path);
+    if (!Files.isRegularFile(file)) { return RespBodyVo.fail(400, "Upload file does not exist"); }
+    return withInstance(browserId, inst -> {
+      Locator button = frameOf(inst, frame).locator(trigger);
+      if (button.count() != 1) { return RespBodyVo.fail(400, "File chooser trigger must match exactly one element"); }
+      CommandControl.checkpoint("file-chooser");
+      FileChooser chooser = inst.page.waitForFileChooser(
+          new Page.WaitForFileChooserOptions().setTimeout(actionTimeoutMs(timeoutMs)),
+          () -> button.click(clickOptions(timeoutMs)));
+      Kv data = Kv.by("filename", file.getFileName().toString()).set("mode", "file-chooser")
+          .set("frameworkAccepted", "unknown").set("uploadCompleted", "unknown");
+      Runnable select = () -> {
+        CommandControl.checkpoint("file-selection");
+        chooser.setFiles(file, new FileChooser.SetFilesOptions().setTimeout(actionTimeoutMs(timeoutMs)));
+        data.set("fileSelected", true);
+      };
+      if (responseUrl != null && !responseUrl.isBlank()) {
+        try {
+          Response response = inst.page.waitForResponse(r -> r.url().contains(responseUrl),
+              new Page.WaitForResponseOptions().setTimeout(actionTimeoutMs(timeoutMs)), select);
+          data.set("response", Kv.by("url", response.url()).set("status", response.status()).set("ok", response.ok()))
+              .set("responseObserved", true);
+          String transferError = response.finished();
+          data.set("uploadCompleted", transferError == null && response.ok());
+          if (transferError != null) { data.set("observationError", transferError); }
+        } catch (PlaywrightException timeout) {
+          data.set("responseObserved", false).set("observationError", briefMessage(timeout.getMessage()));
+          if (!Boolean.TRUE.equals(data.getBoolean("fileSelected"))) { throw timeout; }
+        }
+      } else {
+        select.run();
+      }
+      try {
+        data.set("inputReadback", chooser.element().evaluate("e => ({connected:e.isConnected,count:e.files ? e.files.length : 0,names:Array.from(e.files || [],f=>f.name)})"));
+      } catch (PlaywrightException unavailable) {
+        data.set("inputReadbackError", briefMessage(unavailable.getMessage()));
+      }
+      return RespBodyVo.ok(data);
+    });
   }
 
   /**
@@ -7866,17 +7924,37 @@ public class PlaywrightService {
   }
 
   public RespBodyVo clickElementByRole(Long browserId, String role, String name, String mode) {
+    return clickElementByRole(browserId, role, name, mode, null, null, null, null, null);
+  }
+
+  public RespBodyVo clickElementByRole(Long browserId, String role, String name, String mode,
+      String scope, String frame, Integer nth, Boolean exact, Integer timeoutMs) {
     return withInstance(browserId, inst -> {
+      CommandControl.checkpoint("locating");
+      Frame root = frameOf(inst, frame);
+      Locator matches = root.locator(scope == null || scope.isBlank() ? "body" : scope)
+          .getByRole(AriaRole.valueOf(role.toUpperCase(Locale.ROOT)),
+              new Locator.GetByRoleOptions().setName(name).setExact(Boolean.TRUE.equals(exact)));
+      int count = matches.count();
+      if (count == 0 || (count > 1 && nth == null) || (nth != null && (nth < 0 || nth >= count))) {
+        List<Kv> candidates = new ArrayList<>();
+        for (int i = 0; i < Math.min(5, count); i++) {
+          candidates.add(describe(matches.nth(i)).set("index", i));
+        }
+        RespBodyVo failure = RespBodyVo.fail(count > 1 ? "[AMBIGUOUS_LOCATOR] Narrow scope or supply nth" : "[ELEMENT_NOT_FOUND] No matching role");
+        failure.setData(Kv.by("matched", count).set("candidates", candidates).set("actionExecuted", false));
+        return failure;
+      }
+      int chosen = nth == null ? 0 : nth;
+      Locator locator = matches.nth(chosen);
+      Kv info = describe(locator).set("matched", count).set("chosenIndex", chosen).set("scope", scope);
       Kv before = stateProbe(inst);
-      Locator locator = inst.page
-          .getByRole(AriaRole.valueOf(role.toUpperCase()), new Page.GetByRoleOptions().setName(name)).first();
-      Kv info = describe(locator);
       ActionOutcome outcome = new ActionOutcome();
       try {
-        clickWithMode(locator, mode, outcome, () -> locator.click(clickOptions()));
+        clickWithMode(locator, mode, outcome, () -> locator.click(clickOptions(timeoutMs)));
       } catch (PlaywrightException e) {
         return actionErrorOrEffect("click_element_by_role", before, inst, null, e,
-            locateFailure("click_element_by_role", "角色 " + role + "[name=" + name + "]", e));
+            locateFailure("click_element_by_role", "role " + role, e));
       }
       info.set(outcome.extra);
       return okWithHit(before, inst, "click_element_by_role", info);
@@ -8448,7 +8526,7 @@ public class PlaywrightService {
           } catch (e) { return null; }
         };
         const fields = [];
-        const controls = Array.from(scope.querySelectorAll('input,textarea,select'));
+        const controls = Array.from(scope.querySelectorAll('input,textarea,select,[role=combobox]'));
         for (const el of controls) {
           const type = (el.getAttribute('type') || el.tagName.toLowerCase()).toLowerCase();
           if (type === 'hidden' && !args.includeHidden) continue;
@@ -8463,7 +8541,7 @@ public class PlaywrightService {
             const message = item.querySelector('.ant-form-item-explain-error, [class*="error-message"], .error');
             if (message && message.innerText && message.innerText.trim()) error = message.innerText.trim();
           }
-          const invalid = errCls(item) || errCls(el) || errCls(el.parentElement);
+          const invalid = el.getAttribute('aria-invalid') === 'true' || errCls(item) || errCls(el) || errCls(el.parentElement);
           let value = el.value === undefined ? null : el.value;
           let valueFrom = 'dom';
           if (type === 'password') {
@@ -8479,6 +8557,13 @@ public class PlaywrightService {
             type: type,
             value: value,
             valueFrom: valueFrom,
+            domValue: type === 'password' ? '[redacted]' : (el.value === undefined ? null : el.value),
+            displayValue: type === 'password' ? '[redacted]' : (displayOf(el) || (el.tagName === 'SELECT' ? Array.from(el.selectedOptions, o => o.text).join(', ') : (el.getAttribute('role') === 'combobox' ? (el.value || el.innerText) : null))),
+            selectedOptions: type === 'password' ? [] : Array.from(el.tagName === 'SELECT' ? el.selectedOptions :
+              ((document.getElementById(el.getAttribute('aria-controls') || el.getAttribute('aria-owns')) || el).querySelectorAll('[aria-selected=true]')),
+              o => ({text:(o.innerText || o.textContent || '').trim(),value:o.value === undefined ? o.getAttribute('data-value') : o.value})),
+            popupId: el.getAttribute('aria-controls') || el.getAttribute('aria-owns'),
+            validationMessage: el.validationMessage || (document.getElementById(el.getAttribute('aria-errormessage')) || {}).textContent || null,
             checked: typeof el.checked === 'boolean' ? el.checked : null,
             disabled: !!el.disabled,
             readOnly: !!el.readOnly,

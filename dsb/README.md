@@ -69,6 +69,7 @@ dsb --id 1001 close                           # 关掉任务
 | `run <method> [-p k=v] [--params @文件] [--wait-until STAGE]` | 发一条命令；导航等待可选 commit/domcontentloaded/load/networkidle，默认 domcontentloaded；带别名容错:`press_key` 会自动映射成 `send_keys`(`key` 与 `keys` 参数通用) |
 | `batch [文件\|-] [--async] [--wait] [--keep-going] [--stop-on-expect-failure]` | 批量命令(数组 JSON,默认读标准输入) |
 | `job <jobId> [--wait]` | 查/等异步批次 |
+| `diagnose` / `cancel <commandId>` | 读取活动/最近命令诊断，或请求取消指定命令；不占用浏览器事件循环 |
 | `recipes [--run 名字] [--var k=v]` | 列配方 / 跑配方(显式点名才跑) |
 | `state [--max-elements N] [--full] [--text-only] [--highlight] [--screenshot]` | 默认不画高亮、不截图，索引仍可操作；两个开关分别显式启用。`--full` 连元素清单与结构化文本 |
 | `js <脚本\|@脚本.js\|-> [--var k=v] [--retry-on-spurious]` | 执行 JS,支持 `{{变量}}` 注入 |
@@ -82,6 +83,8 @@ dsb --id 1001 close                           # 关掉任务
 `--response-mode` / `--diagnostics` / `--index`。长选项可前缀缩写(argparse 的习惯,`--retry-o` = `--retry-on-spurious`)。
 
 ### 三个容易用错的选项
+
+普通 `run` 新增 `--expect JSON\|@文件\|-`、`--readback JS\|@文件\|-`、`--command-timeout-ms`、`--sensitive`。动作只执行一次，断言轮询具体业务条件；断言或回读失败不会重新执行动作。compact 输出包含有界的结构化结果。完整示例、各层超时和取消语义见 [命令可靠性](../.agents/skills/deepseek-browser-use/references/command-reliability.md)。
 
 | 选项 | 它到底做什么 | 别混淆 |
 | --- | --- | --- |
@@ -262,9 +265,9 @@ logs/agent/dsb/steps.log       一行一次调用:时间 #序号 id 方法 OK/FA
 
 编号接着上一轮往下排,不会覆盖旧记录;`dsb last` 直接重放最近一份响应。
 
-**结构化 Cookie 留档脱敏**：自动 `.req.json` / `.res.json` 中的 `cookies` 数组元素的 `value`，以及 `set_cookie` 参数的 `value` 替换为 `[REDACTED]`，包括嵌套批次。该操作不修改实际请求与响应；显式 `--out` 和实时 stdout 仍保留原值，便于授权导出。`last` 读取的是脱敏记录，不能用它恢复 Cookie。
+**凭据留档脱敏**：自动 `.req.json` / `.res.json` 和 steps.log 遮蔽结构化 Cookie、password、Authorization、token、API key、secret 等值；输入命令参数和相关响应正文也会遮蔽，包括嵌套批次。该操作不修改实际请求与响应；显式 `--out` 和实时 stdout 仍保留原值。`last` 读取的是脱敏记录，不能恢复凭据。
 
-这不是通用脱敏：任意 JavaScript 返回字符串、页面文本、错误消息、HTTP 头、服务端 trace 和历史记录不在本功能覆盖范围内；邮箱、手机号等仍可能存在。敏感操作优先 `--no-record`，并限制导出目录访问权限、避免打印正文、使用后清理；`--no-record` 也不会关闭服务端日志。
+任意 JavaScript 或文本中的秘密无法仅凭字段名识别；含凭据的调用使用 `run --sensitive`，服务端 trace 在启用脱敏时也会遮蔽该次参数和响应。实时输出、显式导出、截图、页面文本产物及历史文件仍需按内容处理。`--no-record` 仅关闭客户端留档，不会关闭服务端日志。
 
 ### 回执太大:`--out` 落盘、`--grep` 只看命中行
 

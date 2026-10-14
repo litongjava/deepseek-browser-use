@@ -22,6 +22,8 @@
 
 ## 票务查询的数据质量
 
+通用交互支持命令诊断与取消、限定范围的语义定位、快照版本检查，以及普通命令的业务断言和回读。参数与示例见 [命令可靠性](.agents/skills/deepseek-browser-use/references/command-reliability.md)，本地可见浏览器验收见 [测试记录](docs/command-reliability-acceptance.md)。
+
 [票务结果解析与校验](docs/ticket-results.md)提供只读采集、站码验证、乘车方案去重、跨日时间、席别余票、金额及来源口径检查；[本地安装与验收](docs/ticket-quality-acceptance.md)记录测试步骤与浏览器截图。查询结果与购买结果分开记录，不用候补报价代替可直接购买的最低价。
 
 ## 一、为什么需要它
@@ -680,7 +682,7 @@ current tab is: 1               		[12]<a name='tj_login'>登录/>
 { "id": 1001, "method": "run_recipe", "params": { "name": "close-all-modals", "vars": {} } }
 ```
 
-配方放在 `<启动目录>/recipes/`（`browser.recipes.dir` 可改），格式与写配方的纪律见 [`playwright-server/recipes/README.md`](playwright-server/recipes/README.md)。仓库自带 `close-all-modals`、`query-and-read-table`、`cnipa-list-drafts` 三个。
+配方放在 `<启动目录>/recipes/`（`browser.recipes.dir` 可改），格式与写配方的纪律见 [`playwright-server/recipes/README.md`](recipes/README.md)。仓库自带 `close-all-modals`、`query-and-read-table`、`cnipa-list-drafts` 三个。
 
 ### 观测与自省
 

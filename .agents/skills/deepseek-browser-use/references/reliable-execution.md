@@ -54,6 +54,8 @@
 
 ## 4. 业务后置条件优先
 
+普通 `run` 可用 `--expect '@expect.json' --readback '@readback.js'` 将动作、业务断言和回读放在同一命令中。超时先 `diagnose`，需要取消时使用返回的 commandId；诊断和取消不访问浏览器，可在长命令期间使用。字段与可复制示例见 [命令可靠性](command-reliability.md)。
+
 ok:true 是工具层结果；changed、effective、DOM diff 只是观察线索。changed:true 可能只是时钟/动画；changed:false 可能是页面重建或观察窗口太短。两者都不能证明业务成功或失败。
 
 执行前写清业务后置条件，例如“本次响应出发日期等于目标日期”“详情页显示目标订单及状态”。动作后有界等待该条件，再读回证据。探针不可信或动作状态未知时先观察，禁止补点、重复提交或直接换交互方式再做一次。

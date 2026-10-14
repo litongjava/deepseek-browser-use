@@ -36,13 +36,15 @@ type argSpec struct {
 //
 // start / close 既是子命令**也是**服务端方法名,不能一律当成误用(见 subcommandMisuseHint)。
 var commandNames = []string{"health", "methods", "list_methods", "config", "tasks", "last", "recipes", "start", "close",
-	"profiles", "profile", "shutdown", "run", "batch", "job", "upload", "uploads", "state", "js", "selftest", "server"}
+	"diagnose", "cancel", "profiles", "profile", "shutdown", "run", "batch", "job", "upload", "uploads", "state", "js", "selftest", "server"}
 
 // These subcommands are also valid server methods when used with run.
 var subcommandAlsoMethod = map[string]bool{"start": true, "close": true, "list_methods": true}
 
 // commandHelp 每个子命令的一行说明(与 Python 版 --help 里的措辞一致)。
 var commandHelp = map[string]string{
+	"diagnose":     "Read active/last command without waiting for the browser",
+	"cancel":       "Cancel a specific command ID returned by diagnose",
 	"health":       "健康检查",
 	"methods":      "命令清单",
 	"list_methods": "命令清单(methods 的别名)",
@@ -92,7 +94,7 @@ func commonSpecs() []argSpec {
 		{names: []string{"--json"}, dest: "json", help: "只输出 JSON(便于管道)"},
 		{names: []string{"--select"}, dest: "select", takesValue: true, metavar: "PATH",
 			help: "Select one dot-separated field path, e.g. data.text or data.results.1.data.changed. " +
-				"Comma-separated paths are not supported. Missing paths print null (exit 3 on successful responses). Automatic records retain other fields but redact structured Cookie values."},
+				"Comma-separated paths are not supported. Missing paths print null (exit 3 on successful responses). Automatic records redact structured credentials and sensitive input."},
 		{names: []string{"--select-lenient"}, dest: "select_lenient",
 			help: "Preserve legacy selection: allow literal comma keys and print the full envelope when the path is missing."},
 		{names: []string{"--compact", "--summary"}, dest: "compact",
@@ -112,7 +114,7 @@ func commonSpecs() []argSpec {
 func outputSwitches() []argSpec {
 	return []argSpec{
 		{names: []string{"--out"}, dest: "out", takesValue: true, metavar: "FILE",
-			help: "把完整(脱敏后的)JSON 写进文件,标准输出只留一行提示"},
+			help: "把响应 JSON 写进文件（显式导出保留原值），标准输出只留一行提示"},
 		{names: []string{"--grep"}, dest: "grep", takesValue: true, metavar: "REGEX",
 			help: "只打印 JSON 里匹配该正则的行,并附一行「共 N 行、命中 M 行」"},
 	}
@@ -123,6 +125,7 @@ var methodsSpecs = []argSpec{{names: []string{"filter"}, dest: "filter", takesVa
 
 // subcommandSpecs 是每个子命令的专属选项与位置参数。
 var subcommandSpecs = map[string][]argSpec{
+	"cancel":       {{names: []string{"command_id"}, dest: "command_id", metavar: "COMMAND_ID", help: "Command ID from diagnose (not task ID or job ID)"}},
 	"methods":      methodsSpecs,
 	"list_methods": methodsSpecs,
 	"recipes": {
@@ -149,6 +152,10 @@ var subcommandSpecs = map[string][]argSpec{
 		{names: []string{"--close-browser"}, dest: "close_browser", help: "显式关闭浏览器;仅允许没有其他任务时使用"},
 	},
 	"run": {
+		{names: []string{"--expect"}, dest: "expect", takesValue: true, metavar: "JSON", help: "Business assertion JSON or @file; accepts js, equals/contains/truthy, timeoutMs"},
+		{names: []string{"--readback"}, dest: "readback", takesValue: true, metavar: "JS", help: "Read-only JavaScript expression or @file evaluated after the action"},
+		{names: []string{"--command-timeout-ms"}, dest: "command_timeout_ms", takesValue: true, metavar: "MS", help: "Server command deadline, 1..900000 milliseconds; distinct from HTTP --timeout"},
+		{names: []string{"--sensitive"}, dest: "sensitive", help: "Suppress automatic recording of this command payload and result"},
 		{names: []string{"--wait-until"}, dest: "wait_until", takesValue: true, metavar: "STAGE", help: "导航等待阶段:commit/domcontentloaded/load/networkidle"},
 		{names: []string{"method"}, dest: "method", metavar: "METHOD", help: "命令名,例如 go_to_url"},
 		{names: []string{"--params"}, dest: "params", takesValue: true, metavar: "PARAMS",
@@ -233,13 +240,14 @@ var subcommandSpecs = map[string][]argSpec{
 // commandsWithOutputSwitches 与 Python 版的循环一致。
 var commandsWithOutputSwitches = map[string]bool{
 	"profiles": true, "profile": true,
-	"health": true, "methods": true, "list_methods": true, "config": true, "tasks": true,
+	"diagnose": true, "cancel": true, "health": true, "methods": true, "list_methods": true, "config": true, "tasks": true,
 	"start": true, "close": true, "state": true, "run": true, "js": true,
 }
 
 // requiredPositionals 是各子命令必填的位置参数。
 var requiredPositionals = map[string][]string{
 	"run":     {"method"},
+	"cancel":  {"command_id"},
 	"job":     {"job_id"},
 	"upload":  {"file"},
 	"js":      {"script"},
@@ -249,8 +257,10 @@ var requiredPositionals = map[string][]string{
 
 // Args 是解析结果。指针字段的 nil 表示「命令行没给」,留给环境变量或内置默认值接管。
 type Args struct {
-	Command     string
-	Positionals []string
+	Expect, Readback, CommandTimeoutMs, CommandID *string
+	Sensitive                                     bool
+	Command                                       string
+	Positionals                                   []string
 
 	BaseURL       *string
 	Host          *string
@@ -655,6 +665,7 @@ func assignPositionals(args *Args, positionals []string) error {
 	args.Filter = stringOrNil(assigned, "filter")
 	args.File = stringOrNil(assigned, "file")
 	args.JobID = stringOrNil(assigned, "job_id")
+	args.CommandID = stringOrNil(assigned, "command_id")
 	args.Filename = stringOrNil(assigned, "filename")
 	args.Action = stringOrNil(assigned, "action")
 	if _, ok := assigned["method"]; ok {
@@ -727,6 +738,11 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.SourceUserDataDir = readString("source_user_data_dir")
 	args.SourceProfileDirectory = readString("source_profile_directory")
 	args.Params = readString("params")
+	args.Expect = readString("expect")
+	args.Readback = readString("readback")
+	args.CommandTimeoutMs = readString("command_timeout_ms")
+
+	args.Sensitive = flags["sensitive"]
 	args.WaitUntil = readString("wait_until")
 	args.Out = readString("out")
 	args.Grep = readString("grep")

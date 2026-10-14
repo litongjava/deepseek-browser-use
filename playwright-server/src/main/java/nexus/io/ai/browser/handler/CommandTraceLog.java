@@ -13,6 +13,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -126,9 +127,14 @@ public final class CommandTraceLog {
       String taskId = request == null ? null : request.getString("id");
       JSONObject responseJson = toJson(response);
       // 脱敏在**落盘之前**做:日志里有证件号、手机号、地址这类个人信息,原文留在磁盘上迟早出问题
-      String redactedBody = redact(requestBody);
+      boolean sensitive = request != null && sensitiveRequest(request);
       redactJson(request);
       redactJson(responseJson);
+      if (sensitive && redactEnabled() && responseJson != null) {
+        responseJson.put("data", JSONObject.of("redacted", true));
+        responseJson.put("msg", mask());
+      }
+      String redactedBody = request == null ? (requestBody == null ? null : "[unparsed request omitted]") : request.toJSONString();
 
       Path dir = dayDir();
       String base = String.format("%06d-%s-%s", seq, taskId == null ? "na" : taskId, safeName(method));
@@ -288,14 +294,32 @@ public final class CommandTraceLog {
   private static volatile java.util.List<java.util.regex.Pattern> cachedPatterns = java.util.List.of();
 
   /** 递归脱敏一个 JSON 结构里的所有字符串值(键名不动,免得看不出请求长什么样) */
-  private static void redactJson(Object node) {
+  static void redactJson(Object node) {
     if (!redactEnabled() || node == null) {
       return;
     }
     if (node instanceof JSONObject) {
       JSONObject object = (JSONObject) node;
+      String method = object.getString("method");
+      if (method == null) { method = object.getString("command"); }
+      boolean sensitive = Boolean.TRUE.equals(object.getBoolean("sensitive"));
       for (String key : new java.util.ArrayList<>(object.keySet())) {
         Object value = object.get(key);
+        if (secretField(key) || ("value".equals(key) && secretField(object.getString("name")))
+            || (sensitive && !"sensitive".equals(key))) {
+          object.put(key, mask());
+          continue;
+        }
+        if (value instanceof JSONObject child && ("params".equals(key) && inputMethod(method) || inputMethod(key))) {
+          for (String field : new String[] {"text", "value", "key", "keys"}) {
+            if (child.containsKey(field)) { child.put(field, mask()); }
+          }
+        }
+        if ("cookies".equals(key) && value instanceof JSONArray cookies) {
+          for (Object item : cookies) {
+            if (item instanceof JSONObject cookie && cookie.containsKey("value")) { cookie.put("value", mask()); }
+          }
+        }
         if (value instanceof String) {
           object.put(key, redact((String) value));
         } else {
@@ -313,6 +337,36 @@ public final class CommandTraceLog {
         }
       }
     }
+  }
+
+  private static boolean inputMethod(String method) {
+    return method != null && (method.startsWith("input_text") || method.equals("type_text")
+        || method.equals("send_keys") || method.equals("press_key"));
+  }
+
+  private static boolean sensitiveRequest(Object value) {
+    if (value instanceof JSONObject object) {
+      if (Boolean.TRUE.equals(object.getBoolean("sensitive")) || inputMethod(object.getString("method"))
+          || inputMethod(object.getString("command"))) { return true; }
+      for (String key : object.keySet()) {
+        if (inputMethod(key) || sensitiveRequest(object.get(key))) { return true; }
+      }
+    } else if (value instanceof JSONArray array) {
+      for (Object child : array) {
+        if (sensitiveRequest(child)) { return true; }
+      }
+    }
+    return false;
+  }
+
+  private static boolean secretField(String name) {
+    if (name == null) { return false; }
+    String normalized = name.toLowerCase(Locale.ROOT).replace("-", "").replace("_", "");
+    if (normalized.equals("cookies")) { return false; }
+    return normalized.equals("token") || normalized.contains("password") || normalized.contains("passwd")
+        || normalized.contains("authorization") || normalized.contains("accesstoken")
+        || normalized.contains("refreshtoken") || normalized.contains("idtoken")
+        || normalized.contains("apikey") || normalized.contains("secret") || normalized.contains("cookie");
   }
 
   private static List<String> patterns() {
