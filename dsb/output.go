@@ -109,17 +109,20 @@ func (p *Printer) Response(response *Response, label string, hasIndex bool, inde
 		}
 		head := fmt.Sprintf("%s%s %s %dms", prefix, label, verdict, response.ElapsedMs)
 		detail := summarize(response.Data())
+		if p.Mode == "compact" && label == "start" && response.Ok() {
+			detail = " browser=" + compactText(EncodeJSON(compactBrowserInfo(response.Data()), encCompact), 600)
+		}
 		if !response.Ok() && response.Msg() != "" {
-			detail += " msg=" + response.Msg()
+			message := response.Msg()
+			if p.Mode == "compact" {
+				message = compactText(message, 400)
+			}
+			detail += " msg=" + message
 		}
 		if p.Mode == "compact" {
 			for _, key := range []string{"result", "expectResult", "readback", "execution"} {
 				if value := objGet(response.Data(), key); value != nil {
-					encoded := []rune(EncodeJSON(redactCookieRecords(value), encCompact))
-					if len(encoded) > 600 {
-						encoded = append(encoded[:600], []rune("...(truncated; use --select)")...)
-					}
-					detail += " " + key + "=" + string(encoded)
+					detail += " " + key + "=" + compactText(EncodeJSON(redactCookieRecords(value), encCompact), 600)
 				}
 			}
 		}
@@ -131,7 +134,7 @@ func (p *Printer) Response(response *Response, label string, hasIndex bool, inde
 			if hasPayload {
 				body = payload
 			}
-			p.printLine(EncodeJSON(body, encCompact))
+			p.printLine(compactText(EncodeJSON(redactCookieRecords(body), encCompact), 1200))
 		}
 	}
 	if p.Mode != "compact" {
@@ -141,6 +144,30 @@ func (p *Printer) Response(response *Response, label string, hasIndex bool, inde
 			p.JSON(response.Envelope)
 		}
 	}
+}
+
+func compactText(text string, limit int) string {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r", "\\r"), "\n", "\\n")
+	characters := []rune(text)
+	if len(characters) > limit {
+		return string(characters[:limit]) + "...(truncated; use --select/--out or dsb last)"
+	}
+	return text
+}
+
+func compactBrowserInfo(data Value) Value {
+	info := ObjOf()
+	for _, key := range []string{"id", "engineHonored", "effectiveBrowser", "reused"} {
+		if value := objGet(data, key); value != nil {
+			info.Set(key, value)
+		}
+	}
+	for _, key := range []string{"engine", "type", "headless", "mode"} {
+		if value := objGet(objGet(data, "browser"), key); value != nil {
+			info.Set(key, value)
+		}
+	}
+	return info
 }
 
 // JSON 打印一个值:`--compact` 压成一行,否则缩进 2。

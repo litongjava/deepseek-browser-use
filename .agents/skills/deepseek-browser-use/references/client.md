@@ -8,6 +8,10 @@
 
 ## 也可以不手拼 JSON：用现成客户端（**首选**）
 
+宿主 session 已绑定浏览器时，直接 `dsb …`，不重复传 `--id`/`--session`。独立 Go CLI 使用 `DSB_TASK_ID` 和 `DSB_SESSION`；`--session` 单独只是留档标签，不自动映射 task ID。没有宿主绑定时才初始化独立任务上下文。
+
+常规动作用 `--summary`；`start` 摘要仅展示浏览器基本字段，不重复 profile 路径。摘要无标量结果时的 JSON 兜底最多预览 1200 字符并明确标记截断；错误消息最多预览 400 字符。结构化 result/readback 等各最多 600 字符。`--json`、`--select`、`--out` 仍保留对应完整数据，已有响应可用 `last` 读取，不能重放操作补输出。摘要不是通用隐私过滤器，脚本需主动只返回白名单字段。
+
 阅读页面首选 `dsb state --text-only`，只输出结构化文本，不重复列出元素清单。
 视口外内容用 `--viewport-expansion 1500`（`-1` 表示全部），跨域 frame 用 `--include-frames`。
 需要字段筛选时用 `dsb run get_form_state --select data.fields` 或
@@ -174,7 +178,7 @@ dsb --port 10049 last                            # 重放最近一次响应
 ### 几个容易用错的地方
 
 - **`--summary`（`--compact` 是同一个开关）只管本地输出**，与服务端协议里的 `responseMode:"compact"`
-  （响应精简模式）不是一回事；后者要用 `--response-mode compact` 传（**信封级字段**，不是 `params` 里的）。
+  （响应精简模式）不是一回事；CLI 默认发送 `--response-mode compact`（**信封级字段**，不是 `params` 里的），用 `--response-mode full` 恢复完整响应。
   摘要为空时（`get_tabs`/`get_console_logs`/`get_dialog` 这类没有可摘要字段的方法）dsb 会自动退回打印一行
   JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了。
 - **凭据留档保护**：自动留档遮蔽结构化 Cookie、password、Authorization、token、API key、secret，以及输入命令参数和相关响应。含秘密的任意脚本使用 `run --sensitive`；实时 stdout、显式 `--out`、截图和页面文本产物仍保留原有行为。服务端 trace 在启用脱敏时采用相应保护；`--no-record` 仅关闭客户端记录。边界与示例见 [命令可靠性](command-reliability.md)。
@@ -216,3 +220,21 @@ dsb state --out state.json
 ```
 
 ``--out``保存完整响应，不受``--select``投影影响；业务失败退出码仍为2。截图降级与业务断言分开登记，详见 [testing-evidence.md](testing-evidence.md)。
+
+### 默认精简响应与截图文件
+
+CLI 默认请求 `responseMode:compact`。正常成功回执省略常规执行、零重试和正常截图诊断；失败、状态未知和截图降级仍保留诊断。`--diagnostics` 跳过裁剪，`--response-mode full` 请求完整响应。`--json` 只决定终端格式；`--summary` 只决定本地摘要。
+
+`--out` 保存的是当前模式下收到的 JSON，不是图片，也不会恢复被服务端省略的字段。自动留档和 `last` 同样不能恢复这些字段；不要重放写操作来补诊断，必要时使用只读 `diagnose` 查看最近命令。
+
+```powershell
+# 复用已启动且由自己拥有的任务 ID
+dsb --id 1001 --session example run screenshot --out shot-response.json
+if ($LASTEXITCODE -ne 0) {
+  throw 'Read the response and diagnostics before continuing'
+}
+$result = Get-Content 'shot-response.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+$result.data.path
+```
+
+`data.path` 是服务端文件路径；远程服务使用 `data.url`，相对 URL 需按服务地址解析。不要将 JSON 输出文件命名为 `.png`。仅需路径时可在原命令使用 `--select data.path`。PowerShell 启动时若 profile 被执行策略拦截，宿主应使用 `powershell.exe -NoProfile`，无需修改系统执行策略。

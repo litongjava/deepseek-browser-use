@@ -4,7 +4,7 @@
 
 先读完整适用技能，不要只取摘要或固定字符数。命令参数不确定时用对应的 --help；协议方法名不等于 CLI 子命令。
 
-以下命令在 PowerShell 中使用；1001 仅为示例，实际先分配未占用的数字任务 ID，并给不同执行者分配不同 --session 留档名。
+以下命令复用宿主 session 已绑定的浏览器任务，不重复传 --id/--session。独立 CLI 通过 DSB_TASK_ID/DSB_SESSION 接收上下文；--session 本身仅控制留档，不代替任务绑定。
 
 
 ```powershell
@@ -12,13 +12,13 @@
  dsb run --help
  dsb batch --help
  dsb --port 10049 methods
- dsb --port 10049 --id 1001 --session ticket-example start --browser chrome --headful
- dsb --port 10049 --id 1001 --session ticket-example run go_to_url -p 'url=https://example.com/?from=a&to=b'
- dsb --port 10049 --id 1001 --session ticket-example state --text-only
- dsb --port 10049 --id 1001 --session ticket-example js '() => ({title: document.title, url: location.href})' --out page.json
- dsb --port 10049 --id 1001 --session ticket-example js '@query.js' --out result.json
- dsb --port 10049 --id 1001 --session ticket-example run execute_js --params '@params.json' --out result.json
- dsb --port 10049 --id 1001 --session ticket-example batch commands.json --async --wait --wait-timeout 120
+ dsb start --browser chrome --headful --summary
+ dsb run go_to_url -p 'url=https://example.com/?from=a&to=b' --summary
+ dsb state --text-only
+ dsb js '() => ({title: document.title, url: location.href})' --out page.json
+ dsb js '@query.js' --out result.json
+ dsb run execute_js --params '@params.json' --out result.json
+ dsb batch commands.json --async --wait --wait-timeout 120 --summary
  ```
 
 - js 的 SCRIPT 是位置参数，没有 --body；协议的 execute_js 才使用 params.body。
@@ -41,7 +41,7 @@
 
 | 返回来源 | 标识 | 收集方式 |
 | --- | --- | --- |
-| dsb start | 浏览器任务 id | 后续 dsb --id，不是异步作业 ID |
+| dsb start | 浏览器任务 id | 由宿主 session 绑定复用，不是异步作业 ID |
 | dsb batch --async | dsb 的 data.jobId | dsb job（先查帮助）或 batch --async --wait |
 | 宿主后台执行工具 | jobId | 宿主 job_output；不再需要时 job_kill |
 | 宿主 subagent / subagent_fork 的 continuable 结果 | subagentId | send_message 与完成通知；不是 job_output 参数 |

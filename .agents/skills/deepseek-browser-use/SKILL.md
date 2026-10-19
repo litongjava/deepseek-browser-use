@@ -15,23 +15,25 @@ description: 使用 dsb 命令行操作真实浏览器，完成需要 JavaScript
 
 `dsb` 已在 PATH 上，直接调用；不要用 curl 或 Invoke-WebRequest 手拼请求。默认服务地址为 `http://localhost:10049`，本机服务未启动时普通命令会自动启动后端并重试一次。远端目标用 `--host` / `--port` 或已登记的 `--use` 指定。
 
-先分配未占用的数字任务 ID，并为每个执行者分配独立的 `--session`。同一任务的后续调用复用这两个值，命令顺序执行。
+复用宿主 session 已绑定的浏览器任务，命令中无需重复指定 `--id`/`--session`，不要另建任务覆盖绑定。独立 Go CLI 从 `DSB_TASK_ID`/`DSB_SESSION` 读取上下文；仅 `--session` 不会建立浏览器绑定。无绑定的独立终端才需要初始化任务上下文，不能把默认任务当成当前会话。
 
 ~~~powershell
 dsb list_methods                  # 与 dsb methods 等价
 dsb list_methods click            # 按名称过滤
 dsb run --help                    # 不确定参数先查对应子命令帮助
-dsb --id 1001 --session example start --browser chrome
-dsb --id 1001 --session example run go_to_url -p 'url=https://example.com'
-dsb --id 1001 --session example state --text-only
-dsb --id 1001 --session example js '@query.js' --out result.json
-dsb --id 1001 --session example batch commands.json --async --wait
+dsb start --browser chrome --summary
+dsb run go_to_url -p 'url=https://example.com' --summary
+dsb state --text-only
+dsb js '@query.js' --select data.result
+dsb batch commands.json --async --wait --summary
 ~~~
 
 - `list_methods` / `methods` 查询当前服务的能力，不按文档中的固定方法数量判断。开发后需更新本机后端时用 `dsb server build`、`dsb server restart`；先确认没有其他任务使用共享服务。
 - `start` 默认显示窗口；需要无头模式时才用 `--headless`。回读 `data.browser.headless` 和实际浏览器字段确认。
 - PowerShell 文件参数写成 `'@query.js'`、`--params '@params.json'`。多行 JS / 嵌套 JSON 放文件；协议示例 `{id,method,params}` 可存入参数文件交给 `dsb run`。
-- 结构化响应用 `--out` 保存，PowerShell 读取时加 `-Encoding UTF8`。`--select` 一次只接受一个点分路径，多字段从完整响应中提取。
+- CLI 默认请求精简响应；需要完整诊断时用 `--diagnostics` 或 `--response-mode full`。不能重放动作补诊断。
+- 常规动作使用 `--summary`；只读回目标字段，避免反复打印整页。单行 JSON 配置不能用 `head`/`Get-Content -TotalCount` 控制大小，应解析后投影白名单字段。完整配置、规则正文、凭据不得进入对话或提交。
+- 结构化响应用 `--out result.json` 保存（不是图片）；截图文件位置读 `data.path`。PowerShell 读取时加 `-Encoding UTF8`。`--select` 一次只接受一个点分路径，多字段从完整响应中提取。
 - 退出码：0 成功、1 传输错误、2 业务失败、3 用法错误。输出筛选失败不等于动作未执行，先查对应留档，不能为了修输出重发动作。
 
 ## 读取与交互
@@ -102,6 +104,7 @@ dsb --id 1001 --session example batch commands.json --async --wait
 | [批量与 JS](references/batch-and-js.md) | commands、expect、脚本文件与变量 |
 | [人机协同](references/human-in-loop.md) | 人工请求、二维码、OCR、多步交接 |
 | [浏览器](references/browsers.md) | 引擎、profile、生命周期与进程排障 |
+| [ZeroOmega 安装与配置](../proxy-switchyomega-setup/SKILL.md) | 下载校验、扩展加载、配置导入和自动切换 |
 | [故障索引](references/pitfalls.md) | 按症状查限制与处理方法 |
 | [测试与证据](references/testing-evidence.md) | 前置条件、业务断言、截图完整性 |
 | [商户申请](references/payment-onboarding.md) | 多层验证、密钥上传与资料脱敏 |

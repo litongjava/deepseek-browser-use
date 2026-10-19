@@ -101,9 +101,9 @@ func commonSpecs() []argSpec {
 			help: "只输出一行摘要(--summary 是同一个开关的正名;注意它只管本地输出," +
 				"服务端的响应精简模式要用 --response-mode compact)"},
 		{names: []string{"--response-mode"}, dest: "response_mode", takesValue: true, metavar: "MODE",
-			help: "请求信封里的 responseMode(服务端目前认 compact=响应精简模式),与 --compact/--summary 无关"},
+			help: "服务端响应模式: compact(默认)或 full; 与本地 --compact/--summary 无关"},
 		{names: []string{"--diagnostics"}, dest: "diagnostics",
-			help: "请求信封里带 diagnostics:true,精简模式也保留点击诊断字段"},
+			help: "请求完整诊断字段(精简模式也不裁剪响应数据)"},
 		{names: []string{"--index"}, dest: "index", takesValue: true, metavar: "INDEX",
 			help: "从批量结果里取第 N 步(单条响应只能用 0)"},
 		{names: []string{"-v", "--verbose"}, dest: "verbose", help: "打印调试信息"},

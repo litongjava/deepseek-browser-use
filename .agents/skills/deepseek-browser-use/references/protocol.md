@@ -50,7 +50,7 @@ dsb --port 10049 --id 1001 close
 
 ## 响应精简模式（兼容原协议）
 
-请求信封可选 `responseMode: "compact"`，默认保持完整响应。`ok`、`code`、`error`、`msg` 的位置与语义不变（只是空值不再输出）；精简仅发生在 `data` 内。
+HTTP 请求信封可选 `responseMode: "compact"`，不传仍保持完整响应；dsb CLI 默认发送 compact，可用 `--response-mode full` 恢复完整响应。`ok`、`code`、`error`、`msg` 的位置与语义不变（只是空值不再输出）；精简仅发生在 `data` 内。
 
 ```json
 {"id":"1001","method":"get_browser_state","responseMode":"compact","params":{"highlight":false}}
@@ -58,8 +58,10 @@ dsb --port 10049 --id 1001 close
 
 - 页面状态保留 `tabs`（index 为 0 基、current 标明当前页），省略重复的 `browser_state` 和顶层 URL/标题。
 - 保留截图 URL 与文本文件链接，省略本机截图绝对路径。不会省略截图错误。
-- 点击回执省略前后 URL、页签数、正文长度及 outerHtml 等诊断字段；请求信封加 `diagnostics: true` 可保留这些字段。
-- 批量结果逐条采用相同规则；网站返回的 body、脚本 result 及请求参数不会被递归删字段。
+- 正常成功回执省略已完成的 `execution`、零重试的 `retryBudget`、正常截图的 `capture` 和 `capture_degraded:false`；截图未内联时省略 `inline:false`、`base64Omitted` 及其提示。路径、URL、文件大小和显式内联图片保留。
+- 失败响应不裁剪；动作状态未知、观测不完整、截图错误或降级时保留诊断。发生重试时保留对应重试指标。
+- 点击回执省略前后 URL、页签数、正文长度及 outerHtml 等诊断字段；请求信封加 `diagnostics: true` 可跳过全部裁剪。
+- 成功的同步批量结果逐条采用相同规则，失败批次整体保留；网站返回的 body、脚本 result 及请求参数不会被递归删字段。
 - `count` 为已执行条数；批量中每个成功的页面动作恰好归档一次，末尾取状态仍独立归档。单条与批量经过同一执行收尾。
 
 ## 表单状态和动作结果

@@ -13,7 +13,7 @@
 
 ## Execute and coordinate
 
-- Use dsb CLI, with numeric --id and a distinct --session per worker. Check subcommand --help instead of guessing flags. PowerShell file arguments use quotes: dsb js '@query.js'. Save structured output with --out.
+- Use dsb CLI and reuse the host session's browser binding; do not repeat --id/--session or allocate a new browser task when already bound. Standalone CLI reads DSB_TASK_ID/DSB_SESSION; --session alone is a recording label, not a task binding. Check subcommand --help instead of guessing flags. PowerShell file arguments use quotes: dsb js '@query.js'. Save structured output with --out.
 - Assign one owner to each browser task, including read-only state calls. Parent agents request progress through messages, not through the child's page. Transfer ownership explicitly.
 - Distinguish browser task id, dsb jobId, host jobId, and subagentId. A continuable subagentId is not a host job_output argument.
 - Do not busy-poll or sleep-loop on background work. Use completion notifications, bounded tool waits, or work on independent steps. Collect relevant jobs before finishing and cancel work that no longer matters.

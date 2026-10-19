@@ -219,7 +219,7 @@ func buildClient(args *Args) (*Client, error) {
 		Record:       session != nil,
 		Verbose:      args.Verbose,
 		RecordDir:    derefOr(args.RecordDir, ""),
-		ResponseMode: derefOr(args.ResponseMode, ""),
+		ResponseMode: derefOr(args.ResponseMode, "compact"),
 		Diagnostics:  args.Diagnostics,
 		AutoStart:    autoStartEnabled(args) && endpoint.Local,
 	})

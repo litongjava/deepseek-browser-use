@@ -181,7 +181,7 @@ func cmdStart(client CommandAPI, args *Args, out *Printer) (int, error) {
 		return verdict(response), nil
 	}
 	out.Response(response, "start", false, 0, false, nil)
-	if response.Ok() && out.Select == nil && !args.JSON {
+	if response.Ok() && out.Select == nil && !args.JSON && out.Mode != "compact" {
 		browserInfo := asObj(objGet(response.Data(), "browser"))
 		if browserInfo != nil && browserInfo.Len() > 0 {
 			out.Line(fmt.Sprintf("  引擎=%s 类型=%s profile=%s", objStr(browserInfo, "engine"),
