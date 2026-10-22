@@ -45,6 +45,7 @@ import nexus.io.ai.browser.util.ListenerProbe;
 import nexus.io.ai.browser.util.OcrEngine;
 import nexus.io.ai.browser.util.TextSearch;
 import nexus.io.ai.browser.util.WindowsOcr;
+import com.microsoft.playwright.CDPSession;
 import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
@@ -378,6 +379,65 @@ public class PlaywrightService {
    *
    * <p>等价于 {@code start(id, headless, null)},见 {@link #start(Long, boolean, String)}。
    */
+  public RespBodyVo attach(Long id, String endpoint, String targetId, String url, boolean listOnly) {
+    long taskId = id == null ? SnowflakeIdUtils.id() : id;
+    if (!listOnly && INSTANCES.containsKey(taskId)) {
+      return RespBodyVo.fail("Task already exists; close it before attaching");
+    }
+    Playwright driver = Playwright.create();
+    boolean retained = false;
+    try {
+      Browser browser = driver.chromium().connectOverCDP(endpoint,
+          new BrowserType.ConnectOverCDPOptions().setTimeout(10000));
+      List<Kv> targets = new ArrayList<>();
+      List<Page> matches = new ArrayList<>();
+      List<String> ids = new ArrayList<>();
+      for (BrowserContext context : browser.contexts()) {
+        for (Page page : context.pages()) {
+          CDPSession session = context.newCDPSession(page);
+          JSONObject info;
+          try {
+            info = JSON.parseObject(session.send("Target.getTargetInfo").toString()).getJSONObject("targetInfo");
+          } finally {
+            session.detach();
+          }
+          String actualId = info.getString("targetId");
+          targets.add(Kv.by("targetId", actualId).set("url", page.url()).set("type", info.getString("type")));
+          if ((targetId == null || targetId.equals(actualId)) && (url == null || url.equals(page.url()))) {
+            matches.add(page);
+            ids.add(actualId);
+          }
+        }
+      }
+      if (listOnly) {
+        return RespBodyVo.ok(Kv.by("targets", targets).set("mode", "external-cdp"));
+      }
+      if (matches.size() != 1) {
+        RespBodyVo failure = RespBodyVo.fail("Expected exactly one target; use targets and select targetId or exact URL");
+        failure.setData(Kv.by("targets", targets).set("matched", matches.size()).set("actionExecuted", false));
+        return failure;
+      }
+      Page page = matches.get(0);
+      BrowserInstance instance = new BrowserInstance(taskId, page.context(), page, Path.of("."), null);
+      instance.externalDriver = driver;
+      instance.externalBrowser = browser;
+      instance.externalIdentity = Kv.by("mode", "external-cdp").set("lifecycleOwner", "external")
+          .set("targetId", ids.get(0)).set("url", page.url()).set("targetType", "page")
+          .set("host", "unknown").set("product", browser.version()).set("environment", "unknown");
+      instance.pages.add(page);
+      instance.recorderMode = "off";
+      attachListeners(instance, page);
+      INSTANCES.put(taskId, instance);
+      retained = true;
+      return RespBodyVo.ok(Kv.by("id", taskId).set("browser", instance.externalIdentity));
+    } catch (RuntimeException error) {
+      return RespBodyVo.fail("External CDP attach failed; enable the debugging port and verify endpoint: "
+          + briefMessage(error.getMessage()));
+    } finally {
+      if (!retained) { driver.close(); }
+    }
+  }
+
   public long start(Long id, boolean headless) {
     return start(id, headless, null);
   }
@@ -1232,6 +1292,7 @@ public class PlaywrightService {
   public Kv browserInfo(Long taskId) {
     BrowserInstance instance = INSTANCES.get(taskId);
     SharedBrowser browser = sharedBrowser;
+    if (instance != null && instance.externalIdentity != null) { return instance.externalIdentity; }
     if (instance == null || browser == null) {
       return null;
     }
@@ -1992,7 +2053,7 @@ public class PlaywrightService {
     // (这一族异常在真实站点上会稳定复现:几条毫不相干的命令报同一个已释放的对象)。
     // 下载的判定改成纯服务端地数下载目录,见 countDownloadFiles —— 不碰 Playwright 对象,少一份分发面。
     // 这个页签弹出的新窗口归同一个任务,别人看不见
-    listen(inst, page, page::onPopup, page::offPopup, popup -> claimPage(inst, popup));
+    listen(inst, page, page::onPopup, page::offPopup, popup -> { if (inst.externalDriver == null) { claimPage(inst, popup); } });
     // 页签被人工关掉(共用浏览器时很常见)后要有人接管「当前页」
     listen(inst, page, page::onClose, page::offClose, closed -> onPageClosed(inst, closed));
   }
@@ -2015,6 +2076,7 @@ public class PlaywrightService {
 
   /** 当前页没了:换成任务里还活着的页签,一个都不剩就补一个新的 */
   private void recoverCurrentPage(BrowserInstance inst) {
+    if (inst.externalDriver != null) { return; }
     List<Page> live = pagesOf(inst);
     if (!live.isEmpty()) {
       inst.page = live.get(0);
@@ -4289,7 +4351,7 @@ public class PlaywrightService {
 
     /** 把当前状态写进与回执共享的 Kv */
     void record() {
-      extra.set("mode", mode);
+      extra.set("mode", mode).set("actualMode", mode);
       if (fallbackReason != null) {
         extra.set("fallbackReason", fallbackReason).set("fallbackFrom", "native");
         if ("js".equals(mode)) {
@@ -4336,6 +4398,7 @@ public class PlaywrightService {
     CommandControl.checkpoint("locating");
     if (locator.count() == 0) { throw new PlaywrightException("[ELEMENT_NOT_FOUND] Target disappeared before click"); }
     String resolved = normalizeMode(mode);
+    outcome.extra.set("requestedMode", resolved).set("coordinateSystem", "main-frame CSS pixels");
     boolean covered = recordBlocker(locator, outcome);
     if ("js".equals(resolved)) {
       jsClick(locator);
@@ -10954,6 +11017,8 @@ public class PlaywrightService {
 
   public RespBodyVo close(Long browserId, boolean closeBrowser) {
     synchronized (PlaywrightService.class) {
+      BrowserInstance attached = INSTANCES.get(browserId);
+      if (attached != null && attached.externalDriver != null) { return closeTask(browserId); }
       if (closeBrowser && INSTANCES.keySet().stream().anyMatch(id -> !id.equals(browserId))) {
         return RespBodyVo.fail("Other tasks are active; closeBrowser cannot close their browser");
       }
@@ -10977,6 +11042,16 @@ public class PlaywrightService {
       return RespBodyVo.fail("没有找到对应的浏览器实例：" + browserId);
     }
     inst.detached = true;
+    if (inst.externalDriver != null) {
+      try {
+        for (Page page : new ArrayList<>(inst.pages)) { detachTaskPage(inst, page); }
+      } finally {
+        inst.externalDriver.close();
+        inst.pages.clear();
+      }
+      return RespBodyVo.ok(Kv.by("mode", "external-cdp").set("hostRetained", true)
+          .set("pagesRetained", true).set("remainingTasks", INSTANCES.size()));
+    }
     List<Page> taskPages = pagesOf(inst);
     boolean keepPages = INSTANCES.isEmpty() && sharedBrowser != null;
     if (keepPages) {
@@ -11042,6 +11117,7 @@ public class PlaywrightService {
    * 是所有任务共用的,重建会换掉整个 Chrome 进程,所以只允许在「只有这一个任务」时调用。
    */
   public BrowserInstance restartContext(BrowserInstance instance) {
+    if (instance.externalDriver != null) { throw new IllegalStateException("Cannot restart external host"); }
     SharedBrowser browser = sharedBrowser;
     if (browser == null) {
       return instance;

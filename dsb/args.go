@@ -35,7 +35,7 @@ type argSpec struct {
 // commandNames 子命令名。
 //
 // start / close 既是子命令**也是**服务端方法名,不能一律当成误用(见 subcommandMisuseHint)。
-var commandNames = []string{"health", "methods", "list_methods", "config", "tasks", "last", "recipes", "start", "close",
+var commandNames = []string{"report", "attach", "targets", "health", "methods", "list_methods", "config", "tasks", "last", "recipes", "start", "close",
 	"diagnose", "cancel", "profiles", "profile", "shutdown", "run", "batch", "job", "upload", "uploads", "state", "js", "selftest", "server"}
 
 // These subcommands are also valid server methods when used with run.
@@ -43,6 +43,9 @@ var subcommandAlsoMethod = map[string]bool{"start": true, "close": true, "list_m
 
 // commandHelp 每个子命令的一行说明(与 Python 版 --help 里的措辞一致)。
 var commandHelp = map[string]string{
+	"report":       "Generate a local acceptance report without browser operations",
+	"attach":       "Attach to an external CDP target; close only detaches",
+	"targets":      "List external CDP targets without adopting a page",
 	"diagnose":     "Read active/last command without waiting for the browser",
 	"cancel":       "Cancel a specific command ID returned by diagnose",
 	"health":       "健康检查",
@@ -71,6 +74,7 @@ var commandHelp = map[string]string{
 // commonSpecs 是通用选项:顶层与每个子命令都认。
 func commonSpecs() []argSpec {
 	return []argSpec{
+		{names: []string{"--fields"}, dest: "fields", takesValue: true, repeatable: true, metavar: "ALIAS=PATH", help: "Project multiple fields; repeat for each alias. Missing fields are null, exit 3 on success."},
 		{names: []string{"--base-url"}, dest: "base_url", takesValue: true, metavar: "BASE_URL",
 			help: "完整基地址,例如 http://10.0.0.5:10049(优先于 --host/--port)"},
 		{names: []string{"--host"}, dest: "host", takesValue: true, metavar: "HOST",
@@ -125,6 +129,13 @@ var methodsSpecs = []argSpec{{names: []string{"filter"}, dest: "filter", takesVa
 
 // subcommandSpecs 是每个子命令的专属选项与位置参数。
 var subcommandSpecs = map[string][]argSpec{
+	"report":  {{names: []string{"--markdown"}, dest: "markdown", takesValue: true, help: "Also write a Markdown evidence index"}},
+	"targets": {{names: []string{"--endpoint"}, dest: "endpoint", takesValue: true, help: "External CDP HTTP or WebSocket endpoint"}},
+	"attach": {
+		{names: []string{"--endpoint"}, dest: "endpoint", takesValue: true, help: "External CDP HTTP or WebSocket endpoint"},
+		{names: []string{"--target-id"}, dest: "target_id", takesValue: true, help: "Exact CDP target ID"},
+		{names: []string{"--url"}, dest: "target_url", takesValue: true, help: "Exact target URL"},
+	},
 	"cancel":       {{names: []string{"command_id"}, dest: "command_id", metavar: "COMMAND_ID", help: "Command ID from diagnose (not task ID or job ID)"}},
 	"methods":      methodsSpecs,
 	"list_methods": methodsSpecs,
@@ -152,6 +163,7 @@ var subcommandSpecs = map[string][]argSpec{
 		{names: []string{"--close-browser"}, dest: "close_browser", help: "显式关闭浏览器;仅允许没有其他任务时使用"},
 	},
 	"run": {
+		{names: []string{"--precondition"}, dest: "precondition", takesValue: true, help: "Read-only expectation JSON checked BEFORE action dispatch"},
 		{names: []string{"--expect"}, dest: "expect", takesValue: true, metavar: "JSON", help: "Business assertion JSON or @file; accepts js, equals/contains/truthy, timeoutMs"},
 		{names: []string{"--readback"}, dest: "readback", takesValue: true, metavar: "JS", help: "Read-only JavaScript expression or @file evaluated after the action"},
 		{names: []string{"--command-timeout-ms"}, dest: "command_timeout_ms", takesValue: true, metavar: "MS", help: "Server command deadline, 1..900000 milliseconds; distinct from HTTP --timeout"},
@@ -239,7 +251,7 @@ var subcommandSpecs = map[string][]argSpec{
 
 // commandsWithOutputSwitches 与 Python 版的循环一致。
 var commandsWithOutputSwitches = map[string]bool{
-	"profiles": true, "profile": true,
+	"report": true, "attach": true, "targets": true, "profiles": true, "profile": true,
 	"diagnose": true, "cancel": true, "health": true, "methods": true, "list_methods": true, "config": true, "tasks": true,
 	"start": true, "close": true, "state": true, "run": true, "js": true,
 }
@@ -257,6 +269,9 @@ var requiredPositionals = map[string][]string{
 
 // Args 是解析结果。指针字段的 nil 表示「命令行没给」,留给环境变量或内置默认值接管。
 type Args struct {
+	Markdown                                      *string
+	Endpoint, TargetID, TargetURL, Precondition   *string
+	Fields                                        []string
 	Expect, Readback, CommandTimeoutMs, CommandID *string
 	Sensitive                                     bool
 	Command                                       string
@@ -609,6 +624,23 @@ func parseArgs(argv []string) (*Args, error) {
 			}
 		}
 	}
+	if len(args.Fields) > 0 {
+		if args.Select != nil || args.SelectLenient {
+			return nil, usageErrorf("--fields cannot be combined with --select or --select-lenient")
+		}
+		seen := map[string]bool{}
+		for _, field := range args.Fields {
+			alias, path, ok := strings.Cut(field, "=")
+			if !ok || alias == "" || path == "" || seen[alias] {
+				return nil, usageErrorf("--fields requires unique ALIAS=PATH values")
+			}
+			seen[alias] = true
+		}
+		args.JSON = true
+	}
+	if (args.Command == "attach" || args.Command == "targets") && (args.Endpoint == nil || *args.Endpoint == "") {
+		return nil, usageErrorf("--endpoint is required")
+	}
 	if err := validateProfileArgs(args); err != nil {
 		return nil, err
 	}
@@ -726,7 +758,13 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.RecordDir = readString("record_dir")
 	args.ID = readString("id")
 	args.Use = readString("use")
+	args.Markdown = readString("markdown")
 	args.Select = readString("select")
+	args.Fields = repeated["fields"]
+	args.Endpoint = readString("endpoint")
+	args.TargetID = readString("target_id")
+	args.TargetURL = readString("target_url")
+	args.Precondition = readString("precondition")
 	args.SelectLenient = flags["select_lenient"]
 	args.ResponseMode = readString("response_mode")
 	args.Run = readString("run")

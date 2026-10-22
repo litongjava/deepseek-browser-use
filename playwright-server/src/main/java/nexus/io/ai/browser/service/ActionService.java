@@ -861,6 +861,32 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     args.getBoolean("sensitive");
     JSONObject expectation = args.getJSONObject("expect");
     String readback = args.getString("readback");
+    JSONObject precondition = args.getJSONObject("precondition");
+    BrowserInstance attached = id == null ? null : svc.getInstance(id);
+    if (attached != null && attached.externalDriver != null && !"close".equals(method)) {
+      try {
+        attached.page.evaluate("() => location.href");
+      } catch (RuntimeException disconnected) {
+        return RespBodyVo.fail("[EXTERNAL_TARGET_CLOSED] Target unavailable; explicitly attach again");
+      }
+      if (!attached.externalBrowser.isConnected() || attached.page.isClosed()) {
+        return RespBodyVo.fail("[EXTERNAL_TARGET_CLOSED] Target closed or disconnected; explicitly attach again");
+      }
+      if (java.util.Set.of("new_tab", "switch_tab", "switch_tab_by_url", "close_tab", "close_other_tabs",
+          "set_credentials").contains(method)) {
+        return RespBodyVo.fail("External tasks are pinned to one target; detach and select another target");
+      }
+    }
+    Kv preconditionResult = null;
+    if (precondition != null) {
+      preconditionResult = checkExpectation(id, precondition);
+      if (!Boolean.TRUE.equals(preconditionResult.getBoolean("passed"))) {
+        RespBodyVo blocked = RespBodyVo.fail("[PRECONDITION_FAILED] Prerequisite failed; action not dispatched");
+        blocked.setData(Kv.by("preconditionResult", preconditionResult).set("actionExecuted", false)
+            .set("actionStatus", "not-started").set("environment", "unknown"));
+        return blocked;
+      }
+    }
     Long snapshotVersion = args.getLong("snapshotVersion");
     if (snapshotVersion != null) {
       BrowserInstance instance = svc.getInstance(id);
@@ -886,6 +912,10 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
       });
       if (result.isOk()) {
         Kv observed = result.getData() instanceof Kv existing ? existing : Kv.by("result", result.getData());
+        if (preconditionResult != null) { observed.set("preconditionResult", preconditionResult); }
+        if (attached != null && attached.externalIdentity != null) {
+          observed.set("environmentIdentity", attached.externalIdentity);
+        }
         CommandControl.actionCompleted();
         if (expectation != null) {
           Kv checked = checkExpectation(id, expectation);

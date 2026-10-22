@@ -53,6 +53,8 @@ public class CommandTable {
   private static final Map<String, Executor> TABLE = new LinkedHashMap<>();
 
   static {
+    put("attach", (svc, id, a) -> svc.attach(id, reqStr(a, "endpoint"), a.getString("targetId"), a.getString("url"), false));
+    put("targets", (svc, id, a) -> svc.attach(id, reqStr(a, "endpoint"), null, null, true));
     put("get_diagnostics", (svc, id, a) -> RespBodyVo.ok(CommandControl.diagnostics(id)));
     put("cancel_command", (svc, id, a) -> RespBodyVo.ok(CommandControl.cancel(id, reqStr(a, "commandId"))));
     // ---------- 实例生命周期 ----------

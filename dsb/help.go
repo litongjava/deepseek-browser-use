@@ -45,6 +45,7 @@ func usageHint() string {
 // printHelp 打印帮助。文案按 Python 版 --help 的结构组织。
 func printHelp(command string) {
 	writer := os.Stdout
+	fmt.Fprintln(writer, "Agent browser policy: whenever using a browser, use dsb (including opening/loading, reading, screenshots and WebView2). Reuse the bound task; do not switch to another browser tool or standalone Playwright.")
 	if command == "" {
 		fmt.Fprintf(writer, "usage: dsb [-h] [--version] [--base-url BASE_URL] [--host HOST] [--port PORT]\n")
 		fmt.Fprintf(writer, "           [--id ID] [--timeout TIMEOUT] [--session SESSION]\n")

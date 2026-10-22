@@ -14,6 +14,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import com.jfinal.kit.Kv;
 import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.BrowserType.LaunchPersistentContextOptions;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Request;
@@ -26,6 +28,10 @@ public class BrowserInstance {
   public final long id;
   public BrowserContext context;
   public Page page;
+  // Dedicated driver ownership allows detach without closing the external host.
+  public Playwright externalDriver;
+  public Browser externalBrowser;
+  public Kv externalIdentity;
   public Path profileDir;
   public LaunchPersistentContextOptions opts;
   /** 最近一次 get_browser_state 的 DOM 树快照,按索引操作元素时使用 */

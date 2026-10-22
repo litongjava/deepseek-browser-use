@@ -13,6 +13,22 @@ import nexus.io.ai.browser.actions.registry.CommandTable;
 import nexus.io.model.body.RespBodyVo;
 
 public class CommandReliabilityTest {
+  @Test public void failedPreconditionNeverDispatchesAction() {
+    AtomicInteger actions = new AtomicInteger();
+    PlaywrightService stub = new PlaywrightService() {
+      @Override public RespBodyVo executeJs(Long id, String body, String file, JSONObject vars, String frame, Integer timeout) {
+        if ("action".equals(body)) { actions.incrementAndGet(); }
+        return RespBodyVo.ok(Kv.by("result", "mock"));
+      }
+    };
+    RespBodyVo result = new ActionService(stub).execute(90019L, "execute_js", JSONObject.of("body", "action",
+        "precondition", JSONObject.of("js", "environment", "equals", "real")));
+    assertFalse(result.isOk());
+    assertEquals(0, actions.get());
+    assertFalse(((Kv) result.getData()).getBoolean("actionExecuted"));
+    assertEquals("mock", ((Kv) ((Kv) result.getData()).get("preconditionResult")).get("actual"));
+  }
+
   @Test public void failedExpectationDoesNotRepeatActionAndStaleSnapshotDoesNotDispatch() {
     AtomicInteger actions = new AtomicInteger();
     PlaywrightService stub = new PlaywrightService() {

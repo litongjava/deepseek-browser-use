@@ -86,6 +86,28 @@ func report(code int, err error, out *Printer) int {
 // dispatch 把子命令派给它自己的实现。
 func dispatch(client *Client, args *Args, out *Printer) (int, error) {
 	switch args.Command {
+	case "report":
+		return cmdReport(client, args, out)
+	case "attach", "targets":
+		params := ObjOf("endpoint", *args.Endpoint)
+		if args.TargetID != nil {
+			params.Set("targetId", *args.TargetID)
+		}
+		if args.TargetURL != nil {
+			params.Set("url", *args.TargetURL)
+		}
+		response, err := client.Command(args.Command, params, nil, 0, args.Command)
+		if err != nil {
+			return 0, err
+		}
+		value, handled, err := prepare(response, args, out)
+		if err != nil {
+			return 0, err
+		}
+		if !handled {
+			out.JSON(value)
+		}
+		return verdict(response), nil
 	case "diagnose", "cancel":
 		return cmdControl(client, args, out)
 	case "health":

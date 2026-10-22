@@ -60,6 +60,7 @@ func writeTextFile(path string, text string) error {
 // 一回事 —— 后者要用 `--response-mode compact` 传。同名但不同义,以前实测照文档用错过一次,
 // 所以这里连名字一起改清楚。
 type Printer struct {
+	Fields []string
 	Mode   string // full / json / compact
 	Out    io.Writer
 	ErrOut io.Writer
@@ -73,13 +74,14 @@ type Printer struct {
 // NewPrinter 按命令行开关造一个 Printer(对应 Python 的 printer_for)。
 func NewPrinter(args *Args) *Printer {
 	mode := "full"
-	if args.JSON || args.Select != nil {
+	if args.JSON || args.Select != nil || len(args.Fields) > 0 {
 		mode = "json"
 	} else if args.Compact {
 		mode = "compact"
 	}
 	return &Printer{
 		Mode:          mode,
+		Fields:        args.Fields,
 		Out:           newTextSink(os.Stdout),
 		ErrOut:        newTextSink(os.Stderr),
 		Select:        args.Select,
@@ -90,7 +92,7 @@ func NewPrinter(args *Args) *Printer {
 // Response 打印一次调用的结果:默认「一行摘要 + 完整信封」。
 // payload 给定时(hasPayload=true)改印它,比如只要批量里的某一步。
 func (p *Printer) Response(response *Response, label string, hasIndex bool, index int, hasPayload bool, payload Value) {
-	if p.Select != nil {
+	if p.Select != nil || len(p.Fields) > 0 {
 		if hasPayload {
 			p.JSON(payload)
 		} else {
@@ -172,6 +174,23 @@ func compactBrowserInfo(data Value) Value {
 
 // JSON 打印一个值:`--compact` 压成一行,否则缩进 2。
 func (p *Printer) JSON(value Value) {
+	if len(p.Fields) > 0 {
+		p.warnUnreliable(value)
+		result := NewObj()
+		for _, field := range p.Fields {
+			alias, path, _ := strings.Cut(field, "=")
+			picked, err := selectField(value, path)
+			if err != nil {
+				p.SelectMissed = true
+				p.Warn("Missing output field " + path + "; action may have completed. Read recorded response; do not replay.")
+				picked = nil
+			}
+			result.Set(alias, picked)
+		}
+		p.printLine(EncodeJSON(result, encIndent2))
+		return
+	}
+
 	if p.Select != nil {
 		p.warnUnreliable(value)
 		// 失败响应**也要**照 --select 投影。批量回执里只要有一步失败,整批的 ok 就是 false,

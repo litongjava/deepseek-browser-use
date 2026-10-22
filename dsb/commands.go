@@ -227,7 +227,7 @@ func cmdShutdown(client CommandAPI, args *Args, out *Printer) (int, error) {
 // cmdRun 执行一条命令。
 func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 	stdinSources := 0
-	for _, source := range []*string{args.Params, args.Expect, args.Readback} {
+	for _, source := range []*string{args.Params, args.Expect, args.Readback, args.Precondition} {
 		if source != nil && *source == "-" {
 			stdinSources++
 		}
@@ -244,6 +244,16 @@ func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 	// --retry-on-spurious。
 	if args.RetrySpur {
 		params.Set("retryOnSpurious", true)
+	}
+	if args.Precondition != nil {
+		prerequisite, err := loadPayload(args.Precondition, nil)
+		if err != nil {
+			return 0, err
+		}
+		if objStr(prerequisite, "js") == "" {
+			return 0, usageErrorf("--precondition requires js")
+		}
+		params.Set("precondition", prerequisite)
 	}
 	if args.Expect != nil {
 		expectation, err := loadPayload(args.Expect, nil)
