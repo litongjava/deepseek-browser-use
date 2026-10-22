@@ -1,0 +1,41 @@
+{
+  "data": {
+    "retryable": false,
+    "execution": {
+      "note": "Cancellation prevents pending dispatch; diagnostics do not access the browser.",
+      "dispatchStarted": true,
+      "method": "attach",
+      "observationCompleted": false,
+      "workerRunning": false,
+      "commandId": "702877008591998976",
+      "retrySafe": false,
+      "stage": "failure-observation",
+      "actionStatus": "unknown",
+      "cancelled": false,
+      "cancelRequested": false,
+      "taskId": "102271",
+      "status": "failed",
+      "elapsedMs": "339"
+    },
+    "actionExecuted": false,
+    "retryBudget": {
+      "retries": 0,
+      "commandAttempts": 1,
+      "remainingMs": "29662",
+      "attempts": 1,
+      "elapsedMs": "338"
+    },
+    "errorCode": "ACTION_FAILED",
+    "matched": 0,
+    "targets": [
+      {
+        "targetId": "E36A7550F265739E80B8884CB8179912",
+        "type": "page",
+        "url": "http://tauri.localhost/"
+      }
+    ]
+  },
+  "code": 0,
+  "msg": "Expected exactly one target; use targets and select targetId or exact URL",
+  "ok": false
+}

@@ -1,13 +1,19 @@
 ---
 name: deepseek-browser-use
-description: 使用 dsb 命令行操作真实浏览器，完成需要 JavaScript 渲染、登录态或网页交互的任务。支持页面文本读取、填表、上传、标签页、JavaScript 与批量操作，默认显示 Chrome 并复用持久化登录资料。
+description: 只要需要使用浏览器就使用本技能和 dsb，包括加载或打开浏览器、浏览网页、读取页面、交互、截图、网页测试及可通过 CDP 连接的桌面 WebView2 测试。统一使用 dsb CLI，复用宿主浏览器绑定。
 ---
 
 > Claude Code：`dsb-skills:deepseek-browser-use`。
 
 # DeepSeek Browser Use
 
-执行前读取 [可靠执行与任务协作](references/reliable-execution.md)。数字、价格、时间和表格任务同时读取 [网页取数规范](../web-data-as-text/SKILL.md)；12306 查询再读取 [铁路技能](../railway-12306-ticket/SKILL.md)。站点操作按需加载对应技能。
+## 浏览器统一入口
+
+只要使用浏览器，就使用 dsb。用户只说“加载浏览器”“打开网页”也触发本技能；不改用内置浏览器工具、浏览器 MCP 或独立 Playwright/Selenium 脚本。dsb 不可用时先查帮助和诊断，明确报告能力缺口，不静默切换工具。桌面 WebView2 见 [桌面接入与验收](references/desktop-testing.md)。
+
+每个浏览器任务只有一个所有者，读取和截图也串行。通过消息交接任务；记录在途命令，使用有界等待，不 busy-poll。宿主 jobId、dsb jobId、浏览器 task ID、subagentId 不混用。
+
+数字、价格、时间和表格任务同时读取 [网页取数规范](../web-data-as-text/SKILL.md)；12306 查询再读取 [铁路技能](../railway-12306-ticket/SKILL.md)。站点操作按需加载对应技能。
 
 超时、取消、同名按钮、业务断言、上传和敏感留档按 [命令可靠性](references/command-reliability.md) 执行：卡住时用 `diagnose`，按 commandId 取消；动作结果未知时先观察。普通 `run` 可带 `--expect` 和 `--readback`，含凭据的脚本加 `--sensitive`。
 
@@ -33,7 +39,7 @@ dsb batch commands.json --async --wait --summary
 - PowerShell 文件参数写成 `'@query.js'`、`--params '@params.json'`。多行 JS / 嵌套 JSON 放文件；协议示例 `{id,method,params}` 可存入参数文件交给 `dsb run`。
 - CLI 默认请求精简响应；需要完整诊断时用 `--diagnostics` 或 `--response-mode full`。不能重放动作补诊断。
 - 常规动作使用 `--summary`；只读回目标字段，避免反复打印整页。单行 JSON 配置不能用 `head`/`Get-Content -TotalCount` 控制大小，应解析后投影白名单字段。完整配置、规则正文、凭据不得进入对话或提交。
-- 结构化响应用 `--out result.json` 保存（不是图片）；截图文件位置读 `data.path`。PowerShell 读取时加 `-Encoding UTF8`。`--select` 一次只接受一个点分路径，多字段从完整响应中提取。
+- 结构化响应用 `--out result.json` 保存（不是图片）；截图文件位置读 `data.path`。PowerShell 读取时加 `-Encoding UTF8`。`--select` 保持单路径；多字段用可重复的 `--fields 别名=路径`，详细规则见 [客户端](references/client.md)。
 - 退出码：0 成功、1 传输错误、2 业务失败、3 用法错误。输出筛选失败不等于动作未执行，先查对应留档，不能为了修输出重发动作。
 
 ## 读取与交互
@@ -95,7 +101,8 @@ dsb batch commands.json --async --wait --summary
 
 | 分册 | 内容 |
 | --- | --- |
-| [可靠执行](references/reliable-execution.md) | CLI 引用、任务独占、异步标识、业务断言、维护与同步 |
+| [维护与交接](references/reliable-execution.md) | 技能定向同步、执行环境故障和交接模板 |
+| [桌面接入与验收](references/desktop-testing.md) | 外部 CDP、环境前置断言、点击路径、离线报告 |
 | [命令可靠性](references/command-reliability.md) | diagnose/cancel、超时边界、expect/readback、语义定位、文件选择器、凭据留档 |
 | [客户端](references/client.md) | 完整 CLI、输出筛选、留档、后端管理 |
 | [读页面](references/reading-pages.md) | 状态字段、索引、表格、跨域 iframe |

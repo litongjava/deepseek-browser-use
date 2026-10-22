@@ -322,3 +322,11 @@ $result.data.path
 ```
 
 `data.path` 是服务端文件路径；远程服务使用 `data.url`，相对 URL 需按服务地址解析。不要将 JSON 输出文件命名为 `.png`。仅需路径时可在原命令使用 `--select data.path`。PowerShell 启动时若 profile 被执行策略拦截，宿主应使用 `powershell.exe -NoProfile`，无需修改系统执行策略。
+
+## 桌面测试与多字段输出
+
+浏览器操作统一使用 dsb，包括加载浏览器、截图和 WebView2。`targets --endpoint URL` 枚举外部 CDP 页面；`attach --endpoint URL --target-id ID`（或 `--url URL`）固定目标，`close` 仅解除外部控制。
+
+`run --precondition @environment.json` 在动作前复用 expect 断言；失败不派发动作。`--fields alias=path` 可重复，多字段缺失填 null，成功响应退出 3，业务失败保留退出 2。不能与 --select 混用。
+
+`report --record-dir DIR --out report.json --markdown report.md` 只读取已有记录生成报告；命令成功不代表业务成功。完整步骤与支持边界见 [桌面测试技能](../.agents/skills/deepseek-browser-use/references/desktop-testing.md)。

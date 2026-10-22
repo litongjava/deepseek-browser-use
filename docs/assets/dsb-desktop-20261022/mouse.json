@@ -1,0 +1,83 @@
+{
+  "data": {
+    "urlBefore": "http://tauri.localhost/",
+    "tabCountBefore": 1,
+    "observationComplete": true,
+    "mode": "mouse",
+    "effective": true,
+    "urlAfter": "http://tauri.localhost/",
+    "expectResult": {
+      "actual": true,
+      "expected": true,
+      "js": "document.body.innerText.includes('Quota Lookup')",
+      "passed": true,
+      "matcher": "truthy",
+      "attempts": 1
+    },
+    "actionStatus": "completed",
+    "observationWindowMs": 500,
+    "environmentIdentity": {
+      "mode": "external-cdp",
+      "product": "152.0.4191.66",
+      "environment": "unknown",
+      "targetId": "E36A7550F265739E80B8884CB8179912",
+      "host": "unknown",
+      "lifecycleOwner": "external",
+      "targetType": "page",
+      "url": "http://tauri.localhost/"
+    },
+    "requestedMode": "mouse",
+    "tag": "BUTTON",
+    "text": "Quota Lookup",
+    "coordinateSystem": "main-frame CSS pixels",
+    "chosenIndex": 0,
+    "seq": 3,
+    "execution": {
+      "note": "Cancellation prevents pending dispatch; diagnostics do not access the browser.",
+      "dispatchStarted": true,
+      "method": "click_element_by_role",
+      "actionExecuted": true,
+      "observationCompleted": true,
+      "workerRunning": false,
+      "commandId": "702876892137148416",
+      "retrySafe": false,
+      "stage": "expectation",
+      "actionStatus": "completed",
+      "cancelled": false,
+      "cancelRequested": false,
+      "taskId": "102269",
+      "status": "completed",
+      "elapsedMs": "129"
+    },
+    "probeTrustworthy": true,
+    "retryBudget": {
+      "retries": 0,
+      "commandAttempts": 1,
+      "remainingMs": "29875",
+      "attempts": 1,
+      "elapsedMs": "125"
+    },
+    "actionSucceeded": true,
+    "businessSucceeded": true,
+    "textLengthAfter": 253,
+    "outerHtml": "<button type=\"button\" class=\"\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"lucide lucide-gauge\" aria-hidden=\"true\"><path d=\"m12 14 4-4\"></path><path d=\"M...(截断)",
+    "tabCountAfter": 1,
+    "retrySafe": false,
+    "textLengthBefore": 823,
+    "preconditionResult": {
+      "actual": true,
+      "expected": true,
+      "js": "location.origin === 'http://tauri.localhost' && document.body.innerText.includes('Listening port') && document.body.innerText.includes('18329')",
+      "passed": true,
+      "matcher": "truthy",
+      "attempts": 1
+    },
+    "actualMode": "mouse",
+    "changeStatus": "observed",
+    "matched": 1,
+    "screenshot_skipped": "not-requested",
+    "changed": true
+  },
+  "code": 1,
+  "ok": true
+}

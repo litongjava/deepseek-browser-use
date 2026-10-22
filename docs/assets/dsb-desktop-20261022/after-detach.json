@@ -1,0 +1,14 @@
+{
+  "data": {
+    "mode": "external-cdp",
+    "targets": [
+      {
+        "targetId": "E36A7550F265739E80B8884CB8179912",
+        "type": "page",
+        "url": "http://tauri.localhost/"
+      }
+    ]
+  },
+  "code": 1,
+  "ok": true
+}

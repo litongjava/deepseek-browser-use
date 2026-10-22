@@ -1,0 +1,20 @@
+{
+  "data": {
+    "mode": "external-cdp",
+    "pagesRetained": true,
+    "environmentIdentity": {
+      "mode": "external-cdp",
+      "product": "152.0.4191.66",
+      "environment": "unknown",
+      "targetId": "E36A7550F265739E80B8884CB8179912",
+      "host": "unknown",
+      "lifecycleOwner": "external",
+      "targetType": "page",
+      "url": "http://tauri.localhost/"
+    },
+    "hostRetained": true,
+    "remainingTasks": 0
+  },
+  "code": 1,
+  "ok": true
+}

@@ -1,0 +1,37 @@
+{
+  "data": {
+    "execution": {
+      "note": "Cancellation prevents pending dispatch; diagnostics do not access the browser.",
+      "dispatchStarted": false,
+      "method": "click_element_by_role",
+      "actionExecuted": false,
+      "observationCompleted": false,
+      "workerRunning": false,
+      "commandId": "702876892829208576",
+      "retrySafe": true,
+      "stage": "failure-observation",
+      "actionStatus": "not-started",
+      "cancelled": false,
+      "cancelRequested": false,
+      "taskId": "102269",
+      "status": "failed",
+      "elapsedMs": "3"
+    },
+    "environment": "unknown",
+    "urlAfter": "http://tauri.localhost/",
+    "actionExecuted": false,
+    "actionStatus": "not-started",
+    "preconditionResult": {
+      "actual": "mock",
+      "expected": "real",
+      "js": "'mock'",
+      "passed": false,
+      "matcher": "equals",
+      "attempts": 1
+    },
+    "titleAfter": "LLM Poroxy UI"
+  },
+  "code": 0,
+  "msg": "[PRECONDITION_FAILED] Prerequisite failed; action not dispatched",
+  "ok": false
+}

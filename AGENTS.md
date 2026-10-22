@@ -39,3 +39,7 @@
 - 所有 if 必须有花括号，非必要不用 var；大段SQL和文本使用 Java 21 文本块。底层代码新增注释使用英文。
 - 先检查 build.txt，使用 build 构建，Maven 跳过 GPG 验证；测试与安装必须记录真实结果。
 - 文档示例包含完整 import，不包含内部检出目录名、底层库版本或源码完整绝对路径。应用文档放应用项目；底层文档只记录通用能力与可运行案例。
+
+## Browser tool policy
+
+- Whenever using a browser, use dsb and load the deepseek-browser-use skill, including opening/loading browsers, reading pages, interaction, screenshots, and CDP-capable desktop WebView testing. Reuse the host-bound browser task. Do not substitute built-in browser tools, browser MCP, or standalone Playwright/Selenium scripts. Diagnose dsb failures and report unsupported capabilities instead of silently switching tools.

@@ -1,0 +1,25 @@
+{
+  "code": 0,
+  "msg": "[EXTERNAL_TARGET_CLOSED] Target unavailable; explicitly attach again",
+  "ok": false,
+  "data": {
+    "execution": {
+      "note": "Cancellation prevents pending dispatch; diagnostics do not access the browser.",
+      "dispatchStarted": false,
+      "method": "get_title",
+      "actionExecuted": false,
+      "observationCompleted": false,
+      "workerRunning": false,
+      "commandId": "702877356690333696",
+      "retrySafe": true,
+      "stage": "failure-observation",
+      "actionStatus": "not-started",
+      "cancelled": false,
+      "cancelRequested": false,
+      "taskId": "102269",
+      "status": "failed",
+      "elapsedMs": "2"
+    },
+    "urlAfter": "http://tauri.localhost/"
+  }
+}
