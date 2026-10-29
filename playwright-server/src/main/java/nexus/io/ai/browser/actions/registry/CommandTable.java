@@ -43,7 +43,10 @@ public class CommandTable {
     if (seconds != null && millis != null && Math.abs(seconds * 1000 - millis) > 0.001) {
       throw new IllegalArgumentException("timeoutMs and timeoutSeconds disagree");
     }
-    return millis == null ? seconds : millis / 1000;
+    if (millis == null) {
+      return seconds;
+    }
+    return millis / 1000;
   }
 
   public interface Executor {

@@ -88,6 +88,8 @@ public class CommandReliabilityTest {
         return RespBodyVo.ok(Kv.by("seconds", seconds));
       }
     };
+    RespBodyVo defaults = CommandTable.get("wait_for_text").run(stub, 1L, JSONObject.of("text", "ready"));
+    assertNull(((Kv) defaults.getData()).get("seconds"));
     RespBodyVo response = CommandTable.get("wait_for_text").run(stub, 1L,
         JSONObject.of("text", "ready", "timeoutMs", 125));
     assertEquals(0.125, ((Number) ((Kv) response.getData()).get("seconds")).doubleValue(), 0.0001);
