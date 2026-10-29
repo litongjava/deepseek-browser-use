@@ -22,6 +22,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -8822,8 +8823,15 @@ public class PlaywrightService {
 
   /** 服务端自己给截图起的名:data/<id>/shot-N.png,N 只增不减 */
   private static String defaultShotPath(BrowserInstance inst) {
-    int n = inst.shotSeq.incrementAndGet();
-    return dataDir(inst.id).resolve("shot-" + n + ".png").toString();
+    return nextShotPath(dataDir(inst.id), inst.shotSeq);
+  }
+
+  static String nextShotPath(Path directory, AtomicInteger sequence) {
+    Path candidate;
+    do {
+      candidate = directory.resolve("shot-" + sequence.incrementAndGet() + ".png");
+    } while (Files.exists(candidate));
+    return candidate.toString();
   }
 
   /** 落盘路径在 data/<id>/ 下时给出可直接 GET 的 URL,否则只报路径 */

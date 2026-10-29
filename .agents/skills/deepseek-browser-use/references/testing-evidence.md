@@ -44,3 +44,7 @@ dsb --id 1001 run screenshot -p force=true -p timeoutMs=3000 --out probe.json
 ``data.capture`` 包含请求/实际模式（``requestedMode`` / ``actualMode``）、实际截图调用数（``attempts``）、共享重试数（``retries``）、``elapsedMs``、``timeoutMs`` 和 ``stage``。阶段区分预检、熔断拒绝、截图、完成、写文件；浏览器路径还提供可获取的视口尺寸、页面关闭状态及浏览器连接状态。视口尺寸不等于文档总尺寸，不能由它推定全页已捕获。
 
 ``data.retryBudget`` 描述命令与嵌套截图的共享重试统计。事件泵伪故障共用最多两次额外重试，不再由各层分别重置次数；``attempts``为初次加共享重试数，``commandAttempts``为外层命令实际调用次数。明确请求的视口回退不属于事件泵重试，其截图调用数以 ``data.capture.attempts`` 为准。动作默认仍不重试；不要因为截图缺失而重复点击或提交。
+
+## 重启后的截图文件
+
+默认 `shot-N.png` 文件名会跳过当前任务目录中已有的文件，避免服务重启后覆盖既有证据。截图失败时不要根据预计编号读取文件；仅使用成功响应中的 `data.path`，并核对实际图片内容。
