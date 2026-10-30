@@ -1,6 +1,7 @@
 package nexus.io.ai.browser.service;
 
 import static org.junit.Assert.*;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,6 +28,52 @@ public class CommandReliabilityTest {
     assertEquals(0, actions.get());
     assertFalse(((Kv) result.getData()).getBoolean("actionExecuted"));
     assertEquals("mock", ((Kv) ((Kv) result.getData()).get("preconditionResult")).get("actual"));
+  }
+
+  @Test public void attachSelectionFailuresAreCodedAndNotStarted() {
+    List<Kv> targets = List.of(Kv.by("targetId", "A").set("url", "app://main").set("type", "page").set("title", "Main"),
+        Kv.by("targetId", "B").set("url", "app://main").set("type", "page").set("title", "Settings"));
+    PlaywrightService stub = new PlaywrightService() {
+      @Override public RespBodyVo attach(Long id, String endpoint, String targetId, String url, boolean listOnly) {
+        if ("busy".equals(endpoint)) {
+          return notStartedFailure("TASK_ALREADY_EXISTS", "Task already exists; close it before attaching", Kv.create());
+        }
+        return targetSelectionFailure(targets, "none".equals(endpoint) ? 0 : 2);
+      }
+    };
+    ActionService service = new ActionService(stub);
+    String[][] cases = { { "none", "EXTERNAL_TARGET_NOT_FOUND" }, { "many", "EXTERNAL_TARGET_AMBIGUOUS" },
+        { "busy", "TASK_ALREADY_EXISTS" } };
+    for (String[] item : cases) {
+      RespBodyVo result = service.execute(90031L, "attach", JSONObject.of("endpoint", item[0], "url", "app://main"));
+      assertFalse(result.isOk());
+      assertTrue(result.getMsg(), result.getMsg().startsWith("[" + item[1] + "]"));
+      Kv data = (Kv) result.getData();
+      assertEquals(item[1], data.getStr("errorCode"));
+      assertEquals(Boolean.FALSE, data.get("actionExecuted"));
+      Kv execution = (Kv) data.get("execution");
+      assertEquals("not-started", execution.getStr("actionStatus"));
+      assertEquals(Boolean.FALSE, execution.get("actionExecuted"));
+      assertEquals(Boolean.TRUE, execution.get("retrySafe"));
+      assertEquals(Boolean.FALSE, execution.get("dispatchStarted"));
+      if (!"busy".equals(item[0])) {
+        assertTrue(result.getMsg(), result.getMsg().contains("targetId or exact URL"));
+        assertEquals(targets, data.get("targets"));
+        assertEquals("none".equals(item[0]) ? 0 : 2, data.getInt("matched").intValue());
+      }
+    }
+  }
+
+  @Test public void ordinaryFailureAfterDispatchStaysUnknown() {
+    PlaywrightService stub = new PlaywrightService() {
+      @Override public RespBodyVo attach(Long id, String endpoint, String targetId, String url, boolean listOnly) {
+        return RespBodyVo.fail("External CDP attach failed; enable the debugging port and verify endpoint: refused");
+      }
+    };
+    RespBodyVo result = new ActionService(stub).execute(90032L, "attach", JSONObject.of("endpoint", "x"));
+    Kv execution = (Kv) ((Kv) result.getData()).get("execution");
+    assertEquals("unknown", execution.getStr("actionStatus"));
+    assertEquals(Boolean.FALSE, execution.get("retrySafe"));
   }
 
   @Test public void failedExpectationDoesNotRepeatActionAndStaleSnapshotDoesNotDispatch() {

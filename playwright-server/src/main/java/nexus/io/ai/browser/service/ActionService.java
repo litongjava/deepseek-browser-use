@@ -910,6 +910,10 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
         CommandControl.dispatch();
         return executor.run(svc, id, args);
       });
+      // An executor that refused before any side effect marks its result not-started; keep retrySafe true.
+      if (!result.isOk() && result.getData() instanceof Kv refused && "not-started".equals(refused.getStr("actionStatus"))) {
+        CommandControl.notStarted();
+      }
       if (result.isOk()) {
         Kv observed = result.getData() instanceof Kv existing ? existing : Kv.by("result", result.getData());
         if (preconditionResult != null) { observed.set("preconditionResult", preconditionResult); }

@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选), `fakeMedia`(bool，可选) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法。`fakeMedia: true` = 假麦克风/摄像头（语音/视频通话测试），启动时固定，回读 `data.browser.fakeMedia` |
 | `close` | `id`, `closeBrowser`(bool，默认 false) | 结束任务；最后一个任务保留浏览器和页面。显式 `closeBrowser:true` 才关闭浏览器，有其他任务时拒绝；任务已结束后仍可显式关闭闲置浏览器 |
-| `targets` | `endpoint` | 列出外部 CDP 端点上的页面，返回 `data.targets`（`targetId`、`url`、`type`）；只读，不建任务。`endpoint` 是浏览器/WebView2 的调试地址，不是 dsb 服务端口 |
-| `attach` | `id`(可选), `endpoint`, `targetId` 或 `url`(精确匹配，二选一) | 把一个外部 CDP 页面接成任务，之后照常用页面命令。必须恰好匹配一个目标，否则失败并返回候选。外部任务固定在该页面：不认领弹窗、不能切换/新开/关闭页签；`close` 只断开连接，不关外部浏览器。目标断线后需重新 `attach`。详见 [桌面接入](desktop-testing.md) |
+| `targets` | `endpoint` | 列出外部 CDP 端点上的页面，返回 `data.targets`（`targetId`、`url`、`type`、`title`）；只读，不建任务。`endpoint` 是浏览器/WebView2 的调试地址，不是 dsb 服务端口 |
+| `attach` | `id`(可选), `endpoint`, `targetId` 或 `url`(精确匹配，二选一) | 把一个外部 CDP 页面接成任务，之后照常用页面命令。必须恰好匹配一个目标：零个报 `EXTERNAL_TARGET_NOT_FOUND`，多个报 `EXTERNAL_TARGET_AMBIGUOUS`，附候选 `targets` 与 `matched`，未执行（`not-started`），修正后可重试。外部任务固定在该页面：不认领弹窗、不能切换/新开/关闭页签；`close` 只断开连接，不关外部浏览器。目标断线后需重新 `attach`。详见 [桌面接入](desktop-testing.md) |
 
 ### 导航与页面信息
 

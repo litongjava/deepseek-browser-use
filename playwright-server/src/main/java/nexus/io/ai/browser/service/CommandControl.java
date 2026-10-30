@@ -66,6 +66,19 @@ public final class CommandControl {
     }
   }
 
+  /**
+   * Reverts the dispatch mark when the executor reports that it refused the command before any side effect.
+   */
+  static void notStarted() {
+    CommandControl control = current();
+    if (control != null) {
+      synchronized (control) {
+        control.dispatched = false;
+        control.actionExecuted = false;
+      }
+    }
+  }
+
   static void actionCompleted() {
     CommandControl control = current();
     if (control != null) { control.actionExecuted = true; }

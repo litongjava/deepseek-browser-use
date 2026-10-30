@@ -386,7 +386,7 @@ public class PlaywrightService {
   public RespBodyVo attach(Long id, String endpoint, String targetId, String url, boolean listOnly) {
     long taskId = id == null ? SnowflakeIdUtils.id() : id;
     if (!listOnly && INSTANCES.containsKey(taskId)) {
-      return RespBodyVo.fail("Task already exists; close it before attaching");
+      return notStartedFailure("TASK_ALREADY_EXISTS", "Task already exists; close it before attaching", Kv.create());
     }
     // Reuse the shared driver; closing a connectOverCDP Browser only drops this connection and leaves the
     // external host and its pages running.
@@ -408,7 +408,8 @@ public class PlaywrightService {
             session.detach();
           }
           String actualId = info.getString("targetId");
-          targets.add(Kv.by("targetId", actualId).set("url", page.url()).set("type", info.getString("type")));
+          targets.add(Kv.by("targetId", actualId).set("url", page.url()).set("type", info.getString("type"))
+              .set("title", info.getString("title")));
           if ((targetId == null || targetId.equals(actualId)) && (url == null || url.equals(page.url()))) {
             matches.add(page);
             ids.add(actualId);
@@ -419,9 +420,7 @@ public class PlaywrightService {
         return RespBodyVo.ok(Kv.by("targets", targets).set("mode", "external-cdp"));
       }
       if (matches.size() != 1) {
-        RespBodyVo failure = RespBodyVo.fail("Expected exactly one target; use targets and select targetId or exact URL");
-        failure.setData(Kv.by("targets", targets).set("matched", matches.size()).set("actionExecuted", false));
-        return failure;
+        return targetSelectionFailure(targets, matches.size());
       }
       Page page = matches.get(0);
       BrowserInstance instance = new BrowserInstance(taskId, page.context(), page, Path.of("."), null);
@@ -443,6 +442,31 @@ public class PlaywrightService {
         browser.close();
       }
     }
+  }
+
+  /**
+   * Builds the refusal for an attach selection that matched zero or several pages.
+   *
+   * <p>Nothing was attached, so the result is marked not-started and the caller may retry after
+   * fixing the selector.
+   */
+  static RespBodyVo targetSelectionFailure(List<Kv> targets, int matched) {
+    String code = matched == 0 ? "EXTERNAL_TARGET_NOT_FOUND" : "EXTERNAL_TARGET_AMBIGUOUS";
+    String reason = matched == 0 ? "No target matched" : matched + " targets matched";
+    return notStartedFailure(code, reason + "; run targets and select by targetId or exact URL",
+        Kv.by("targets", targets).set("matched", matched));
+  }
+
+  /**
+   * Builds a coded failure for a command that was refused before any side effect.
+   *
+   * <p>ActionService reads actionStatus "not-started" and reports the command as not dispatched
+   * (retrySafe true), matching the precondition-failure path.
+   */
+  static RespBodyVo notStartedFailure(String code, String message, Kv data) {
+    RespBodyVo failure = RespBodyVo.fail("[" + code + "] " + message);
+    failure.setData(data.set("errorCode", code).set("actionExecuted", false).set("actionStatus", "not-started"));
+    return failure;
   }
 
   public long start(Long id, boolean headless) {

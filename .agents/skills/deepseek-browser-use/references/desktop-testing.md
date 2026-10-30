@@ -11,7 +11,7 @@ dsb state --text-only
 dsb close
 ```
 
-endpoint 是调试地址，不是 dsb 服务端口。可用 `--target-id` 精确选择；零个或多个匹配返回候选并失败。复用任务绑定，不覆盖已有任务。回执记录 mode、targetId、URL、目标类型、product、生命周期所有权；宿主及后端状态无法确认时标 unknown。
+endpoint 是调试地址，不是 dsb 服务端口。`targets` 每项含 `targetId`、`url`、`type`、`title`，多窗口按 title 辨认后用 `--target-id` 精确选择。零个匹配返回 `EXTERNAL_TARGET_NOT_FOUND`，多个返回 `EXTERNAL_TARGET_AMBIGUOUS`，均附 `targets` 候选和 `matched` 数；任务已存在返回 `TASK_ALREADY_EXISTS`。这些都是 `actionStatus:not-started`、`retrySafe:true`，修正选择后可直接重试。复用任务绑定，不覆盖已有任务。回执记录 mode、targetId、URL、目标类型、product、生命周期所有权；宿主及后端状态无法确认时标 unknown。
 
 外部任务固定目标，不认领弹窗、不自动补页签、不允许切换或关闭页签。目标关闭或断线后需明确重新 attach。`close`（含 `--close-browser`）只断开本任务连接，保留宿主和其他任务。
 
