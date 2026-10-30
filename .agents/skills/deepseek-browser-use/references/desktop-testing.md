@@ -33,4 +33,4 @@ dsb run click_element_by_selector -p selector=#refresh -p mode=mouse --precondit
 dsb report --record-dir logs/agent/native-test --out report.json --markdown report.md
 ```
 
-报告只读已有记录，不操作浏览器。JSON 保留响应证据、命令/动作/业务状态及成功、失败、跳过、未知计数；Markdown 是证据索引。缺响应、脱敏和未知动作不补成成功。未记录用例无法推断；截图路径不证明图片存在或完整，按 [测试与证据](testing-evidence.md) 核验。版本、时间及真实/模拟身份缺失时仍是未知。
+报告只读已有记录，不操作浏览器。JSON 保留响应证据、命令/动作/业务状态及成功、失败、跳过、未知计数；Markdown 是证据索引。缺响应、脱敏和未知动作不补成成功；执行前被拒绝（`ok:false`、`actionStatus:not-started`）计为失败，`actionStatus:unknown` 仍计未知，每步附 `actionStatus` 和 `errorCode`。未记录用例无法推断；截图路径不证明图片存在或完整，按 [测试与证据](testing-evidence.md) 核验。版本、时间及真实/模拟身份缺失时仍是未知。

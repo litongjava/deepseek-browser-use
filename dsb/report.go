@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -49,18 +50,29 @@ func cmdReport(client *Client, args *Args, out *Printer) (int, error) {
 					status = "failure"
 				}
 			}
-			if objStr(data, "actionStatus") == "unknown" || objStr(objGet(data, "execution"), "actionStatus") == "unknown" {
+			// 执行前被拒绝(not-started)仍是失败,只有未失败的响应才记为跳过;unknown 可能已有副作用,保持未知。
+			switch reportActionStatus(data) {
+			case "unknown":
 				status = "unknown"
-			}
-			if objStr(data, "actionStatus") == "not-started" || objStr(objGet(data, "execution"), "actionStatus") == "not-started" {
-				status = "skipped"
+			case "not-started":
+				if status != "failure" {
+					status = "skipped"
+				}
 			}
 			if objGet(data, "redacted") == true {
 				status = "unknown"
 			}
 		}
 		counts[status]++
+		var actionStatus, errorCode Value
+		if value := reportActionStatus(data); value != "" {
+			actionStatus = value
+		}
+		if value := reportErrorCode(response); value != "" {
+			errorCode = value
+		}
 		step := ObjOf("request", name, "response", responseName, "method", objGet(request, "method"), "status", status,
+			"actionStatus", actionStatus, "errorCode", errorCode,
 			"commandSucceeded", objGet(response, "ok"), "actionSucceeded", objGet(data, "actionSucceeded"),
 			"businessSucceeded", objGet(data, "businessSucceeded"), "evidence", response)
 		if reqErr != nil || parseErr != nil || resErr != nil || decodeErr != nil {
@@ -73,10 +85,12 @@ func cmdReport(client *Client, args *Args, out *Printer) (int, error) {
 		"counts", ObjOf("success", numberFromInt(counts["success"]), "failure", numberFromInt(counts["failure"]), "skipped", numberFromInt(counts["skipped"]), "unknown", numberFromInt(counts["unknown"])), "steps", steps)
 	if args.Markdown != nil {
 		var md strings.Builder
-		md.WriteString("# dsb acceptance report\n\nRecorded evidence only. Command success is not business success.\n\n| Step | Method | Status | Evidence |\n| --- | --- | --- | --- |\n")
+		md.WriteString("# dsb acceptance report\n\nRecorded evidence only. Command success is not business success.\n\n| Step | Method | Status | Action | Evidence |\n| --- | --- | --- | --- | --- |\n")
+		cell := strings.NewReplacer("|", "&#124;", "\n", " ")
 		for i, step := range steps {
-			method := strings.NewReplacer("|", "&#124;", "\n", " ").Replace(objStr(step, "method"))
-			fmt.Fprintf(&md, "| %d | %s | %s | %s |\n", i+1, method, objStr(step, "status"), objStr(step, "response"))
+			method := cell.Replace(objStr(step, "method"))
+			action := cell.Replace(objStr(step, "actionStatus"))
+			fmt.Fprintf(&md, "| %d | %s | %s | %s | %s |\n", i+1, method, objStr(step, "status"), action, objStr(step, "response"))
 		}
 		if err := writeTextFile(*args.Markdown, md.String()); err != nil {
 			return 0, err
@@ -90,4 +104,26 @@ func cmdReport(client *Client, args *Args, out *Printer) (int, error) {
 		out.JSON(report)
 	}
 	return ExitOK, nil
+}
+
+// reportErrorCodePattern 匹配 msg 开头的 [CODE] 错误码。
+var reportErrorCodePattern = regexp.MustCompile(`^\[([A-Z][A-Z0-9_]*)\]`)
+
+// reportActionStatus 读取 data.actionStatus,缺失时回退到 data.execution.actionStatus。
+func reportActionStatus(data Value) string {
+	if value := objStr(data, "actionStatus"); value != "" {
+		return value
+	}
+	return objStr(objGet(data, "execution"), "actionStatus")
+}
+
+// reportErrorCode 读取 data.errorCode,缺失时解析 msg 开头的 [CODE]。
+func reportErrorCode(response Value) string {
+	if value := objStr(objGet(response, "data"), "errorCode"); value != "" {
+		return value
+	}
+	if match := reportErrorCodePattern.FindStringSubmatch(strings.TrimSpace(objStr(response, "msg"))); match != nil {
+		return match[1]
+	}
+	return ""
 }
