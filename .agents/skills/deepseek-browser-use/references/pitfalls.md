@@ -700,6 +700,7 @@
 
 82. **有窗口时点击回执 `ok` 但页面没反应**：浏览器原生弹窗（如密码泄露提醒）或窗口遮挡会吞掉 `native`/`mouse` 点击，DOM 里看不到。先 `bring_to_front`；仍无效就截整个桌面找原生弹窗，必要时临时用 `mode: "js"` 验证。
 83. **hash 路由别用 `wait_for_url` 通配符**：`*` 不跨 `/`，`**#/chat` 匹配不上 `page.html#/chat`。改用 `wait_for_function` 判断 `location.hash`。
+84. **Linux 有头 Chrome 报 `Missing X server or $DISPLAY`**：后端进程继承启动者的环境；从没有 `DISPLAY` 的终端执行 `dsb server restart` 或被普通命令自动拉起后，有头 `start` 会立即退出。确认无其他任务后用 `DISPLAY=:1 dsb server restart`（按实际显示号）重启，或明确需要时改用 `--headless`。
 
 ## 截图与重试补充（2026-10-05）
 

@@ -1,6 +1,6 @@
 # 外部 WebView2 接入与验收
 
-用于已开启 CDP 调试端口的 Windows WebView2（包括 Tauri），也可接入任何带 `--remote-debugging-port` 的 Chrome/Edge；不承诺 macOS/Linux 的全部 Tauri WebView。测试独立构建，不替换用户已安装 App。
+用于已开启 CDP 调试端口的 Windows WebView2（包括 Tauri），也可接入任何带 `--remote-debugging-port` 的 Chrome/Edge；Linux 的 Tauri 使用 WebKitGTK，不提供 CDP，无法 attach：保持应用开发模式运行，用 dsb 启动的 Chrome 打开其前端开发地址测试，依赖 `invoke()` 的功能标为未验证；macOS 未验证。Windows 上启动前设置 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 打开调试端口。测试独立构建，不替换用户已安装 App。
 
 ## 连接与生命周期
 
