@@ -16,15 +16,15 @@ import (
 )
 
 // launchDetached 新建会话起一个进程,stdout/stderr 重定向到给定日志。
-func launchDetached(program string, args []string, workDir string, outLog string, errLog string) (*os.Process, error) {
+func launchDetached(program string, args []string, workDir string, outLog string, errLog string) (int, error) {
 	outFile, err := os.OpenFile(outLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer outFile.Close()
 	errFile, err := os.OpenFile(errLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	defer errFile.Close()
 
@@ -34,11 +34,12 @@ func launchDetached(program string, args []string, workDir string, outLog string
 	command.Stderr = errFile
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := command.Start(); err != nil {
-		return nil, err
+		return 0, err
 	}
-	process := command.Process
+	// Release 之后 Process.Pid 会变成 -1(Unix 上),所以先取 pid
+	pid := command.Process.Pid
 	_ = command.Process.Release()
-	return process, nil
+	return pid, nil
 }
 
 // processAlive 判断 pid 还在不在(信号 0 只做存在性检查,不真的发信号)。
