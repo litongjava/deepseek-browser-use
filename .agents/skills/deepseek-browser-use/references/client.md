@@ -181,7 +181,7 @@ dsb --port 10049 last                            # 重放最近一次响应
   （响应精简模式）不是一回事；CLI 默认发送 `--response-mode compact`（**信封级字段**，不是 `params` 里的），用 `--response-mode full` 恢复完整响应。
   摘要为空时（`get_tabs`/`get_console_logs`/`get_dialog` 这类没有可摘要字段的方法）dsb 会自动退回打印一行
   JSON —— 静默只回一句 `get_tabs OK 21ms` 等于把答案吞了。
-- **凭据留档保护**：自动留档遮蔽结构化 Cookie、password、Authorization、token、API key、secret，以及输入命令参数和相关响应。含秘密的任意脚本使用 `run --sensitive`；实时 stdout、显式 `--out`、截图和页面文本产物仍保留原有行为。服务端 trace 在启用脱敏时采用相应保护；`--no-record` 仅关闭客户端记录。边界与示例见 [命令可靠性](command-reliability.md)。
+- **凭据留档保护**：自动留档遮蔽结构化 Cookie、password、Authorization、token、API key、secret，以及输入命令参数和相关响应；字符串里的 JSON 或表单文本（如 `postData`、响应 `body`）按同一组键名遮蔽值，其余字段保留。含秘密的任意脚本使用 `run --sensitive`；实时 stdout、显式 `--out`、截图和页面文本产物仍保留原有行为。服务端 trace 在启用脱敏时采用相应保护，同样处理请求体和响应体文本；`--no-record` 仅关闭客户端记录。边界与示例见 [命令可靠性](command-reliability.md)。
 - **任务筛选**：`last` 使用相同的 `--session` 和留档目录；显式 `--id` 按配对请求记录筛选最新响应，无匹配报错，不回退其他任务。缺失/损坏请求不参与筛选。`--record-dir` 是最终目录，不追加 session；不传显式 ID 时仍读取目录最新响应。
 - **多行脚本不要写在命令行里**：经 cmd/PowerShell 传参会只剩第一行。用 `js '@脚本.js'`、`--params '@文件.json'`
   或 `batch cmds.json`。

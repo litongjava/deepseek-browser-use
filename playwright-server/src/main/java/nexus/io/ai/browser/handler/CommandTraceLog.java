@@ -13,7 +13,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -24,6 +23,7 @@ import com.alibaba.fastjson2.JSONObject;
 
 import lombok.extern.slf4j.Slf4j;
 import nexus.io.ai.browser.service.ChromeBrowser;
+import nexus.io.ai.browser.util.CredentialRedactor;
 import nexus.io.model.body.RespBodyVo;
 
 /**
@@ -321,7 +321,7 @@ public final class CommandTraceLog {
           }
         }
         if (value instanceof String) {
-          object.put(key, redact((String) value));
+          object.put(key, redactString((String) value));
         } else {
           redactJson(value);
         }
@@ -331,7 +331,7 @@ public final class CommandTraceLog {
       for (int i = 0; i < array.size(); i++) {
         Object value = array.get(i);
         if (value instanceof String) {
-          array.set(i, redact((String) value));
+          array.set(i, redactString((String) value));
         } else {
           redactJson(value);
         }
@@ -359,14 +359,17 @@ public final class CommandTraceLog {
     return false;
   }
 
+  /** 敏感字段名的判定与网络记录共用一份,见 {@link CredentialRedactor#secretKey(String)} */
   private static boolean secretField(String name) {
-    if (name == null) { return false; }
-    String normalized = name.toLowerCase(Locale.ROOT).replace("-", "").replace("_", "");
-    if (normalized.equals("cookies")) { return false; }
-    return normalized.equals("token") || normalized.contains("password") || normalized.contains("passwd")
-        || normalized.contains("authorization") || normalized.contains("accesstoken")
-        || normalized.contains("refreshtoken") || normalized.contains("idtoken")
-        || normalized.contains("apikey") || normalized.contains("secret") || normalized.contains("cookie");
+    return CredentialRedactor.secretKey(name);
+  }
+
+  /**
+   * 字符串值落盘前的脱敏:先掩掉字符串**里面**的凭据(JSON 文本 / 表单编码的请求体、响应体,
+   * 例如 {@code postData} 里的 {@code "apiKey":"..."}),再走个人信息正则
+   */
+  private static String redactString(String value) {
+    return redact(CredentialRedactor.redactBody(value, mask()));
   }
 
   private static List<String> patterns() {

@@ -83,3 +83,76 @@ func TestCookieRecordingKeepsLiveExportUsable(t *testing.T) {
 		t.Fatal("live response changed")
 	}
 }
+
+func TestBodyStringRecordRedaction(t *testing.T) {
+	const key = "sk-test-1234567890abcdef"
+	tests := []struct {
+		name string
+		json string
+		keep []string
+	}{
+		{"json-postData", `{"ok":true,"data":{"requests":[{"method":"POST","postData":"{\"id\":\"deepseek\",\"apiKey\":\"sk-test-1234567890abcdef\",\"baseUrl\":\"https://api.example.test\",\"auth\":{\"password\":\"fixture-pass\"}}"}]}}`,
+			[]string{`\"id\":\"deepseek\"`, `\"baseUrl\":\"https://api.example.test\"`, `"method": "POST"`}},
+		{"form-postData", `{"data":{"requests":[{"postData":"user=alice&api_key=sk-test-1234567890abcdef&pass%77ord=fixture-pass&empty="}]}}`,
+			[]string{"user=alice", "api_key=" + redactedCookieValue, "empty="}},
+		{"truncated-json", `{"data":{"request":{"postData":"{\"apiKey\":\"sk-test-1234567890abcdef\",\"base"}}}`,
+			[]string{`\"base`}},
+		{"response-body", `{"data":{"body":"{\"data\":{\"refresh_token\":\"fixture-rt\",\"name\":\"visible\"}}"}}`,
+			[]string{"visible"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			original, err := DecodeJSON(test.json)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := EncodeJSON(original, encDefault)
+			redacted := EncodeJSON(redactCookieRecords(original), encDefault)
+			if strings.Contains(redacted, key) || strings.Contains(redacted, "fixture-") {
+				t.Fatalf("credential inside a body string was not redacted: %s", redacted)
+			}
+			for _, kept := range test.keep {
+				if !strings.Contains(redacted, kept) {
+					t.Fatalf("non-sensitive content %q was lost: %s", kept, redacted)
+				}
+			}
+			if EncodeJSON(original, encDefault) != before {
+				t.Fatal("redaction changed the live value")
+			}
+		})
+	}
+}
+
+func TestBodyStringRedactionLeavesPlainText(t *testing.T) {
+	for _, text := range []string{"please enter your password = thanks", `{"id":"deepseek","tokenCount":12}`,
+		"q=token+bucket&page=2", "plain"} {
+		if redactBodyText(text) != text {
+			t.Fatalf("plain text changed: %q", text)
+		}
+	}
+}
+
+func TestBodyStringRecordingFiles(t *testing.T) {
+	folder := t.TempDir()
+	client, err := NewClient(ClientOptions{BaseURL: "http://example.invalid", TaskID: 42,
+		Record: true, Session: "body-test", RecordDir: folder, Timeout: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := ObjOf("id", numberFromInt(42), "method", "get_requests", "params", NewObj())
+	postData := `{"id":"deepseek","apiKey":"sk-test-1234567890abcdef"}`
+	envelope := ObjOf("ok", true, "data", ObjOf("count", numberFromInt(1), "requests", []Value{
+		ObjOf("method", "POST", "url", "https://app.example.test/api/providers", "postData", postData),
+	}))
+	client.recordCall("get_requests", payload, &Response{Envelope: envelope, ElapsedMs: 1}, "")
+	text, err := os.ReadFile(filepath.Join(folder, "001.res.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(text), "sk-test-1234567890abcdef") || !strings.Contains(string(text), "deepseek") {
+		t.Fatalf("automatic record leaked or lost body content: %s", text)
+	}
+	if !strings.Contains(EncodeJSON(envelope, encDefault), "sk-test-1234567890abcdef") {
+		t.Fatal("live response changed")
+	}
+}

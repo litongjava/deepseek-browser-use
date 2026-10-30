@@ -23,4 +23,19 @@ public class CredentialTraceTest {
     CommandTraceLog.redactJson(record);
     assertFalse(record.toJSONString().contains("fetch("));
   }
+  @Test public void credentialsInsideBodyStringsAreMaskedInTrace() {
+    JSONObject record = JSONObject.parseObject("""
+        {"ok":true,"data":{"requests":[{"method":"POST","url":"https://app.example.test/api/providers",
+         "postData":"{\\"id\\":\\"deepseek\\",\\"apiKey\\":\\"sk-test-1234567890abcdef\\"}"},
+         {"method":"POST","postData":"user=alice&password=fixture-pass"}],
+         "body":"{\\"data\\":{\\"refresh_token\\":\\"fixture-rt\\",\\"name\\":\\"visible\\"}}"}}
+        """);
+    CommandTraceLog.redactJson(record);
+    String text = record.toJSONString();
+    assertFalse(text.contains("sk-test-1234567890abcdef"));
+    assertFalse(text.contains("fixture-"));
+    assertTrue(text.contains("deepseek"));
+    assertTrue(text.contains("user=alice"));
+    assertTrue(text.contains("visible"));
+  }
 }

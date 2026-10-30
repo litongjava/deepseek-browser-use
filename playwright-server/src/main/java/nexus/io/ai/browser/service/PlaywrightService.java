@@ -45,6 +45,7 @@ import nexus.io.ai.browser.dom.service.HtmlMarkdown;
 import nexus.io.ai.browser.handler.CommandTraceLog;
 import nexus.io.ai.browser.upload.UploadStore;
 import nexus.io.ai.browser.validation.NavigationValidator;
+import nexus.io.ai.browser.util.CredentialRedactor;
 import nexus.io.ai.browser.util.ListenerProbe;
 import nexus.io.ai.browser.util.OcrEngine;
 import nexus.io.ai.browser.util.TextSearch;
@@ -2445,9 +2446,17 @@ public class PlaywrightService {
       return entry;
     }
     String body = safePostData(request);
-    if (body != null)
-      entry.set("postData", truncate(body, MAX_RECORDED_BODY_CHARS)).set("postDataLength", body.length())
-          .set("postDataTruncated", body.length() > MAX_RECORDED_BODY_CHARS);
+    if (body != null) {
+      // 记下之前就掩掉请求体里的凭据(JSON / 表单里的 apiKey、password、token…):这份记录会原样
+      // 出现在 get_requests、get_response_body 的 request 字段、--out 与追踪日志里,原文一旦进了
+      // 记录就没有地方能再拦住它。postDataLength 仍是原文长度。
+      String recorded = CredentialRedactor.redactBody(body);
+      entry.set("postData", truncate(recorded, MAX_RECORDED_BODY_CHARS)).set("postDataLength", body.length())
+          .set("postDataTruncated", recorded.length() > MAX_RECORDED_BODY_CHARS);
+      if (recorded != body) {
+        entry.set("postDataRedacted", true);
+      }
+    }
     return entry;
   }
 

@@ -15,12 +15,16 @@ import com.microsoft.playwright.Response;
 
 public class ResponseCorrelationTest {
   private Request request() {
+    return request("same-body");
+  }
+
+  private Request request(String postData) {
     return (Request) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] {Request.class},
         (proxy, method, args) -> switch (method.getName()) {
           case "method" -> "POST";
           case "url" -> "http://localhost/query";
           case "resourceType" -> "fetch";
-          case "postData" -> "same-body";
+          case "postData" -> postData;
           default -> throw new AssertionError(method.getName());
         });
   }
@@ -94,5 +98,20 @@ public class ResponseCorrelationTest {
     assertSame(matched, PlaywrightService.recordResponse(inst, actual));
     assertEquals(0, inst.inflight.get());
     assertEquals(2, inst.requests.size());
+  }
+
+  @Test public void recordedPostDataMasksCredentialsBeforeAnyOutput() {
+    BrowserInstance inst = new BrowserInstance(1, null, null, null, null);
+    String body = "{\"id\":\"deepseek\",\"apiKey\":\"sk-test-1234567890abcdef\",\"baseUrl\":\"https://api.example.test\"}";
+    BrowserInstance.RecordedResponse recorded = PlaywrightService.recordResponse(inst, response(request(body), () -> "{}"));
+    String postData = recorded.request.getStr("postData");
+    assertFalse(postData.contains("sk-test-1234567890abcdef"));
+    assertTrue(postData.contains("\"baseUrl\":\"https://api.example.test\""));
+    assertEquals(true, recorded.request.get("postDataRedacted"));
+    assertEquals(body.length(), recorded.request.getInt("postDataLength").intValue());
+    assertFalse(inst.requests.toString().contains("sk-test-1234567890abcdef"));
+    BrowserInstance.RecordedResponse plain = PlaywrightService.recordResponse(inst, response(request("same-body"), () -> "{}"));
+    assertEquals("same-body", plain.request.getStr("postData"));
+    assertNull(plain.request.get("postDataRedacted"));
   }
 }

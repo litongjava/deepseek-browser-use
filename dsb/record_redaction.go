@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"net/url"
+	"regexp"
+	"strings"
+)
 
 const redactedCookieValue = "[REDACTED]"
 
@@ -78,9 +82,102 @@ func redactCookieRecords(value Value) Value {
 			result[index] = redactCookieRecords(child)
 		}
 		return result
+	case string:
+		return redactBodyText(typed)
 	default:
 		return value
 	}
+}
+
+// credentialHints is a cheap pre-check before a string is parsed as a body.
+var credentialHints = []string{"pass", "authorization", "token", "apikey", "api_key", "api-key", "secret", "cookie"}
+
+// quotedPair matches one "key": "value" pair; used when the text is not valid JSON (e.g. a truncated body).
+var quotedPair = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"(\s*:\s*)"((?:[^"\\]|\\.)*)"`)
+
+// redactBodyText masks credential values carried inside a string, such as a postData
+// or response body holding JSON or form-encoded text. It complements the structured
+// field redaction above (older servers return request bodies verbatim) and returns
+// the input unchanged when nothing matches.
+func redactBodyText(text string) string {
+	if len(text) < 3 || !mayContainCredential(text) {
+		return text
+	}
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		if parsed, err := DecodeJSON(trimmed); err == nil {
+			redacted := redactCookieRecords(parsed)
+			encoded := EncodeJSON(redacted, encCompact)
+			if encoded == EncodeJSON(parsed, encCompact) {
+				return text
+			}
+			return encoded
+		}
+		return redactQuotedPairs(text)
+	}
+	if looksFormEncoded(trimmed) {
+		return redactForm(text)
+	}
+	return redactQuotedPairs(text)
+}
+
+func mayContainCredential(text string) bool {
+	lower := strings.ToLower(text)
+	for _, hint := range credentialHints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksFormEncoded requires no whitespace and key=value in every non-empty piece.
+func looksFormEncoded(text string) bool {
+	if text == "" || !strings.Contains(text, "=") || strings.IndexFunc(text, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	}) >= 0 {
+		return false
+	}
+	for _, piece := range strings.Split(text, "&") {
+		if piece != "" && strings.Index(piece, "=") <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func redactForm(text string) string {
+	pieces := strings.Split(text, "&")
+	changed := false
+	for index, piece := range pieces {
+		eq := strings.Index(piece, "=")
+		if eq <= 0 {
+			continue
+		}
+		key, value := piece[:eq], piece[eq+1:]
+		name, err := url.QueryUnescape(key)
+		if err != nil {
+			name = key
+		}
+		if value != "" && value != redactedCookieValue && secretField(name) {
+			pieces[index] = key + "=" + redactedCookieValue
+			changed = true
+		}
+	}
+	if !changed {
+		return text
+	}
+	return strings.Join(pieces, "&")
+}
+
+func redactQuotedPairs(text string) string {
+	return quotedPair.ReplaceAllStringFunc(text, func(match string) string {
+		groups := quotedPair.FindStringSubmatch(match)
+		if !secretField(groups[1]) || groups[3] == "" || groups[3] == redactedCookieValue {
+			return match
+		}
+		return `"` + groups[1] + `"` + groups[2] + `"` + redactedCookieValue + `"`
+	})
 }
 
 func secretField(key string) bool {
