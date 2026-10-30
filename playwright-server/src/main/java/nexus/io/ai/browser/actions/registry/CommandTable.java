@@ -31,7 +31,7 @@ import nexus.io.model.body.RespBodyVo;
  */
 public class CommandTable {
 
-  private static Double waitSeconds(JSONObject args) {
+  static Double waitSeconds(JSONObject args) {
     Double seconds = args.getDouble("timeoutSeconds");
     Double millis = args.getDouble("timeoutMs");
     if (millis != null && (!Double.isFinite(millis) || millis <= 0 || millis > 900000)) {

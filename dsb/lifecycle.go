@@ -203,12 +203,12 @@ func startBackend(repoDir string, port int, engine string, jar string, timeout f
 	arguments = append(arguments, "-jar", jarPath)
 
 	out.Line(fmt.Sprintf("启动后端:%s %s", java, strings.Join(arguments, " ")))
-	handle, err := launchDetached(java, arguments, repoDir, layout.outLog(), layout.errLog())
+	pid, err := launchDetached(java, arguments, repoDir, layout.outLog(), layout.errLog())
 	if err != nil {
 		return false, transportErrorf("启动后端失败:%v", err)
 	}
 	if err := writePidRecord(layout.pidFile(), PidRecord{
-		PID:       handle.Pid,
+		PID:       pid,
 		Port:      port,
 		StartedAt: time.Now().Format(time.RFC3339),
 		Jar:       jarPath,
@@ -223,21 +223,21 @@ func startBackend(repoDir string, port int, engine string, jar string, timeout f
 			// 应答的必须是**我们刚拉起来的这个进程**。端口上如果还有别的实例(或它比我们抢先绑上),
 			// 这里报「已就绪」会让调用方对着另一个空实例发命令,现象就是任务莫名消失。
 			// 老版本服务端不上报 pid(零值)时不拦,只提示一句。
-			if info.PID != 0 && info.PID != handle.Pid {
+			if info.PID != 0 && info.PID != pid {
 				return false, transportErrorf(
 					"端口 %d 上应答的是另一个后端实例(它自报 pid %d,我们启动的是 pid %d)。"+
-						"先停掉其中一个,或用 --port 指定别的端口", port, info.PID, handle.Pid)
+						"先停掉其中一个,或用 --port 指定别的端口", port, info.PID, pid)
 			}
 			if info.PID == 0 {
 				out.Warn(fmt.Sprintf("[warn] 端口 %d 上的服务没有上报 pid(可能是旧版 jar),无法确认就是我们启动的那个", port))
 			}
-			out.Line(fmt.Sprintf("服务已就绪:%s(pid %d,jar %s)", baseURL, handle.Pid, jarPath))
+			out.Line(fmt.Sprintf("服务已就绪:%s(pid %d,jar %s)", baseURL, pid, jarPath))
 			return false, nil
 		}
-		if !processAlive(handle.Pid) {
+		if !processAlive(pid) {
 			_ = os.Remove(layout.pidFile())
 			return false, transportErrorf("后端进程启动后很快退出(pid %d)。日志尾部:\n%s",
-				handle.Pid, tailFile(layout.outLog(), 20))
+				pid, tailFile(layout.outLog(), 20))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

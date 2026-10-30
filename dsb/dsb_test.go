@@ -431,13 +431,13 @@ func TestSelectionKeepsFullRecord(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(folder, "steps.log")); err != nil {
 		t.Error("应写出 steps.log")
 	}
-	// 记录文件是 CRLF(与旧 Python 客户端的文本模式逐字节一致,脚本与眼睛都依赖它)
+	// Windows 上记录文件是 CRLF(与旧 Python 客户端的文本模式逐字节一致),其他平台保持 LF
 	raw, err := os.ReadFile(filepath.Join(folder, "001.res.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "\r\n") {
-		t.Error("记录文件应是 CRLF 换行")
+	if crlf := strings.Contains(string(raw), "\r\n"); crlf != (runtime.GOOS == "windows") {
+		t.Errorf("记录文件换行不符合平台约定(%s 上 CRLF=%v)", runtime.GOOS, crlf)
 	}
 }
 
@@ -644,7 +644,7 @@ func TestLocateJarPriority(t *testing.T) {
 	}
 
 	// dist 里有发行包
-	distJar := mk(filepath.Join("dist", "deepseek-browser-use-1.0.0-windows-x64.jar"), "dist")
+	distJar := mk(filepath.Join("dist", fmt.Sprintf("deepseek-browser-use-1.0.0-%s-%s.jar", runtime.GOOS, mapArch(runtime.GOARCH))), "dist")
 	if got, err := locateJar(repo, ""); err != nil || got != distJar {
 		t.Errorf("应回退到 dist,得到 %q %v", got, err)
 	}
@@ -777,6 +777,17 @@ func TestMavenDriverPlatform(t *testing.T) {
 	// 至少不能是空串 —— 空串会让 shade 把全部平台都打进去
 	if got := mavenDriverPlatform(); got == "" {
 		t.Errorf("当前平台(%s/%s)应有对应的 driver.platform", runtime.GOOS, runtime.GOARCH)
+	}
+	// 必须是 driver-bundle 里真实存在的目录名,否则 shade 后 jar 里没有任何 driver
+	for platform, want := range map[string]string{
+		"windows/amd64": "win32_x64", "windows/arm64": "win32_x64",
+		"darwin/amd64": "mac", "darwin/arm64": "mac-arm64",
+		"linux/amd64": "linux", "linux/arm64": "linux-arm64",
+	} {
+		parts := strings.SplitN(platform, "/", 2)
+		if got := driverPlatformFor(parts[0], parts[1]); got != want {
+			t.Errorf("%s 应映射到 driver/%s,得到 %q", platform, want, got)
+		}
 	}
 }
 func TestPlaywrightRevOrdering(t *testing.T) {
@@ -1367,3 +1378,23 @@ func mustUsage(t *testing.T, fn func() error) (error, bool) {
 }
 
 var _ io.Writer = (*strings.Builder)(nil)
+
+// TestLaunchDetachedReportsRealPid:Release 会把 Process.Pid 置成 -1,pid 文件不能记成 -1。
+func TestLaunchDetachedReportsRealPid(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("用 sleep 起子进程,只在 Unix 上跑")
+	}
+	folder := t.TempDir()
+	pid, err := launchDetached("sleep", []string{"5"}, folder, filepath.Join(folder, "out.log"), filepath.Join(folder, "err.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if process, err := os.FindProcess(pid); err == nil {
+			_ = process.Kill()
+		}
+	}()
+	if pid <= 0 || !processAlive(pid) {
+		t.Errorf("应返回正在运行的子进程 pid,得到 %d", pid)
+	}
+}

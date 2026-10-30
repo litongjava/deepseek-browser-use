@@ -164,19 +164,24 @@ type HealthInfo struct {
 // 不传这个属性的话,shade 会把 driver-bundle 里 5 个平台的 node 全打进 jar(合计约 194MB),
 // 而一份发行版只需要自己那个平台的 —— 这也是打包脚本与 plugins/backend.ps1 的做法。
 func mavenDriverPlatform() string {
-	switch runtime.GOOS + "/" + runtime.GOARCH {
-	case "windows/amd64":
+	return driverPlatformFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// driverPlatformFor 返回 Playwright driver-bundle 里 driver/ 下的目录名(1.53:linux、linux-arm64、
+// mac、mac-arm64、win32_x64)。名字对不上时 shade 一个平台都不保留,jar 启动报 Failed to create driver。
+// Windows arm64 没有单独的 driver,用 x64 那份。
+func driverPlatformFor(goos string, goarch string) string {
+	switch goos + "/" + goarch {
+	case "windows/amd64", "windows/arm64":
 		return "win32_x64"
-	case "windows/arm64":
-		return "win32_arm64"
 	case "darwin/amd64":
-		return "mac10.14_x64"
+		return "mac"
 	case "darwin/arm64":
-		return "mac11-arm64"
+		return "mac-arm64"
 	case "linux/amd64":
-		return "linux_x64"
+		return "linux"
 	case "linux/arm64":
-		return "linux_arm64"
+		return "linux-arm64"
 	}
 	return ""
 }

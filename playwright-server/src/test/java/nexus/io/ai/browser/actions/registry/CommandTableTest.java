@@ -221,4 +221,12 @@ public class CommandTableTest {
       assertNotNull("命令表里没有 " + command, CommandTable.get(command));
     }
   }
+
+  @Test
+  public void waitTimeoutsAreOptional() {
+    // 不传超时时用服务默认值,不能因拆箱 null 抛 NullPointerException
+    assertEquals(null, CommandTable.waitSeconds(new JSONObject()));
+    assertEquals(Double.valueOf(5), CommandTable.waitSeconds(JSONObject.of("timeoutSeconds", 5)));
+    assertEquals(Double.valueOf(1.5), CommandTable.waitSeconds(JSONObject.of("timeoutMs", 1500)));
+  }
 }
