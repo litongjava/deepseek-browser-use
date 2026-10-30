@@ -1,6 +1,6 @@
 # 外部 WebView2 接入与验收
 
-用于已开启 CDP 调试端口的 Windows WebView2（包括 Tauri），不承诺 macOS/Linux 的全部 Tauri WebView。测试独立构建，不替换用户已安装 App。
+用于已开启 CDP 调试端口的 Windows WebView2（包括 Tauri），也可接入任何带 `--remote-debugging-port` 的 Chrome/Edge；不承诺 macOS/Linux 的全部 Tauri WebView。测试独立构建，不替换用户已安装 App。
 
 ## 连接与生命周期
 
