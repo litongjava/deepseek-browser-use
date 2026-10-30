@@ -111,8 +111,11 @@ func (p *Printer) Response(response *Response, label string, hasIndex bool, inde
 		}
 		head := fmt.Sprintf("%s%s %s %dms", prefix, label, verdict, response.ElapsedMs)
 		detail := summarize(response.Data())
-		if p.Mode == "compact" && label == "start" && response.Ok() {
+		if p.Mode == "compact" && (label == "start" || label == "attach") && response.Ok() {
 			detail = " browser=" + compactText(EncodeJSON(compactBrowserInfo(response.Data()), encCompact), 600)
+		}
+		if p.Mode == "compact" && (label == "attach" || label == "targets") {
+			detail += compactTargets(response.Data())
 		}
 		if !response.Ok() && response.Msg() != "" {
 			message := response.Msg()
@@ -164,12 +167,34 @@ func compactBrowserInfo(data Value) Value {
 			info.Set(key, value)
 		}
 	}
-	for _, key := range []string{"engine", "type", "headless", "mode"} {
+	// targetId / url / targetType 只在外部 CDP 任务(attach)里有,普通 start 不受影响
+	for _, key := range []string{"engine", "type", "headless", "mode", "targetId", "targetType", "url"} {
 		if value := objGet(objGet(data, "browser"), key); value != nil {
 			info.Set(key, value)
 		}
 	}
 	return info
+}
+
+// compactTargets 把 attach / targets 回执里的候选目标压成「count=N targets=title|url|targetId;...」。
+//
+// 多窗口时要靠 title 辨认、再用 targetId 精确选择,所以三样都留;整体仍按 compactText 截断。
+func compactTargets(data Value) string {
+	targets := asArray(objGet(data, "targets"))
+	if targets == nil {
+		return ""
+	}
+	field := func(target Value, key string) string {
+		if value := objGet(target, key); value != nil {
+			return pyStr(value)
+		}
+		return ""
+	}
+	items := make([]string, 0, len(targets))
+	for _, target := range targets {
+		items = append(items, field(target, "title")+"|"+field(target, "url")+"|"+field(target, "targetId"))
+	}
+	return fmt.Sprintf(" count=%d targets=%s", len(targets), compactText(strings.Join(items, ";"), 600))
 }
 
 // JSON 打印一个值:`--compact` 压成一行,否则缩进 2。

@@ -105,7 +105,12 @@ func dispatch(client *Client, args *Args, out *Printer) (int, error) {
 			return 0, err
 		}
 		if !handled {
-			out.JSON(value)
+			// 默认 / --json 保持原样只印整封;--summary 走与其他命令相同的一行摘要
+			if out.Mode == "compact" {
+				out.Response(response, args.Command, false, 0, false, nil)
+			} else {
+				out.JSON(value)
+			}
 		}
 		return verdict(response), nil
 	case "diagnose", "cancel":
