@@ -31,7 +31,7 @@ import nexus.io.model.body.RespBodyVo;
  */
 public class CommandTable {
 
-  private static Double waitSeconds(JSONObject args) {
+  static Double waitSeconds(JSONObject args) {
     Double seconds = args.getDouble("timeoutSeconds");
     Double millis = args.getDouble("timeoutMs");
     if (millis != null && (!Double.isFinite(millis) || millis <= 0 || millis > 900000)) {
@@ -43,7 +43,8 @@ public class CommandTable {
     if (seconds != null && millis != null && Math.abs(seconds * 1000 - millis) > 0.001) {
       throw new IllegalArgumentException("timeoutMs and timeoutSeconds disagree");
     }
-    return millis == null ? seconds : millis / 1000;
+    // Keep both branches boxed: a primitive branch would unbox a null seconds.
+    return millis == null ? seconds : Double.valueOf(millis / 1000);
   }
 
   public interface Executor {
