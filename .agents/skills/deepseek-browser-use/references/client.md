@@ -28,9 +28,9 @@
 
 ### 输出失败与动作执行分开处理
 
-`dsb list_methods` 与 `dsb methods` 是等价的客户端子命令，共用过滤、输出选项与退出码；例如 `dsb list_methods click --json` 按名称子串过滤（不区分大小写），不会执行方法。`dsb run list_methods` 仍用于调用协议方法。旧版 CLI 若不认识新别名，先用 `dsb methods` 并更新 CLI。任务 ID 必须为数字。`--select` 是单路径，不是逗号分隔的多字段查询。多字段用可重复的 `--fields alias=path`，例如 `--fields url=data.url --fields result=data.result`。返回以别名为键的对象；别名不可重复，不能与 `--select`/`--select-lenient` 混用。缺失字段为 null：原命令成功时退出 3，原命令失败时保留业务退出码 2；已有 null 不算缺失。`--out` 仍优先保存完整响应。
+`dsb list_methods` 与 `dsb methods` 是等价的客户端子命令，共用过滤、输出选项与退出码；例如 `dsb list_methods click --json` 按名称子串过滤（不区分大小写），不会执行方法。`dsb run list_methods` 仍用于调用协议方法。旧版 CLI 若不认识新别名，先用 `dsb methods` 并更新 CLI。任务 ID 必须为数字。`--select` 是单路径，不是逗号分隔的多字段查询。多字段用可重复的 `--fields alias=path`，例如 `--fields url=data.url --fields result=data.result`。返回以别名为键的对象；别名不可重复，不能与 `--select`/`--select-lenient` 混用。缺失字段为 null：原命令成功时退出 3，原命令失败时保留业务退出码 2；已有 null 不算缺失。同时带 `--out` 时，文件保存完整响应，stdout 仍输出投影，写入确认改走 stderr。
 
-字段不存在只能在收到回执后判断，因此退出码 3 不等于动作没有执行。优先读取当前会话留档、`dsb last` 或新页面状态，不要重新点击、提交或导航来修复显示问题。`--out` 会保存完整响应且优先于 `--select`；不要用该组合测试路径是否存在。
+字段不存在只能在收到回执后判断，因此退出码 3 不等于动作没有执行。优先读取当前会话留档、`dsb last` 或新页面状态，不要重新点击、提交或导航来修复显示问题。`--out` 与 `--select`/`--fields` 同用时，文件保存完整响应，stdout 照常输出投影并保留退出码 3。
 
 PowerShell 的 `> 文件` 与客户端 `--out` 不是一回事：Windows PowerShell 的文本重定向可能生成 UTF-16 文件，`2>&1` 还会混入错误输出。若宿主 read 工具将文件判为二进制，不要绕过它读取；优先读取客户端自身保存的 UTF-8 留档。必要时转换已有文件编码，不能为了重新取得文本而重放写操作。
 

@@ -95,12 +95,109 @@ func TestSelectPreservesOutPrecedence(t *testing.T) {
 	printer.Out, printer.ErrOut = output, diagnostics
 	response := &Response{Envelope: ObjOf("ok", true, "data", ObjOf("title", "done", "other", "retained"))}
 	_, handled, err := prepare(response, args, printer)
-	if err != nil || !handled {
-		t.Fatalf("prepare: handled=%v err=%v", handled, err)
+	if err != nil || handled {
+		t.Fatalf("prepare: handled=%v err=%v (投影还要由调用方打到 stdout)", handled, err)
 	}
 	raw, err := os.ReadFile(target)
 	if err != nil || !strings.Contains(string(raw), "retained") || output.Len() != 0 {
 		t.Fatalf("out precedence: file=%s stdout=%q err=%v", raw, output.String(), err)
+	}
+	if !strings.Contains(diagnostics.String(), "已写入") {
+		t.Fatalf("写文件确认应走 stderr: %q", diagnostics.String())
+	}
+}
+
+// outProjectionCase 用真实的参数解析 + 替身客户端跑一条子命令,返回退出码、stdout、stderr 与文件内容。
+func outProjectionCase(t *testing.T, client CommandAPI, command func(CommandAPI, *Args, *Printer) (int, error),
+	argv ...string) (int, string, string, string) {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "out.json")
+	args, err := parseArgs(append(argv, "--out", target))
+	if err != nil {
+		t.Fatalf("parseArgs(%v): %v", argv, err)
+	}
+	output, diagnostics := &strings.Builder{}, &strings.Builder{}
+	printer := NewPrinter(args)
+	printer.Out, printer.ErrOut = output, diagnostics
+	code, err := command(client, args, printer)
+	code = report(code, err, printer)
+	raw, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("--out 文件没写出来: %v", readErr)
+	}
+	return code, output.String(), diagnostics.String(), string(raw)
+}
+
+func TestOutWithSelectPrintsSelection(t *testing.T) {
+	client := &stubClient{stubBase{data: ObjOf("title", "页面标题", "other", "retained")}}
+	code, stdout, stderr, file := outProjectionCase(t, client, cmdRun, "run", "get_title", "--select", "data.title")
+	if code != ExitOK || strings.TrimSpace(stdout) != `"页面标题"` {
+		t.Fatalf("exit=%d stdout=%q", code, stdout)
+	}
+	if !strings.Contains(file, "retained") || !strings.Contains(stderr, "已写入") {
+		t.Fatalf("file=%q stderr=%q", file, stderr)
+	}
+}
+
+func TestOutWithFieldsPrintsFieldsObject(t *testing.T) {
+	client := &stubClient{stubBase{data: ObjOf("title", "页面标题", "other", "retained")}}
+	for name, command := range map[string]func(CommandAPI, *Args, *Printer) (int, error){
+		"run": cmdRun, "state": cmdState, "js": cmdJS,
+	} {
+		argv := []string{name}
+		switch name {
+		case "run":
+			argv = append(argv, "get_title")
+		case "js":
+			argv = append(argv, "document.title")
+		}
+		argv = append(argv, "--fields", "t=data.title", "--fields", "ok=ok")
+		code, stdout, _, file := outProjectionCase(t, client, command, argv...)
+		value, err := DecodeJSON(stdout)
+		if err != nil || code != ExitOK {
+			t.Fatalf("%s: exit=%d stdout 不是纯 JSON: %q (%v)", name, code, stdout, err)
+		}
+		if objStr(value, "t") != "页面标题" || objGet(value, "ok") != true {
+			t.Errorf("%s: fields 投影不对: %q", name, stdout)
+		}
+		if !strings.Contains(file, "retained") {
+			t.Errorf("%s: 文件应是整封: %q", name, file)
+		}
+	}
+}
+
+func TestOutWithMissingPathStillExitsUsage(t *testing.T) {
+	client := &stubClient{stubBase{data: ObjOf("title", "页面标题")}}
+	code, stdout, _, _ := outProjectionCase(t, client, cmdRun, "run", "get_title", "--select", "data.missing")
+	if code != ExitUsage || strings.TrimSpace(stdout) != "null" {
+		t.Errorf("--select 打偏: exit=%d stdout=%q", code, stdout)
+	}
+	code, stdout, stderr, _ := outProjectionCase(t, client, cmdRun, "run", "get_title", "--fields", "m=data.missing")
+	if code != ExitUsage || !strings.Contains(stdout, `"m": null`) || !strings.Contains(stderr, "Missing output field") {
+		t.Errorf("--fields 打偏: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	// 失败响应:退出码保持业务失败,投影照打
+	failing := &stubClient{stubBase{data: ObjOf("title", "页面标题"), okSet: true, ok: false}}
+	code, stdout, _, _ = outProjectionCase(t, failing, cmdRun, "run", "get_title", "--select", "data.title")
+	if code != ExitBusiness || strings.TrimSpace(stdout) != `"页面标题"` {
+		t.Errorf("失败响应: exit=%d stdout=%q", code, stdout)
+	}
+}
+
+func TestOutAloneUnchanged(t *testing.T) {
+	client := &stubClient{stubBase{data: ObjOf("title", "页面标题")}}
+	code, stdout, stderr, file := outProjectionCase(t, client, cmdRun, "run", "get_title")
+	lines := nonEmptyLines(stdout)
+	if code != ExitOK || len(lines) != 1 || !strings.HasPrefix(lines[0], "已写入 ") || stderr != "" {
+		t.Errorf("--out 单用: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(file, "页面标题") {
+		t.Errorf("file=%q", file)
+	}
+	// --json --out 不带投影:维持现状(stdout 不打中文确认)
+	code, stdout, _, _ = outProjectionCase(t, client, cmdRun, "run", "get_title", "--json")
+	if code != ExitOK || stdout != "" {
+		t.Errorf("--json --out: exit=%d stdout=%q", code, stdout)
 	}
 }
 

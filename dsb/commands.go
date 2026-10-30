@@ -42,7 +42,7 @@ func cmdMethods(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if handled {
 		return verdict(response), nil
 	}
-	if out.Select != nil {
+	if out.Select != nil || len(out.Fields) > 0 {
 		out.JSON(value)
 		return verdict(response), nil
 	}
@@ -561,7 +561,7 @@ func cmdState(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if handled {
 		return verdict(response), nil
 	}
-	if args.JSON || out.Select != nil || !response.Ok() {
+	if args.JSON || out.Select != nil || len(out.Fields) > 0 || !response.Ok() {
 		out.JSON(value)
 		return verdict(response), nil
 	}
@@ -722,7 +722,8 @@ func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 // prepare 取这次要打印的值,并处理 --out / --grep。
 //
 // 顺序是有讲究的:先按 --index 投影,再交给侧输出(--out 写文件 / --grep 筛行);
-// 返回的 handled=true 表示输出已经由侧输出完成,调用方不必再打整封。
+// 返回的 handled=true 表示输出已经由侧输出完成,调用方不必再打整封;
+// 带 --select / --fields 时 --out 只写文件,handled=false,调用方照常打投影。
 //
 // 这段原来在 10 个命令里各抄了一遍(含两处一模一样的错误处理)。抄多遍的代价不是行数,
 // 而是**顺序会慢慢漂移**:实测有的命令先 --out 再 --select,有的反过来 —— 同一组参数

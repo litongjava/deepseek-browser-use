@@ -283,19 +283,31 @@ func (p *Printer) printLine(text string) {
 //
 // 两个开关都**不改变发出去的请求**,只是把返回的东西换个打法 —— 所以带上它们不会让一次
 // 已经成功的调用变成失败,也不会多花一次往返。
+//
+// --out 与 --select / --fields 同时给时,文件照旧写整封,但**不算已处理**:调用方还要照常把
+// 投影打到 stdout。以前这里一律返回 true,而确认行又走 Line(json 模式下不打),结果 stdout
+// 一个字都没有 —— 投影丢了,路径打偏也报不出退出码 3(实测 `--fields t=data.title --out c.json`
+// 什么都不打、退出码 0)。
 func emitSideOutput(printer *Printer, args *Args, value Value) (bool, error) {
 	if args.Out == nil && args.Grep == nil {
 		return false, nil
 	}
+	projecting := printer.Select != nil || len(printer.Fields) > 0
 	text := EncodeJSON(value, encIndent2)
 	if args.Out != nil {
 		if err := writeTextFile(*args.Out, text); err != nil {
 			return false, usageErrorf("写不了文件 %s:%v", *args.Out, err)
 		}
 		lines := len(strings.Split(text, "\n"))
-		// 走 Line 而不是 printLine:--json 时 stdout 必须是纯 JSON,
-		// 否则管道那头收到的是一句中文而不是 JSON。
-		printer.Line(fmt.Sprintf("已写入 %s（%d 字符，%d 行）", *args.Out, len(text), lines))
+		confirmation := fmt.Sprintf("已写入 %s（%d 字符，%d 行）", *args.Out, len(text), lines)
+		if projecting {
+			// stdout 留给投影(必须是纯 JSON),确认行改走 stderr
+			printer.Warn(confirmation)
+		} else {
+			// 走 Line 而不是 printLine:--json 时 stdout 必须是纯 JSON,
+			// 否则管道那头收到的是一句中文而不是 JSON。
+			printer.Line(confirmation)
+		}
 	}
 	if args.Grep != nil {
 		expression, err := regexp.Compile(*args.Grep)
@@ -314,6 +326,8 @@ func emitSideOutput(printer *Printer, args *Args, value Value) (bool, error) {
 		}
 		printer.Line(fmt.Sprintf("--grep %s:共 %d 行,命中 %d 行",
 			pyRepr(*args.Grep), len(allLines), len(hits)))
+		return true, nil
 	}
-	return true, nil
+	// 只有 --out:有投影就交回调用方去打,没有投影则确认行即全部输出
+	return !projecting, nil
 }
