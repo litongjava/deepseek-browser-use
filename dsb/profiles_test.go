@@ -50,13 +50,16 @@ func TestProfileCommandWireContract(t *testing.T) {
 		{[]string{"start", "--profile", "litongjava"}, "start", `{"headless":false,"browser":"chrome","profile":"litongjava"}`, true},
 		{[]string{"start", "--profile", "litongjava", "--headless"}, "start", `{"headless":true,"browser":"chrome","profile":"litongjava"}`, true},
 		{[]string{"start", "--browser", "auto", "--user-data-dir", "C:/User Data", "--profile-directory", "Profile 2"}, "start", `{"headless":false,"browser":"chrome","userDataDir":"C:/User Data","profileDirectory":"Profile 2"}`, true},
+		{[]string{"start", "--fake-media", "--headless"}, "start", `{"headless":true,"fakeMedia":true}`, true},
+		{[]string{"start", "--fake-media", "--browser", "chromium"}, "start", `{"headless":false,"browser":"chromium","fakeMedia":true}`, true},
+		{[]string{"start", "--profile", "litongjava", "--fake-media"}, "start", `{"headless":false,"browser":"chrome","profile":"litongjava","fakeMedia":true}`, true},
 	} {
 		t.Run(strings.Join(tc.argv, " "), func(t *testing.T) {
 			requests, commands := 0, 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
 				if r.Method == http.MethodGet {
-					io.WriteString(w, `{"ok":true,"data":{"methods":["start","list_profiles","clone_profile"]}}`)
+					io.WriteString(w, `{"ok":true,"data":{"methods":["start","list_profiles","clone_profile","grant_permissions"]}}`)
 					return
 				}
 				commands++
@@ -121,6 +124,21 @@ func TestProfilePreflightNeverStartsOnFailure(t *testing.T) {
 		if client.calls != 0 {
 			t.Fatal("start sent after failed capability check")
 		}
+	}
+}
+
+func TestFakeMediaRefusedByOldBackend(t *testing.T) {
+	args, err := parseArgs([]string{"start", "--fake-media"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &profileFailureClient{stubBase: stubBase{data: ObjOf("methods", []Value{"start", "list_profiles"})}}
+	response, err := startWithProfile(client, args, "")
+	if err == nil && (response == nil || response.Ok()) {
+		t.Fatal("old backend accepted --fake-media")
+	}
+	if client.calls != 0 {
+		t.Fatal("start sent to a backend that would ignore fakeMedia")
 	}
 }
 

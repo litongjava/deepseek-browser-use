@@ -57,7 +57,7 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 	if err := validateProfileArgs(args); err != nil {
 		return nil, err
 	}
-	if !hasProfileSelection(args) {
+	if !hasProfileSelection(args) && !args.FakeMedia {
 		return client.Start(browser, args.Headless, nil)
 	}
 	methods, err := client.Methods()
@@ -67,14 +67,26 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 	if !methods.Ok() {
 		return methods, nil
 	}
-	supported := false
+	advertised := map[string]bool{}
 	for _, method := range asArray(objGet(methods.Data(), "methods")) {
-		if method == "list_profiles" {
-			supported = true
+		if name, ok := method.(string); ok {
+			advertised[name] = true
 		}
 	}
-	if !supported {
+	if hasProfileSelection(args) && !advertised["list_profiles"] {
 		return nil, usageErrorf("backend does not advertise list_profiles; explicit profile selection requires an updated backend. No start request was sent")
+	}
+	// fakeMedia shipped together with grant_permissions; an older backend would silently ignore it
+	if args.FakeMedia && !advertised["grant_permissions"] {
+		return nil, usageErrorf("backend does not advertise grant_permissions; --fake-media requires an updated backend (dsb server build && dsb server restart). No start request was sent")
+	}
+	if !hasProfileSelection(args) {
+		params := ObjOf("headless", args.Headless)
+		if browser != "" {
+			params.Set("browser", browser)
+		}
+		params.Set("fakeMedia", true)
+		return client.Command("start", params, nil, 0, "start")
 	}
 	params := ObjOf("headless", args.Headless, "browser", "chrome")
 	if args.Profile != nil {
@@ -85,6 +97,9 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 	}
 	if args.ProfileDirectory != nil {
 		params.Set("profileDirectory", *args.ProfileDirectory)
+	}
+	if args.FakeMedia {
+		params.Set("fakeMedia", true)
 	}
 	return client.Command("start", params, nil, 0, "start")
 }

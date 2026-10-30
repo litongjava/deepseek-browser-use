@@ -90,6 +90,7 @@ public class CommandTableTest {
     cases.put("set_headers", "headersJson");
     cases.put("set_credentials", "username");
     cases.put("set_media", "colorScheme");
+    cases.put("grant_permissions", "permissions");
     cases.put("route", "urlPattern");
     cases.put("wait_for_response", "urlPattern");
     cases.put("request_human_input", "prompt");

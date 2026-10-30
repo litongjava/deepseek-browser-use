@@ -1,0 +1,313 @@
+{
+  "scope": "Local fixture only (docs/assets/voice-call-batch-20261029/fixture.html served on http://localhost:18765); not a real IM backend",
+  "observedAt": "2026-10-29 21:00 HST",
+  "browser": "Google Chrome via dsb CDP, headful on Xvnc :1, start --fake-media",
+  "runs": [
+    {
+      "count": 22,
+      "succeeded": 22,
+      "failed": 0,
+      "expectFailed": 0,
+      "stopped": false,
+      "steps": [
+        {
+          "index": 0,
+          "command": "go_to_url",
+          "ok": true
+        },
+        {
+          "index": 1,
+          "command": "bring_to_front",
+          "ok": true
+        },
+        {
+          "index": 2,
+          "command": "set_local_storage",
+          "ok": true
+        },
+        {
+          "index": 3,
+          "command": "reload",
+          "ok": true
+        },
+        {
+          "index": 4,
+          "command": "input_text_by_selector",
+          "ok": true
+        },
+        {
+          "index": 5,
+          "command": "input_text_by_selector",
+          "ok": true
+        },
+        {
+          "index": 6,
+          "command": "click_element_by_role",
+          "ok": true
+        },
+        {
+          "index": 7,
+          "command": "wait_for_function",
+          "ok": true
+        },
+        {
+          "index": 8,
+          "command": "wait_for_element",
+          "ok": true
+        },
+        {
+          "index": 9,
+          "command": "click_element_by_selector",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": "block"
+          }
+        },
+        {
+          "index": 10,
+          "command": "click_element_by_selector",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": true
+          }
+        },
+        {
+          "index": 11,
+          "command": "input_text_by_selector",
+          "ok": true
+        },
+        {
+          "index": 12,
+          "command": "click_element_by_role",
+          "ok": true
+        },
+        {
+          "index": 13,
+          "command": "wait_for_element",
+          "ok": true
+        },
+        {
+          "index": 14,
+          "command": "click_element_by_role",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": false
+          }
+        },
+        {
+          "index": 15,
+          "command": "wait_for_element",
+          "ok": true
+        },
+        {
+          "index": 16,
+          "command": "click_element_by_selector",
+          "ok": true
+        },
+        {
+          "index": 17,
+          "command": "click_element_by_selector",
+          "ok": true
+        },
+        {
+          "index": 18,
+          "command": "wait_for_element",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": "麦克风: Fake Default Audio Input (live)"
+          }
+        },
+        {
+          "index": 19,
+          "command": "execute_js",
+          "ok": true
+        },
+        {
+          "index": 20,
+          "command": "get_console_logs",
+          "ok": true
+        },
+        {
+          "index": 21,
+          "command": "screenshot",
+          "ok": true
+        }
+      ],
+      "callModal": {
+        "url": "http://localhost:18765/fixture.html#/chat",
+        "peer": "用户 13800000003",
+        "mic": "麦克风: Fake Default Audio Input (live)",
+        "locale": "IM_LOCALE: zh-CN",
+        "display": "block",
+        "visibility": "visible",
+        "rect": {
+          "x": 1056,
+          "y": 566,
+          "width": 312,
+          "height": 192,
+          "top": 566,
+          "right": 1368,
+          "bottom": 758,
+          "left": 1056
+        }
+      }
+    },
+    {
+      "count": 22,
+      "succeeded": 22,
+      "failed": 0,
+      "expectFailed": 0,
+      "stopped": false,
+      "steps": [
+        {
+          "index": 0,
+          "command": "go_to_url",
+          "ok": true
+        },
+        {
+          "index": 1,
+          "command": "bring_to_front",
+          "ok": true
+        },
+        {
+          "index": 2,
+          "command": "set_local_storage",
+          "ok": true
+        },
+        {
+          "index": 3,
+          "command": "reload",
+          "ok": true
+        },
+        {
+          "index": 4,
+          "command": "input_text_by_selector",
+          "ok": true
+        },
+        {
+          "index": 5,
+          "command": "input_text_by_selector",
+          "ok": true
+        },
+        {
+          "index": 6,
+          "command": "click_element_by_role",
+          "ok": true
+        },
+        {
+          "index": 7,
+          "command": "wait_for_function",
+          "ok": true
+        },
+        {
+          "index": 8,
+          "command": "wait_for_element",
+          "ok": true
+        },
+        {
+          "index": 9,
+          "command": "click_element_by_selector",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": "block"
+          }
+        },
+        {
+          "index": 10,
+          "command": "click_element_by_selector",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": true
+          }
+        },
+        {
+          "index": 11,
+          "command": "input_text_by_selector",
+          "ok": true
+        },
+        {
+          "index": 12,
+          "command": "click_element_by_role",
+          "ok": true
+        },
+        {
+          "index": 13,
+          "command": "wait_for_element",
+          "ok": true
+        },
+        {
+          "index": 14,
+          "command": "click_element_by_role",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": false
+          }
+        },
+        {
+          "index": 15,
+          "command": "wait_for_element",
+          "ok": true
+        },
+        {
+          "index": 16,
+          "command": "click_element_by_selector",
+          "ok": true
+        },
+        {
+          "index": 17,
+          "command": "click_element_by_selector",
+          "ok": true
+        },
+        {
+          "index": 18,
+          "command": "wait_for_element",
+          "ok": true,
+          "expect": {
+            "passed": true,
+            "actual": "麦克风: Fake Default Audio Input (live)"
+          }
+        },
+        {
+          "index": 19,
+          "command": "execute_js",
+          "ok": true
+        },
+        {
+          "index": 20,
+          "command": "get_console_logs",
+          "ok": true
+        },
+        {
+          "index": 21,
+          "command": "screenshot",
+          "ok": true
+        }
+      ],
+      "callModal": {
+        "url": "http://localhost:18765/fixture.html#/chat",
+        "peer": "用户 13800000003",
+        "mic": "麦克风: Fake Default Audio Input (live)",
+        "locale": "IM_LOCALE: zh-CN",
+        "display": "block",
+        "visibility": "visible",
+        "rect": {
+          "x": 1056,
+          "y": 566,
+          "width": 312,
+          "height": 192,
+          "top": 566,
+          "right": 1368,
+          "bottom": 758,
+          "left": 1056
+        }
+      }
+    }
+  ]
+}

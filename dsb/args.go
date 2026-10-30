@@ -158,6 +158,7 @@ var subcommandSpecs = map[string][]argSpec{
 			help: "auto/chromium/chrome/edge/firefox"},
 		{names: []string{"--headless"}, dest: "headless", help: "使用无头模式(默认显示浏览器窗口);不能与 --headful 同用"},
 		{names: []string{"--headful"}, dest: "headful", help: "显示浏览器窗口(默认行为,保留兼容旧命令);不能与 --headless 同用"},
+		{names: []string{"--fake-media"}, dest: "fake_media", help: "用假麦克风/摄像头并自动同意媒体授权(语音/视频通话测试);仅 Chromium 系,浏览器启动时生效"},
 	},
 	"close": {
 		{names: []string{"--close-browser"}, dest: "close_browser", help: "显式关闭浏览器;仅允许没有其他任务时使用"},
@@ -308,6 +309,7 @@ type Args struct {
 	SourceProfileDirectory *string
 	Headful                bool
 	Headless               bool
+	FakeMedia              bool
 	Params                 *string
 	Param                  []string
 	RetrySpur              bool
@@ -833,6 +835,7 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.Verbose = flags["verbose"]
 	args.Headful = flags["headful"]
 	args.Headless = flags["headless"]
+	args.FakeMedia = flags["fake_media"]
 	args.RetrySpur = flags["retry_on_spurious"]
 	args.KeepGoing = flags["keep_going"]
 	args.StopExpect = flags["stop_on_expect_failure"]

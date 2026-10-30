@@ -2,6 +2,8 @@ package nexus.io.ai.browser.service;
 
 import java.awt.Dimension;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,6 +17,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -499,6 +502,17 @@ public class PlaywrightService {
   }
 
   public long start(Long id, boolean headless, String browser, Boolean networkRecording, ProfileSelection selection) {
+    return start(id, headless, browser, networkRecording, selection, null);
+  }
+
+  /**
+   * Same as above, plus fake media capture.
+   *
+   * @param fakeMedia true = launch Chromium with {@link #FAKE_MEDIA_ARGS}; false = require a browser
+   *                  without them; null = reuse whatever the shared browser already has
+   */
+  public long start(Long id, boolean headless, String browser, Boolean networkRecording, ProfileSelection selection,
+      Boolean fakeMedia) {
     synchronized (PlaywrightService.class) {
       BrowserProfile profile = Aop.get(BrowserProfileService.class).resolve(selection);
       if (profile != null) {
@@ -508,11 +522,12 @@ public class PlaywrightService {
         }
         browser = "chrome";
       }
-      return startSelected(id, headless, browser, networkRecording, profile);
+      return startSelected(id, headless, browser, networkRecording, profile, fakeMedia);
     }
   }
 
-  private long startSelected(Long id, boolean headless, String browser, Boolean networkRecording, BrowserProfile profile) {
+  private long startSelected(Long id, boolean headless, String browser, Boolean networkRecording, BrowserProfile profile,
+      Boolean fakeMedia) {
     BrowserChoice requested = null;
     if (browser != null && !browser.isBlank()) {
       requested = BrowserChoice.parse(browser);
@@ -530,7 +545,25 @@ public class PlaywrightService {
     if (profile != null) {
       existedBefore.add(Path.of(profile.userDataDir()).toAbsolutePath().normalize().toString());
     }
-    SharedBrowser shared = sharedBrowser(headless, requested, profile);
+    if (Boolean.TRUE.equals(fakeMedia) && BrowserChoice.resolve(requested).isFirefox()) {
+      throw new IllegalArgumentException("fakeMedia only supports Chromium-family browsers (chrome/chromium/edge)");
+    }
+    SharedBrowser current = sharedBrowser;
+    if (fakeMedia != null && current != null && current.fakeMedia != fakeMedia) {
+      throw new IllegalStateException("fakeMedia=" + fakeMedia + " differs from the retained browser ("
+          + current.describe() + "). Media flags are fixed at launch: finish active tasks and close the browser with "
+          + "closeBrowser=true, then start again; or omit fakeMedia to reuse the current browser.");
+    }
+    SharedBrowser shared;
+    pendingFakeMedia.set(Boolean.TRUE.equals(fakeMedia));
+    try {
+      shared = sharedBrowser(headless, requested, profile);
+    } finally {
+      pendingFakeMedia.remove();
+    }
+    if (shared != current) {
+      shared.fakeMedia = Boolean.TRUE.equals(fakeMedia);
+    }
     applyProfileHistory(shared, existedBefore);
     if (networkRecording != null) {
       // claimPage 会读这个字段决定「认领页签时挂不挂监听器」,所以必须在它之前写好
@@ -566,6 +599,22 @@ public class PlaywrightService {
    * 它在同一次 start 调用内写读、读完即清,不会跨请求串味。
    */
   private static final ThreadLocal<String> pendingRecorderMode = new ThreadLocal<>();
+
+  /**
+   * Chromium flags for fake media capture: auto-accept getUserMedia prompts and feed a synthetic
+   * microphone/camera, so voice/video call flows work headless or on machines without devices.
+   */
+  static final List<String> FAKE_MEDIA_ARGS = List.of("--use-fake-ui-for-media-stream",
+      "--use-fake-device-for-media-stream");
+
+  /**
+   * Carries the start-time fakeMedia choice into {@link #chromiumArgs()} during a launch.
+   *
+   * <p>
+   * Same pattern as {@link #pendingRecorderMode}: launch runs synchronously under the class lock in
+   * the calling thread, so the value is written and cleared within one start call.
+   */
+  private static final ThreadLocal<Boolean> pendingFakeMedia = new ThreadLocal<>();
 
   // ==================== profile 的登录态来历 ====================
 
@@ -777,6 +826,8 @@ public class PlaywrightService {
     volatile String cdpProtocolVersion;
     /** CDP 库补设置的实际结果(下载目录 / 权限),成功与失败都写,进回执便于排查静默退化 */
     volatile List<String> cdpNotes;
+    /** Launched with {@link PlaywrightService#FAKE_MEDIA_ARGS} (synthetic microphone/camera) */
+    volatile boolean fakeMedia;
     /**
      * 接上时就已经存在的页签
      *
@@ -837,7 +888,8 @@ public class PlaywrightService {
 
     /** 一句话说清「现在是哪个浏览器」,用在「不能中途切换」的报错里 */
     String describe() {
-      return "browser=" + resolvedType.id() + "，headless=" + headless + "，profile=" + profileDir;
+      return "browser=" + resolvedType.id() + "，headless=" + headless + "，fakeMedia=" + fakeMedia + "，profile="
+          + profileDir;
     }
   }
 
@@ -1111,6 +1163,9 @@ public class PlaywrightService {
       }
     }
     args.addAll(extra);
+    if (!userProfile && explicitDirectory == null) {
+      seedAutomationPrefs(profileDir);
+    }
     ChromeLauncher.Launched launched = ChromeLauncher.launch(executable, profileDir, args, CDP_LAUNCH_TIMEOUT_MS);
     try {
       Browser browser = playwright().chromium().connectOverCDP(launched.endpoint(),
@@ -1143,6 +1198,47 @@ public class PlaywrightService {
     } catch (RuntimeException e) {
       ChromeLauncher.stop(launched.process());
       throw e;
+    }
+  }
+
+  /**
+   * Turn off password manager UI in a managed profile before Chrome starts
+   *
+   * <p>
+   * The password breach dialog ("Change your password") and the save-password bubble are browser-native:
+   * the DOM cannot see them, yet they swallow trusted mouse input, so logging in with a test password
+   * silently blocks every later native click. {@code --disable-features=PasswordLeakDetection} is ignored
+   * by current Chrome, so the profile prefs are set instead. Only managed profiles are touched; the
+   * user's own Chrome profile keeps its settings. Best-effort: a failure is logged and never blocks start.
+   */
+  static void seedAutomationPrefs(Path profileDir) {
+    Path prefsFile = profileDir.resolve("Default").resolve("Preferences");
+    try {
+      JSONObject prefs = Files.exists(prefsFile)
+          ? JSON.parseObject(Files.readString(prefsFile, StandardCharsets.UTF_8))
+          : new JSONObject();
+      if (prefs == null) {
+        prefs = new JSONObject();
+      }
+      JSONObject profile = prefs.getJSONObject("profile");
+      if (profile == null) {
+        profile = new JSONObject();
+        prefs.put("profile", profile);
+      }
+      boolean changed = !Boolean.FALSE.equals(prefs.getBoolean("credentials_enable_service"))
+          || !Boolean.FALSE.equals(profile.getBoolean("password_manager_enabled"))
+          || !Boolean.FALSE.equals(profile.getBoolean("password_manager_leak_detection"));
+      if (!changed) {
+        return;
+      }
+      prefs.put("credentials_enable_service", false);
+      profile.put("password_manager_enabled", false);
+      profile.put("password_manager_leak_detection", false);
+      Files.createDirectories(prefsFile.getParent());
+      Files.writeString(prefsFile, prefs.toJSONString(), StandardCharsets.UTF_8);
+    } catch (IOException | RuntimeException e) {
+      log.warn("Could not disable password manager prefs in {} (dialogs may block native clicks): {}", prefsFile,
+          briefMessage(e.getMessage()));
     }
   }
 
@@ -1231,6 +1327,16 @@ public class PlaywrightService {
       instance.recorderMode = pending;
     }
     claimPage(instance, page);
+    if (!browser.headless) {
+      // In CDP mode the task page opens in a new window behind the startup window. An occluded window
+      // silently drops trusted mouse input (native/mouse clicks report ok but no DOM event fires),
+      // so raise the task page once it is claimed.
+      try {
+        page.bringToFront();
+      } catch (PlaywrightException e) {
+        log.debug("bringToFront for task {} failed: {}", taskId, briefMessage(e.getMessage()));
+      }
+    }
     return instance;
   }
 
@@ -1304,7 +1410,8 @@ public class PlaywrightService {
         .set("type", browser.resolvedType.id())
         .set("profileDir", browser.profileDir.toAbsolutePath().toString())
         .set("headless", browser.headless)
-        // cdp = 自己拉进程 + --remote-debugging-port + connectOverCDP(本机 Chrome / Edge 都走这条),
+        .set("fakeMedia", browser.fakeMedia)
+        // cdp =自己拉进程 + --remote-debugging-port + connectOverCDP(本机 Chrome / Edge 都走这条),
         // managed = Playwright 的持久化上下文(内置 Chromium / Firefox)
         .set("mode", browser.browser != null ? "cdp" : "managed");
     // CDP 亲口报的浏览器身份,以及我们用 CDP 库补了哪些 launch 期设置(补失败的也在这)
@@ -1874,6 +1981,9 @@ public class PlaywrightService {
     if (isLinux()) {
       // 容器里 /dev/shm 往往只有 64MB,不加这个 Chrome 会随机崩
       args.add("--disable-dev-shm-usage");
+    }
+    if (Boolean.TRUE.equals(pendingFakeMedia.get())) {
+      args.addAll(FAKE_MEDIA_ARGS);
     }
     return args;
   }
@@ -9073,6 +9183,58 @@ public class PlaywrightService {
     });
   }
 
+  /**
+   * Grant site permissions (for example microphone / camera for voice and video calls) to one origin
+   *
+   * <p>
+   * The browser context is shared by all tasks, so the grant is scoped to a single origin, defaulting to
+   * the current page's origin. Per-origin grants replace that origin's permission set (CDP
+   * {@code Browser.grantPermissions} rejects everything not listed), so the launch-time defaults are
+   * merged in to keep clipboard / notifications working on that site.
+   *
+   * @param permissions Playwright permission names, e.g. {@code microphone}, {@code camera}
+   * @param origin      e.g. {@code http://localhost:18001}; null = current page origin
+   */
+  public RespBodyVo grantPermissions(Long browserId, List<String> permissions, String origin) {
+    return withInstance(browserId, inst -> {
+      String target = origin != null ? origin : originOf(inst.page.url());
+      if (target == null) {
+        return RespBodyVo.fail("grant_permissions failed: the current page has no http(s) origin (" + inst.page.url()
+            + "); navigate to the target site first or pass origin explicitly");
+      }
+      SharedBrowser shared = sharedBrowser;
+      boolean firefox = inst.externalDriver == null && shared != null && shared.resolvedType.isFirefox();
+      Set<String> granted = new LinkedHashSet<>(permissions);
+      granted.addAll(firefox ? BrowserEngine.firefoxPermissions() : List.of("clipboard-read", "clipboard-write",
+          "notifications"));
+      try {
+        inst.context.grantPermissions(new ArrayList<>(granted),
+            new BrowserContext.GrantPermissionsOptions().setOrigin(target));
+        return RespBodyVo.ok(Kv.by("origin", target).set("permissions", granted).set("requested", permissions)
+            .set("note", "Granted on the shared browser context for this origin only"));
+      } catch (PlaywrightException e) {
+        return RespBodyVo.fail("grant_permissions failed: " + briefMessage(e.getMessage()));
+      }
+    });
+  }
+
+  /** scheme://host[:port] of an http(s) URL; null for about:blank, data:, file: and malformed URLs */
+  static String originOf(String url) {
+    if (url == null) {
+      return null;
+    }
+    try {
+      URI uri = new URI(url);
+      String scheme = uri.getScheme();
+      if (uri.getHost() == null || !("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))) {
+        return null;
+      }
+      return scheme.toLowerCase() + "://" + uri.getHost() + (uri.getPort() >= 0 ? ":" + uri.getPort() : "");
+    } catch (URISyntaxException e) {
+      return null;
+    }
+  }
+
   public RespBodyVo setOffline(Long browserId, boolean offline) {
     return withInstance(browserId, inst -> {
       inst.context.setOffline(offline);
@@ -11140,10 +11302,17 @@ public class PlaywrightService {
     closeSharedBrowser();
     SharedBrowser fresh;
     synchronized (PlaywrightService.class) {
-      fresh = browser.selectedProfile == null
-          ? launch(browser.executable, browser.profileDir, browser.userProfile, browser.headless, browser.profileNote,
-              browser.opts, browser.resolvedType)
-          : launchSelectedProfile(browser.headless, browser.selectedProfile);
+      // Keep the media flags of the browser being replaced
+      pendingFakeMedia.set(browser.fakeMedia);
+      try {
+        fresh = browser.selectedProfile == null
+            ? launch(browser.executable, browser.profileDir, browser.userProfile, browser.headless, browser.profileNote,
+                browser.opts, browser.resolvedType)
+            : launchSelectedProfile(browser.headless, browser.selectedProfile);
+      } finally {
+        pendingFakeMedia.remove();
+      }
+      fresh.fakeMedia = browser.fakeMedia;
       sharedBrowser = fresh;
     }
     instance.detached = false;

@@ -132,7 +132,7 @@ dsb batch commands.json --async --wait --summary
 | 鼠标 | `mouse_move`、`mouse_down`、`mouse_up`、`mouse_wheel`、`mouse_click`、`mouse_click_by_selector` |
 | 截图与 PDF | `screenshot`、`get_element_screenshot`、`pdf` |
 | Cookie 与本地存储 | `get_cookies`、`set_cookie`、`clear_cookies`、`get_local_storage`、`set_local_storage`、`clear_local_storage` |
-| 浏览器设置 | `set_viewport`、`set_geolocation`、`set_offline`、`set_headers`、`set_credentials`、`set_media` |
+| 浏览器设置 | `set_viewport`、`set_geolocation`、`set_offline`、`set_headers`、`set_credentials`、`set_media`、`grant_permissions` |
 | 弹窗与控制台 | `get_dialog`、`get_js_dialog`、`clear_dialog`、`clear_js_dialog`、`set_dialog_behavior`、`get_modals`、`close_modal`、`get_console_logs`、`clear_console_logs` |
 | 网络 | `route`、`unroute`、`get_requests`、`wait_for_response`、`get_response_body` |
 | 其它与服务自省 | `extract_structured_data`、`extract_markdown`、`find_text`、`list_tables`、`download_image`、`execute_js`、`list_methods`、`get_config`、`list_tasks`、`get_diagnostics`、`cancel_command`、`cleanup`、`list_recipes`、`run_recipe`、`get_job`、`cancel_job`、`list_jobs` |

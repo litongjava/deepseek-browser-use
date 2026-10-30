@@ -8,7 +8,7 @@
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法 |
+| `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选), `fakeMedia`(bool，可选) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法。`fakeMedia: true` = 假麦克风/摄像头（语音/视频通话测试），启动时固定，回读 `data.browser.fakeMedia` |
 | `close` | `id`, `closeBrowser`(bool，默认 false) | 结束任务；最后一个任务保留浏览器和页面。显式 `closeBrowser:true` 才关闭浏览器，有其他任务时拒绝；任务已结束后仍可显式关闭闲置浏览器 |
 
 ### 导航与页面信息
@@ -321,6 +321,7 @@ dsb run mouse_up -p button=left
 | `set_headers` | `id`, `headersJson` | 形如 `{"X-Key":"v"}` |
 | `set_credentials` | `id`, `username`, `password` | HTTP 基本认证。凭据只能在创建上下文时设置，所以**会重建整个浏览器**：当前页面丢失，**且会失败** —— 浏览器是所有任务共用的，只允许在「当前只有这一个任务且没有保留的用户数据页」时调用；走 CDP 那条路时（`data.browser.mode=cdp`：用户自己的 Chrome profile 或 `browser=edge`）不支持，会直接返回失败原因，需要基本认证就改用 `browser=chrome`／`chromium` |
 | `set_media` | `id`, `colorScheme` | `light` / `dark` / `no-preference` |
+| `grant_permissions` | `id`, `permissions`(数组，如 `["microphone"]`), `origin`(可选，默认当前页) | 只授权给该 origin；无头或无设备时还需 `start --fake-media` |
 
 ### 弹窗与控制台
 

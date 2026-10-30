@@ -1,0 +1,32 @@
+{
+  "stopOnError": true,
+  "stopOnExpectFailure": true,
+  "commands": [
+    {"go_to_url": {"url": "http://localhost:18765/fixture.html"}},
+    {"bring_to_front": {}},
+    {"set_local_storage": {"key": "IM_LOCALE", "value": "zh-CN"}},
+    {"reload": {}},
+    {"input_text_by_selector": {"selector": "input[placeholder=\"请输入手机号\"]", "text": "13800000001"}},
+    {"input_text_by_selector": {"selector": "input[type=\"password\"]", "text": "123456"}},
+    {"click_element_by_role": {"role": "button", "name": "登录"}},
+    {"wait_for_function": {"expression": "() => location.hash === '#/chat'", "timeoutSeconds": 40}},
+    {"wait_for_element": {"selector": "#chat.active img.app-no-drag.ml-8", "timeoutSeconds": 15}},
+    {"click_element_by_selector": {"selector": "img.app-no-drag.ml-8"},
+     "expect": {"js": "getComputedStyle(document.querySelector('#plusMenu')).display", "equals": "block"}},
+    {"click_element_by_selector": {"selector": "#plusMenu > div:nth-child(2)"},
+     "expect": {"js": "document.querySelector('#addFriend').classList.contains('open')", "equals": true}},
+    {"input_text_by_selector": {"selector": "#addFriend input[placeholder=\"请输入\"]", "text": "13800000003"}},
+    {"click_element_by_role": {"role": "button", "name": "确认"}},
+    {"wait_for_element": {"selector": "#sendBtn", "timeoutSeconds": 15}},
+    {"click_element_by_role": {"role": "button", "name": "发送消息"},
+     "expect": {"js": "document.querySelector('#addFriend').classList.contains('open')", "equals": false}},
+    {"wait_for_element": {"selector": "img[alt=\"通话\"]", "timeoutSeconds": 15}},
+    {"click_element_by_selector": {"selector": "img[alt=\"通话\"]"}},
+    {"click_element_by_selector": {"selector": "#callMenu > div:nth-child(1)"}},
+    {"wait_for_element": {"selector": ".rtc-single-modal", "timeoutSeconds": 10},
+     "expect": {"js": "document.querySelector('.rtc-single-modal .mic').textContent", "contains": "(live)"}},
+    {"execute_js": {"body": "() => { const m = document.querySelector('.rtc-single-modal'); const s = getComputedStyle(m); return { url: location.href, peer: m.querySelector('.peer').textContent, mic: m.querySelector('.mic').textContent, locale: m.querySelector('.locale').textContent, display: s.display, visibility: s.visibility, rect: m.getBoundingClientRect().toJSON() }; }"}},
+    {"get_console_logs": {}},
+    {"screenshot": {}}
+  ]
+}

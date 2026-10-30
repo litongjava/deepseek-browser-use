@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Voice call batch fixture</title>
+<style>
+  body { font-family: sans-serif; margin: 0; background: #f4f5f7; }
+  .view { display: none; padding: 24px; } .view.active { display: block; }
+  .card { background: #fff; border-radius: 8px; padding: 20px; width: 360px; box-shadow: 0 2px 8px #0002; }
+  input { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; padding: 8px; }
+  button { padding: 6px 16px; margin-top: 8px; cursor: pointer; }
+  header { display: flex; align-items: center; gap: 12px; }
+  img.icon { width: 28px; height: 28px; cursor: pointer; background: #1677ff; border-radius: 6px; }
+  .menu { position: absolute; background: #fff; border: 1px solid #ddd; padding: 4px 0; display: none; }
+  .menu div { padding: 6px 16px; cursor: pointer; } .menu div:hover { background: #eef; }
+  .ant-modal-wrap { position: fixed; inset: 0; background: #0005; display: none; align-items: center; justify-content: center; }
+  .ant-modal-wrap.open { display: flex; }
+  .rtc-single-modal { position: fixed; right: 24px; bottom: 24px; width: 280px; background: #222; color: #fff; padding: 16px; border-radius: 8px; }
+  #error { color: #c00; }
+</style>
+</head>
+<body>
+<!-- Login: same selectors as the real app flow (placeholder, password, exact button name) -->
+<section id="login" class="view active">
+  <div class="card">
+    <h2>登录</h2>
+    <input placeholder="请输入手机号" autocomplete="off">
+    <input type="password" placeholder="请输入密码">
+    <button id="loginBtn">登录</button>
+    <p id="error"></p>
+  </div>
+</section>
+
+<!-- Chat: rendered after an async delay so the batch must wait instead of sleeping -->
+<section id="chat" class="view">
+  <header><h2>消息</h2><img class="icon app-no-drag ml-8" alt="更多" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></header>
+  <div class="menu" id="plusMenu"><div>发起群聊</div><div>添加好友</div></div>
+  <div id="conversation" style="display:none">
+    <h3 id="peer"></h3>
+    <img class="icon" alt="通话" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+    <div class="menu" id="callMenu"><div>语音通话</div><div>视频通话</div></div>
+    <p id="callError"></p>
+  </div>
+</section>
+
+<div class="ant-modal-wrap" id="addFriend">
+  <div class="card">
+    <h3>添加好友</h3>
+    <input placeholder="请输入">
+    <button id="confirmBtn">确认</button>
+    <div id="found" style="display:none"><p id="foundName"></p><button id="sendBtn">发送消息</button></div>
+  </div>
+</div>
+
+<script>
+  const $ = (s) => document.querySelector(s);
+  const show = (id) => document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === id));
+  const locale = localStorage.getItem('IM_LOCALE');
+
+  $('#loginBtn').onclick = () => {
+    const phone = $('input[placeholder="请输入手机号"]').value;
+    const password = $('input[type="password"]').value;
+    if (!/^1\d{10}$/.test(phone) || password.length < 6) {
+      $('#error').textContent = '手机号或密码错误';
+      return;
+    }
+    // Simulate a slow login API before routing
+    setTimeout(() => { location.hash = '#/chat'; }, 600);
+  };
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#/chat') {
+      setTimeout(() => show('chat'), 800);
+    }
+  });
+
+  $('img[alt="更多"]').onclick = () => { $('#plusMenu').style.display = 'block'; };
+  $('#plusMenu').children[1].onclick = () => {
+    $('#plusMenu').style.display = 'none';
+    $('#addFriend').classList.add('open');
+  };
+  $('#confirmBtn').onclick = () => {
+    const target = $('#addFriend input').value;
+    setTimeout(() => {
+      $('#foundName').textContent = '用户 ' + target;
+      $('#found').style.display = 'block';
+    }, 500);
+  };
+  $('#sendBtn').onclick = () => {
+    $('#addFriend').classList.remove('open');
+    $('#peer').textContent = $('#foundName').textContent;
+    setTimeout(() => { $('#conversation').style.display = 'block'; }, 400);
+  };
+  $('img[alt="通话"]').onclick = () => { $('#callMenu').style.display = 'block'; };
+  $('#callMenu').children[0].onclick = async () => {
+    $('#callMenu').style.display = 'none';
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const track = stream.getAudioTracks()[0];
+      const modal = document.createElement('div');
+      modal.className = 'rtc-single-modal';
+      modal.innerHTML = '<b>语音通话中</b><p class="peer"></p><p class="mic"></p><p class="locale"></p>';
+      modal.querySelector('.peer').textContent = $('#peer').textContent;
+      modal.querySelector('.mic').textContent = '麦克风: ' + track.label + ' (' + track.readyState + ')';
+      modal.querySelector('.locale').textContent = 'IM_LOCALE: ' + locale;
+      document.body.appendChild(modal);
+    } catch (e) {
+      $('#callError').textContent = '无法开始通话: ' + e.name;
+    }
+  };
+</script>
+</body>
+</html>

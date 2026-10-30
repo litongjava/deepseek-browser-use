@@ -109,6 +109,22 @@ dsb --port 10049 --id 1001 batch confirm.json
 - 断言没过时：批次整体 `code:0`，`data.expectFailed` 计数，`msg` 指出是哪一步的断言没过；**命令本身不算失败**（`data.failed` 仍是 0），`data.note` 会说明「命令都执行成功，是断言没过」。
 - 断言脚本自己报错（写错选择器等）也记成 `passed:false`，并把错误放在 `expectResult.error`。
 
+### 把 Playwright 脚本改写成批次
+
+dsb 不执行 Node/Playwright 脚本，按下表逐步改写成 `commands`：
+
+| 脚本写法 | 批次写法 |
+| --- | --- |
+| `addInitScript` 写 localStorage | `set_local_storage` 后 `reload` |
+| `getByPlaceholder(...).fill` | `input_text_by_selector`，选择器 `input[placeholder="..."]` |
+| `getByRole('button',{name})` | `click_element_by_role`；同名多个时改用唯一选择器 |
+| `waitForURL('**/#/chat')` | hash 路由用 `wait_for_function`：`() => location.hash === '#/chat'` |
+| `waitForTimeout` / 轮询循环 | `wait_for_element` 等具体元素，不用固定等待 |
+| `page.on('console')` | 末尾 `get_console_logs` |
+| 需要麦克风/摄像头 | `dsb start --fake-media`，再按需 `grant_permissions` |
+
+关键动作带 `expect` 读业务状态。`dsb batch` 不支持 `--out`；`--async --wait --json` 依次输出提交回执和最终结果，取最后一个 JSON 对象。
+
 ## 八、执行 JavaScript
 
 ```json

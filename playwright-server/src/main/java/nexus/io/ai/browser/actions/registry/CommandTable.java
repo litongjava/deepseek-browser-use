@@ -3,6 +3,7 @@ package nexus.io.ai.browser.actions.registry;
 import nexus.io.ai.browser.model.ProfileSelection;
 import nexus.io.ai.browser.model.CloneProfileRequest;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,9 +71,11 @@ public class CommandTable {
       // 网络记录模式可选:true = 从一开始就记请求/响应;false = 这个任务不记;不传 = 按全局配置
       // (browser.network.record,默认 lazy:第一次要读网络数据时才挂监听器)
       Boolean networkRecording = a.getBoolean("networkRecording");
+      // Fake microphone/camera for voice/video call testing; fixed at browser launch
+      Boolean fakeMedia = a.getBoolean("fakeMedia");
       long newId = svc.start(id, Boolean.TRUE.equals(headless), requested, networkRecording,
           new ProfileSelection(a.getString("profile"), a.getString("userDataDir"),
-              a.getString("profileDirectory")));
+              a.getString("profileDirectory")), fakeMedia);
       Kv data = Kv.by("id", newId);
       data.set("networkRecording", networkRecording == null
           ? PlaywrightService.networkRecordMode() + "(按全局配置)"
@@ -288,6 +291,8 @@ public class CommandTable {
     put("set_headers", (svc, id, a) -> svc.setHeaders(id, reqStr(a, "headersJson")));
     put("set_credentials", (svc, id, a) -> svc.setCredentials(id, reqStr(a, "username"), reqStr(a, "password")));
     put("set_media", (svc, id, a) -> svc.setMedia(id, reqStr(a, "colorScheme")));
+    // permissions: e.g. ["microphone"]; origin defaults to the current page origin
+    put("grant_permissions", (svc, id, a) -> svc.grantPermissions(id, reqStrList(a, "permissions"), optStr(a, "origin")));
 
     // ---------- 弹窗与控制台 ----------
     // 注意:下面两个是浏览器**原生**对话框(window.alert/confirm/prompt);页面里的 DOM 弹窗
@@ -676,6 +681,22 @@ public class CommandTable {
       throw new IllegalArgumentException(missingParamMessage(args, key));
     }
     return value;
+  }
+
+  private static List<String> reqStrList(JSONObject args, String key) {
+    JSONArray array = args.getJSONArray(key);
+    if (array == null || array.isEmpty()) {
+      throw new IllegalArgumentException(missingParamMessage(args, key));
+    }
+    List<String> values = new ArrayList<>();
+    for (int i = 0; i < array.size(); i++) {
+      String value = array.getString(i);
+      if (value == null || value.isBlank()) {
+        throw new IllegalArgumentException(key + " must not contain empty values");
+      }
+      values.add(value.trim());
+    }
+    return values;
   }
 
   private static String optStr(JSONObject args, String key) {

@@ -1,4 +1,4 @@
-# 坑与限制（81 条）
+# 坑与限制（83 条）
 
 > 本文是 [SKILL.md](../SKILL.md) 的分册，按需阅读。SKILL.md 开头的「症状 → 命令」表里提到的「第 N 条」就是本文的编号。
 
@@ -697,6 +697,9 @@
     1. 聚焦输入框：`editor.focus()`；
     2. 底层插入文本：`document.execCommand('insertText', false, text)`；
     3. 派发回车按键：`dsb run send_keys -p keys=Enter`（或使用新支持的别名 `press_key -p key=Enter`）。
+
+82. **有窗口时点击回执 `ok` 但页面没反应**：浏览器原生弹窗（如密码泄露提醒）或窗口遮挡会吞掉 `native`/`mouse` 点击，DOM 里看不到。先 `bring_to_front`；仍无效就截整个桌面找原生弹窗，必要时临时用 `mode: "js"` 验证。
+83. **hash 路由别用 `wait_for_url` 通配符**：`*` 不跨 `/`，`**#/chat` 匹配不上 `page.html#/chat`。改用 `wait_for_function` 判断 `location.hash`。
 
 ## 截图与重试补充（2026-10-05）
 

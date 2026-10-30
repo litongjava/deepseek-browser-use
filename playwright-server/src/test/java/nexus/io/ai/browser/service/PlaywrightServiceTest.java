@@ -13,6 +13,9 @@ import java.util.List;
 
 import org.junit.Test;
 
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
+
 public class PlaywrightServiceTest {
 
   @Test
@@ -160,6 +163,49 @@ public class PlaywrightServiceTest {
     } finally {
       System.clearProperty(PlaywrightService.KEY_SANDBOX);
     }
+  }
+
+  /** Fake media flags are opt-in per launch and must never leak into a default start */
+  @Test
+  public void fakeMediaFlagsAreOptIn() {
+    List<String> args = PlaywrightService.cdpArgs(true, BrowserChoice.CHROME);
+    for (String flag : PlaywrightService.FAKE_MEDIA_ARGS) {
+      assertFalse("default launch must not fake media: " + flag, args.contains(flag));
+    }
+    assertEquals(List.of("--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"),
+        PlaywrightService.FAKE_MEDIA_ARGS);
+  }
+
+  /** Managed profiles get password manager UI disabled without losing existing prefs */
+  @Test
+  public void seedAutomationPrefsKeepsExistingPrefs() throws Exception {
+    Path profile = Files.createTempDirectory("dsb-prefs");
+    Path prefs = profile.resolve("Default").resolve("Preferences");
+    Files.createDirectories(prefs.getParent());
+    Files.writeString(prefs, "{\"profile\":{\"name\":\"keep\"},\"intl\":{\"accept_languages\":\"zh-CN\"}}");
+    PlaywrightService.seedAutomationPrefs(profile);
+    JSONObject saved = JSON.parseObject(Files.readString(prefs));
+    assertEquals("keep", saved.getJSONObject("profile").getString("name"));
+    assertEquals("zh-CN", saved.getJSONObject("intl").getString("accept_languages"));
+    assertEquals(Boolean.FALSE, saved.getBoolean("credentials_enable_service"));
+    assertEquals(Boolean.FALSE, saved.getJSONObject("profile").getBoolean("password_manager_enabled"));
+    assertEquals(Boolean.FALSE, saved.getJSONObject("profile").getBoolean("password_manager_leak_detection"));
+
+    Path fresh = Files.createTempDirectory("dsb-prefs-fresh");
+    PlaywrightService.seedAutomationPrefs(fresh);
+    assertTrue(Files.exists(fresh.resolve("Default").resolve("Preferences")));
+  }
+
+  /** grant_permissions defaults to the page origin; non-http pages have none */
+  @Test
+  public void originOfKeepsSchemeHostAndExplicitPort() {
+    assertEquals("http://localhost:18001", PlaywrightService.originOf("http://localhost:18001/#/chat"));
+    assertEquals("https://example.com", PlaywrightService.originOf("https://example.com/a/b?q=1"));
+    assertEquals("https://example.com:8443", PlaywrightService.originOf("HTTPS://example.com:8443/x"));
+    assertEquals(null, PlaywrightService.originOf("about:blank"));
+    assertEquals(null, PlaywrightService.originOf("data:text/html,hi"));
+    assertEquals(null, PlaywrightService.originOf("file:///tmp/a.html"));
+    assertEquals(null, PlaywrightService.originOf(null));
   }
 
   /** CDP 那条路(自己拉浏览器)不经过 Playwright,关沙箱时得自己补 --no-sandbox,开沙箱时不能补 */
