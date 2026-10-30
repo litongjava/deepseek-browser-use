@@ -122,7 +122,7 @@ dsb batch commands.json --async --wait --summary
 
 | 用途 | 方法 |
 | --- | --- |
-| 实例生命周期 | `start`、`close`、`shutdown` |
+| 实例生命周期 | `start`、`close`、`shutdown`；外部 CDP 目标用 `targets` 列出、`attach` 接入 |
 | 导航与页面信息 | `navigate`、`go_to_url`、`go_back`、`go_forward`、`reload`、`get_url`、`get_title`、`get_browser_state`、`list_frames`、`wait` |
 | 元素交互 | `click_element_by_index`、`double_click_element_by_index`、`hover_element_by_index`、`focus_element_by_index`、`check_element_by_index`、`uncheck_element_by_index`、`input_text`、`type_text`、`send_keys`、`key_down`、`key_up`、`upload_file`、`drag_element_by_index`、`get_dropdown_options`、`select_dropdown_option`、`scroll`、`scroll_to_text`、`clear_text` |
 | 读取元素信息与状态 | `get_element_text`、`get_element_html`、`get_element_value`、`get_element_attribute`、`get_element_listeners`、`get_element_count`、`get_element_box`、`is_visible`、`is_enabled`、`is_checked` |

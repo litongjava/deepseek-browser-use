@@ -15,7 +15,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import com.jfinal.kit.Kv;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.Browser;
-import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.BrowserType.LaunchPersistentContextOptions;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Request;
@@ -28,8 +27,7 @@ public class BrowserInstance {
   public final long id;
   public BrowserContext context;
   public Page page;
-  // Dedicated driver ownership allows detach without closing the external host.
-  public Playwright externalDriver;
+  // External CDP connection on the shared driver; closing it detaches without closing the external host.
   public Browser externalBrowser;
   public Kv externalIdentity;
   public Path profileDir;

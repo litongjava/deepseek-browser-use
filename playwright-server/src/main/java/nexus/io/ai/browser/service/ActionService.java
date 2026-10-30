@@ -863,7 +863,7 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     String readback = args.getString("readback");
     JSONObject precondition = args.getJSONObject("precondition");
     BrowserInstance attached = id == null ? null : svc.getInstance(id);
-    if (attached != null && attached.externalDriver != null && !"close".equals(method)) {
+    if (attached != null && attached.externalBrowser != null && !"close".equals(method)) {
       try {
         attached.page.evaluate("() => location.href");
       } catch (RuntimeException disconnected) {

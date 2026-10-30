@@ -388,10 +388,12 @@ public class PlaywrightService {
     if (!listOnly && INSTANCES.containsKey(taskId)) {
       return RespBodyVo.fail("Task already exists; close it before attaching");
     }
-    Playwright driver = Playwright.create();
+    // Reuse the shared driver; closing a connectOverCDP Browser only drops this connection and leaves the
+    // external host and its pages running.
+    Browser browser = null;
     boolean retained = false;
     try {
-      Browser browser = driver.chromium().connectOverCDP(endpoint,
+      browser = playwright().chromium().connectOverCDP(endpoint,
           new BrowserType.ConnectOverCDPOptions().setTimeout(10000));
       List<Kv> targets = new ArrayList<>();
       List<Page> matches = new ArrayList<>();
@@ -423,7 +425,6 @@ public class PlaywrightService {
       }
       Page page = matches.get(0);
       BrowserInstance instance = new BrowserInstance(taskId, page.context(), page, Path.of("."), null);
-      instance.externalDriver = driver;
       instance.externalBrowser = browser;
       instance.externalIdentity = Kv.by("mode", "external-cdp").set("lifecycleOwner", "external")
           .set("targetId", ids.get(0)).set("url", page.url()).set("targetType", "page")
@@ -438,7 +439,9 @@ public class PlaywrightService {
       return RespBodyVo.fail("External CDP attach failed; enable the debugging port and verify endpoint: "
           + briefMessage(error.getMessage()));
     } finally {
-      if (!retained) { driver.close(); }
+      if (!retained && browser != null) {
+        browser.close();
+      }
     }
   }
 
@@ -2164,7 +2167,7 @@ public class PlaywrightService {
     // (这一族异常在真实站点上会稳定复现:几条毫不相干的命令报同一个已释放的对象)。
     // 下载的判定改成纯服务端地数下载目录,见 countDownloadFiles —— 不碰 Playwright 对象,少一份分发面。
     // 这个页签弹出的新窗口归同一个任务,别人看不见
-    listen(inst, page, page::onPopup, page::offPopup, popup -> { if (inst.externalDriver == null) { claimPage(inst, popup); } });
+    listen(inst, page, page::onPopup, page::offPopup, popup -> { if (inst.externalBrowser == null) { claimPage(inst, popup); } });
     // 页签被人工关掉(共用浏览器时很常见)后要有人接管「当前页」
     listen(inst, page, page::onClose, page::offClose, closed -> onPageClosed(inst, closed));
   }
@@ -2187,7 +2190,7 @@ public class PlaywrightService {
 
   /** 当前页没了:换成任务里还活着的页签,一个都不剩就补一个新的 */
   private void recoverCurrentPage(BrowserInstance inst) {
-    if (inst.externalDriver != null) { return; }
+    if (inst.externalBrowser != null) { return; }
     List<Page> live = pagesOf(inst);
     if (!live.isEmpty()) {
       inst.page = live.get(0);
@@ -9203,7 +9206,7 @@ public class PlaywrightService {
             + "); navigate to the target site first or pass origin explicitly");
       }
       SharedBrowser shared = sharedBrowser;
-      boolean firefox = inst.externalDriver == null && shared != null && shared.resolvedType.isFirefox();
+      boolean firefox = inst.externalBrowser == null && shared != null && shared.resolvedType.isFirefox();
       Set<String> granted = new LinkedHashSet<>(permissions);
       granted.addAll(firefox ? BrowserEngine.firefoxPermissions() : List.of("clipboard-read", "clipboard-write",
           "notifications"));
@@ -11188,7 +11191,7 @@ public class PlaywrightService {
   public RespBodyVo close(Long browserId, boolean closeBrowser) {
     synchronized (PlaywrightService.class) {
       BrowserInstance attached = INSTANCES.get(browserId);
-      if (attached != null && attached.externalDriver != null) { return closeTask(browserId); }
+      if (attached != null && attached.externalBrowser != null) { return closeTask(browserId); }
       if (closeBrowser && INSTANCES.keySet().stream().anyMatch(id -> !id.equals(browserId))) {
         return RespBodyVo.fail("Other tasks are active; closeBrowser cannot close their browser");
       }
@@ -11212,11 +11215,11 @@ public class PlaywrightService {
       return RespBodyVo.fail("没有找到对应的浏览器实例：" + browserId);
     }
     inst.detached = true;
-    if (inst.externalDriver != null) {
+    if (inst.externalBrowser != null) {
       try {
         for (Page page : new ArrayList<>(inst.pages)) { detachTaskPage(inst, page); }
       } finally {
-        inst.externalDriver.close();
+        inst.externalBrowser.close();
         inst.pages.clear();
       }
       return RespBodyVo.ok(Kv.by("mode", "external-cdp").set("hostRetained", true)
@@ -11287,7 +11290,7 @@ public class PlaywrightService {
    * 是所有任务共用的,重建会换掉整个 Chrome 进程,所以只允许在「只有这一个任务」时调用。
    */
   public BrowserInstance restartContext(BrowserInstance instance) {
-    if (instance.externalDriver != null) { throw new IllegalStateException("Cannot restart external host"); }
+    if (instance.externalBrowser != null) { throw new IllegalStateException("Cannot restart external host"); }
     SharedBrowser browser = sharedBrowser;
     if (browser == null) {
       return instance;
