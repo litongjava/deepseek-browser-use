@@ -204,3 +204,5 @@ scripts/lib/*
 scripts/test/*
 !scripts/test/claude-skill-plugin.test.mjs
 .workbuddy
+# dsb local backend runtime (built jars and browser profile with sign-ins)
+.dsb-backend/
