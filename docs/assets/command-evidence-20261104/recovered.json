@@ -1,0 +1,32 @@
+{
+  "data": {
+    "environmentIdentity": {
+      "mode": "external-cdp",
+      "product": "156.0.8078.74",
+      "environment": "unknown",
+      "targetId": "958DADC10D46711ACBFF987F5B5FC828",
+      "attachment": {
+        "targetId": "958DADC10D46711ACBFF987F5B5FC828",
+        "attachedAt": "2026-11-04T09:21:34.591824600Z",
+        "attachedUrl": "about:blank"
+      },
+      "host": "unknown",
+      "lifecycleOwner": "external",
+      "targetType": "page",
+      "page": {
+        "currentUrl": "about:blank#recovered",
+        "observedAt": "2026-11-04T09:21:34.645145200Z",
+        "available": true,
+        "title": "DSB reliability fixture"
+      },
+      "url": "about:blank"
+    },
+    "waitUntil": "domcontentloaded",
+    "screenshot_skipped": "not-requested",
+    "url": "about:blank#recovered",
+    "seq": 1,
+    "status": 0
+  },
+  "ok": true,
+  "code": 1
+}

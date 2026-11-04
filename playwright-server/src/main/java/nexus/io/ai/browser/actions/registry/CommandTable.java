@@ -57,12 +57,12 @@ public class CommandTable {
   private static final Map<String, Executor> TABLE = new LinkedHashMap<>();
 
   static {
-    put("attach", (svc, id, a) -> svc.attach(id, reqStr(a, "endpoint"), a.getString("targetId"), a.getString("url"), false));
-    put("targets", (svc, id, a) -> svc.attach(id, reqStr(a, "endpoint"), null, null, true));
-    put("get_diagnostics", (svc, id, a) -> RespBodyVo.ok(CommandControl.diagnostics(id)));
-    put("cancel_command", (svc, id, a) -> RespBodyVo.ok(CommandControl.cancel(id, reqStr(a, "commandId"))));
+    put("attach", "endpoint:string! targetId:string url:string", (svc, id, a) -> svc.attach(id, reqStr(a, "endpoint"), a.getString("targetId"), a.getString("url"), false));
+    put("targets", "endpoint:string!", (svc, id, a) -> svc.attach(id, reqStr(a, "endpoint"), null, null, true));
+    put("get_diagnostics", "", (svc, id, a) -> RespBodyVo.ok(CommandControl.diagnostics(id)));
+    put("cancel_command", "commandId:string!", (svc, id, a) -> RespBodyVo.ok(CommandControl.cancel(id, reqStr(a, "commandId"))));
     // ---------- 实例生命周期 ----------
-    put("start", (svc, id, a) -> {
+    put("start", "headless:boolean browser:string networkRecording:boolean fakeMedia:boolean profile:string userDataDir:string profileDirectory:string", (svc, id, a) -> {
       // Show the browser window unless headless mode is explicitly requested.
       Boolean headless = a.getBoolean("headless");
       // 不传 browser 时按配置里的默认类型(browser.type / browser.engine)处理,行为与以前一致;
@@ -106,45 +106,45 @@ public class CommandTable {
       }
       return RespBodyVo.ok(data);
     });
-    put("list_profiles", (svc, id, a) -> svc.listProfiles());
-    put("clone_profile", (svc, id, a) -> svc.cloneProfile(new CloneProfileRequest(
+    put("list_profiles", "", (svc, id, a) -> svc.listProfiles());
+    put("clone_profile", "name:string sourceUserDataDir:string sourceProfileDirectory:string", (svc, id, a) -> svc.cloneProfile(new CloneProfileRequest(
         a.getString("name"), a.getString("sourceUserDataDir"), a.getString("sourceProfileDirectory"))));
-    put("close", (svc, id, a) -> svc.close(id, Boolean.TRUE.equals(a.getBoolean("closeBrowser"))));
+    put("close", "closeBrowser:boolean", (svc, id, a) -> svc.close(id, Boolean.TRUE.equals(a.getBoolean("closeBrowser"))));
     // 关掉所有任务与共享浏览器:比直接杀进程干净(不留占着 profile 的孤儿浏览器)
-    put("shutdown", (svc, id, a) -> svc.shutdown());
+    put("shutdown", "", (svc, id, a) -> svc.shutdown());
 
     // ---------- 导航与页面信息 ----------
-    put("navigate", (svc, id, a) -> svc.goToUrl(id, reqStr(a, "url"), a.getString("waitUntil"), a.getInteger("timeoutMs")));
-    put("go_to_url", (svc, id, a) -> svc.goToUrl(id, reqStr(a, "url"), a.getString("waitUntil"), a.getInteger("timeoutMs")));
-    put("go_back", (svc, id, a) -> svc.goBack(id));
-    put("go_forward", (svc, id, a) -> svc.goForward(id));
-    put("reload", (svc, id, a) -> svc.reload(id));
-    put("get_url", (svc, id, a) -> svc.getUrl(id));
-    put("get_title", (svc, id, a) -> svc.getTitle(id));
-    put("get_browser_state",
+    put("navigate", "url:string! waitUntil:string timeoutMs:integer", (svc, id, a) -> svc.goToUrl(id, reqStr(a, "url"), a.getString("waitUntil"), a.getInteger("timeoutMs")));
+    put("go_to_url", "url:string! waitUntil:string timeoutMs:integer", (svc, id, a) -> svc.goToUrl(id, reqStr(a, "url"), a.getString("waitUntil"), a.getInteger("timeoutMs")));
+    put("go_back", "", (svc, id, a) -> svc.goBack(id));
+    put("go_forward", "", (svc, id, a) -> svc.goForward(id));
+    put("reload", "", (svc, id, a) -> svc.reload(id));
+    put("get_url", "", (svc, id, a) -> svc.getUrl(id));
+    put("get_title", "", (svc, id, a) -> svc.getTitle(id));
+    put("get_browser_state", "highlight:boolean viewportExpansion:integer includeElements:boolean maxElements:integer includeFrames:boolean strictSnapshot:boolean screenshot:boolean",
         (svc, id, a) -> svc.getBrowserState(id, a.getBoolean("highlight"), a.getInteger("viewportExpansion"),
             a.getBoolean("includeElements"), a.getInteger("maxElements"), a.getBoolean("includeFrames"),
             a.getBoolean("strictSnapshot"), a.getBoolean("screenshot")));
     // 页面上的 frame 清单(跨域 iframe 也能读到 URL):主站把第三方控制台套在 iframe 里时先看它
-    put("list_frames", (svc, id, a) -> svc.listFrames(id, a.getBoolean("refresh")));
-    put("wait", (svc, id, a) -> svc.waitSeconds(id, reqInt(a, "seconds")));
+    put("list_frames", "refresh:boolean", (svc, id, a) -> svc.listFrames(id, a.getBoolean("refresh")));
+    put("wait", "seconds:integer!", (svc, id, a) -> svc.waitSeconds(id, reqInt(a, "seconds")));
 
     // ---------- 元素交互(按索引) ----------
     // mode:auto(默认,原生失败先改真实鼠标、再降级 JS 派发)/ native / mouse / js;timeoutMs 按次覆盖超时
-    put("click_element_by_index",
+    put("click_element_by_index", "index:integer! mode:string timeoutMs:integer",
         (svc, id, a) -> svc.clickElementByIndex(id, reqInt(a, "index"), optStr(a, "mode"), a.getInteger("timeoutMs")));
-    put("double_click_element_by_index", (svc, id, a) -> svc.doubleClickElementByIndex(id, reqInt(a, "index"),
+    put("double_click_element_by_index", "index:integer! mode:string", (svc, id, a) -> svc.doubleClickElementByIndex(id, reqInt(a, "index"),
         optStr(a, "mode")));
-    put("hover_element_by_index", (svc, id, a) -> svc.hoverElementByIndex(id, reqInt(a, "index")));
-    put("focus_element_by_index", (svc, id, a) -> svc.focusElementByIndex(id, reqInt(a, "index")));
-    put("check_element_by_index",
+    put("hover_element_by_index", "index:integer!", (svc, id, a) -> svc.hoverElementByIndex(id, reqInt(a, "index")));
+    put("focus_element_by_index", "index:integer!", (svc, id, a) -> svc.focusElementByIndex(id, reqInt(a, "index")));
+    put("check_element_by_index", "index:integer! mode:string",
         (svc, id, a) -> svc.checkElementByIndex(id, reqInt(a, "index"), optStr(a, "mode")));
-    put("uncheck_element_by_index",
+    put("uncheck_element_by_index", "index:integer! mode:string",
         (svc, id, a) -> svc.uncheckElementByIndex(id, reqInt(a, "index"), optStr(a, "mode")));
     // mode:auto(默认:看得见就用真实输入,看不见退回 JS 设值)/ native / type / js
-    put("input_text",
+    put("input_text", "index:integer! text:string! mode:string",
         (svc, id, a) -> svc.inputTextByIndex(id, reqInt(a, "index"), reqStr(a, "text"), optStr(a, "mode")));
-    put("type_text", (svc, id, a) -> svc.typeText(id, reqInt(a, "index"), reqStr(a, "text")));
+    put("type_text", "index:integer! text:string!", (svc, id, a) -> svc.typeText(id, reqInt(a, "index"), reqStr(a, "text")));
     // index 与 selector 传一个即可:隐藏的 file input 没有索引,只能用 selector;
     // path 可以是服务端绝对路径,也可以是 /playwright/upload 返回的 relativePath(按服务端 upload 目录解析);
     // 也可以完全不走 upload 接口:直接给 contentBase64 或 url,服务端自己落盘再交给页面
@@ -152,7 +152,7 @@ public class CommandTable {
     // input[data-testid='fileInput'] 同时匹配到 2 个(弹窗里一个、后面的内联编辑器一个),而且
     // **两个都是 0×0 隐藏**——「优先挑可见的」在这里无从判断,只能按文档顺序取第一个。所以除了要能
     // 指定 nth,回执里还必须报出 matched 与 chosenIndex,否则调用方连「这里有没有歧义」都不知道
-    put("upload_file", (svc, id, a) -> {
+    put("upload_file", "trigger:string path:string timeoutMs:integer frame:string responseUrl:string contentBase64:string url:string index:integer selector:string filename:string contentType:string nth:integer", (svc, id, a) -> {
       String trigger = optStr(a, "trigger");
       if (trigger != null) {
         return svc.uploadFileChooser(id, trigger, reqStr(a, "path"), a.getInteger("timeoutMs"),
@@ -166,191 +166,191 @@ public class CommandTable {
       return svc.uploadFile(id, a.getInteger("index"), optStr(a, "selector"), reqStr(a, "path"),
           a.getInteger("timeoutMs"), optStr(a, "frame"), a.getInteger("nth"));
     });
-    put("drag_element_by_index",
+    put("drag_element_by_index", "index:integer! targetIndex:integer!",
         (svc, id, a) -> svc.dragElementByIndex(id, reqInt(a, "index"), reqInt(a, "targetIndex")));
-    put("send_keys", (svc, id, a) -> svc.sendKeys(id, reqStr(a, "keys")));
-    put("press_key", (svc, id, a) -> svc.sendKeys(id, a.containsKey("key") ? reqStr(a, "key") : reqStr(a, "keys")));
-    put("key_down", (svc, id, a) -> svc.keyDown(id, reqStr(a, "keys")));
-    put("key_up", (svc, id, a) -> svc.keyUp(id, reqStr(a, "keys")));
-    put("get_dropdown_options", (svc, id, a) -> svc.getDropdownOptions(id, reqInt(a, "index")));
-    put("select_dropdown_option", (svc, id, a) -> svc.selectDropdownOption(id, reqInt(a, "index"), reqStr(a, "text")));
-    put("scroll", (svc, id, a) -> svc.scroll(id, optBool(a, "down"), reqInt(a, "numPages"), a.getInteger("index")));
-    put("scroll_to_text", (svc, id, a) -> svc.scrollToText(id, reqStr(a, "text")));
+    put("send_keys", "keys:string!", (svc, id, a) -> svc.sendKeys(id, reqStr(a, "keys")));
+    put("press_key", "key:string keys:string", (svc, id, a) -> svc.sendKeys(id, a.containsKey("key") ? reqStr(a, "key") : reqStr(a, "keys")));
+    put("key_down", "keys:string!", (svc, id, a) -> svc.keyDown(id, reqStr(a, "keys")));
+    put("key_up", "keys:string!", (svc, id, a) -> svc.keyUp(id, reqStr(a, "keys")));
+    put("get_dropdown_options", "index:integer!", (svc, id, a) -> svc.getDropdownOptions(id, reqInt(a, "index")));
+    put("select_dropdown_option", "index:integer! text:string!", (svc, id, a) -> svc.selectDropdownOption(id, reqInt(a, "index"), reqStr(a, "text")));
+    put("scroll", "down:boolean numPages:integer! index:integer", (svc, id, a) -> svc.scroll(id, optBool(a, "down"), reqInt(a, "numPages"), a.getInteger("index")));
+    put("scroll_to_text", "text:string!", (svc, id, a) -> svc.scrollToText(id, reqStr(a, "text")));
 
     // ---------- 读取元素信息与状态 ----------
     // get_element_text:index 与 selector 二选一。canvas 通常不进快照(不可交互 → 没索引),
     // 所以「按选择器读」是够到它、并回答「为什么读不到文字」的唯一入口
     // canvasOnly:读不到文字时再判一句「这里是不是基本只有 canvas」(图表/地图的时间轴、刻度就是这种),
     // 把「为什么读不到」直接写进回执,省掉调用方「换选择器 → 再试 → 还是空」的那几轮
-    put("get_element_text", (svc, id, a) -> svc.getElementText(id, a.getInteger("index"), optStr(a, "selector"),
+    put("get_element_text", "index:integer selector:string canvasOnly:boolean frame:string", (svc, id, a) -> svc.getElementText(id, a.getInteger("index"), optStr(a, "selector"),
         Boolean.valueOf(optBool(a, "canvasOnly")), optStr(a, "frame")));
-    put("get_element_html", (svc, id, a) -> svc.getElementHtml(id, reqInt(a, "index")));
-    put("get_element_value", (svc, id, a) -> svc.getElementValue(id, reqInt(a, "index")));
-    put("get_element_attribute", (svc, id, a) -> svc.getElementAttribute(id, reqInt(a, "index"), reqStr(a, "name")));
+    put("get_element_html", "index:integer!", (svc, id, a) -> svc.getElementHtml(id, reqInt(a, "index")));
+    put("get_element_value", "index:integer!", (svc, id, a) -> svc.getElementValue(id, reqInt(a, "index")));
+    put("get_element_attribute", "index:integer! name:string!", (svc, id, a) -> svc.getElementAttribute(id, reqInt(a, "index"), reqStr(a, "name")));
     // 这个元素到底挂了哪些事件监听器:SPA 自动化的基础诊断信息(全为 false 就是「这个 input 没人监听」)
-    put("get_element_listeners", (svc, id, a) -> svc.getElementListeners(id, a.getInteger("index"),
+    put("get_element_listeners", "index:integer selector:string frame:string", (svc, id, a) -> svc.getElementListeners(id, a.getInteger("index"),
         optStr(a, "selector"), optStr(a, "frame")));
-    put("get_element_count", (svc, id, a) -> svc.getElementCount(id, reqStr(a, "selector"), optStr(a, "frame")));
-    put("get_element_box", (svc, id, a) -> svc.getElementBox(id, reqInt(a, "index")));
+    put("get_element_count", "selector:string! frame:string", (svc, id, a) -> svc.getElementCount(id, reqStr(a, "selector"), optStr(a, "frame")));
+    put("get_element_box", "index:integer!", (svc, id, a) -> svc.getElementBox(id, reqInt(a, "index")));
     // is_visible / is_enabled / is_checked:index 与 selector 二选一(与 get_element_text 同形)。
     // 「这个按钮现在能不能点」正是不想读整页快照时才问的问题,而元素有没有索引取决于它在不在视口内,
     // 所以这一族也必须能按选择器问 —— 实测一批里 get_element_text(selector) 成功、is_enabled(selector)
     // 却回「缺少参数 index」,同一族两套规则
-    put("is_visible", (svc, id, a) -> svc.isVisible(id, a.getInteger("index"), optStr(a, "selector"),
+    put("is_visible", "index:integer selector:string frame:string", (svc, id, a) -> svc.isVisible(id, a.getInteger("index"), optStr(a, "selector"),
         optStr(a, "frame")));
-    put("is_enabled", (svc, id, a) -> svc.isEnabled(id, a.getInteger("index"), optStr(a, "selector"),
+    put("is_enabled", "index:integer selector:string frame:string", (svc, id, a) -> svc.isEnabled(id, a.getInteger("index"), optStr(a, "selector"),
         optStr(a, "frame")));
-    put("is_checked", (svc, id, a) -> svc.isChecked(id, a.getInteger("index"), optStr(a, "selector"),
+    put("is_checked", "index:integer selector:string frame:string", (svc, id, a) -> svc.isChecked(id, a.getInteger("index"), optStr(a, "selector"),
         optStr(a, "frame")));
 
     // ---------- 选择器与语义定位 ----------
     // frame:目标在跨域 iframe 里时必传(序号见 list_frames,或写 URL/name 子串);
     // 按索引的命令不需要它 —— 索引里已经带了 frame 信息,服务端自动路由
-    put("click_element_by_selector",
+    put("click_element_by_selector", "selector:string! mode:string timeoutMs:integer frame:string nth:integer",
         (svc, id, a) -> svc.clickElementBySelector(id, reqStr(a, "selector"), optStr(a, "mode"),
             a.getInteger("timeoutMs"), optStr(a, "frame"), a.getInteger("nth")));
     // nth:选择器命中多个时显式指定第几个(0 基)。不加它就只能靠服务端替我们挑,而实测分页上
     // 「页码 2」与「下一页」的 href 完全一样,回执只说 matched=2,调用方没法指定要哪个
-    put("input_text_by_selector", (svc, id, a) -> svc.inputTextBySelector(id, reqStr(a, "selector"),
+    put("input_text_by_selector", "selector:string! text:string! mode:string frame:string nth:integer", (svc, id, a) -> svc.inputTextBySelector(id, reqStr(a, "selector"),
         reqStr(a, "text"), optStr(a, "mode"), optStr(a, "frame"), a.getInteger("nth")));
-    put("click_element_by_text", (svc, id, a) -> svc.clickElementByText(id, reqStr(a, "text"), optStr(a, "mode")));
-    put("click_element_by_role",
+    put("click_element_by_text", "text:string! mode:string", (svc, id, a) -> svc.clickElementByText(id, reqStr(a, "text"), optStr(a, "mode")));
+    put("click_element_by_role", "role:string! name:string mode:string scope:string frame:string nth:integer exact:boolean timeoutMs:integer",
         (svc, id, a) -> svc.clickElementByRole(id, reqStr(a, "role"), optStr(a, "name"), optStr(a, "mode"),
             optStr(a, "scope"), optStr(a, "frame"), a.getInteger("nth"), a.getBoolean("exact"), a.getInteger("timeoutMs")));
-    put("input_text_by_label",
+    put("input_text_by_label", "label:string! text:string! mode:string",
         (svc, id, a) -> svc.inputTextByLabel(id, reqStr(a, "label"), reqStr(a, "text"), optStr(a, "mode")));
-    put("clear_text", (svc, id, a) -> svc.clearText(id, a.getInteger("index"), optStr(a, "selector")));
-    put("hover_and_click", (svc, id, a) -> svc.hoverAndClick(id, a.getInteger("index"), optStr(a, "selector"),
+    put("clear_text", "index:integer selector:string", (svc, id, a) -> svc.clearText(id, a.getInteger("index"), optStr(a, "selector")));
+    put("hover_and_click", "index:integer selector:string hoverDelayMs:integer mode:string", (svc, id, a) -> svc.hoverAndClick(id, a.getInteger("index"), optStr(a, "selector"),
         a.getInteger("hoverDelayMs"), optStr(a, "mode")));
 
     // ---------- 标签页 ----------
-    put("get_tabs", (svc, id, a) -> svc.getTabs(id));
-    put("new_tab", (svc, id, a) -> svc.newTab(id, optStr(a, "url")));
-    put("switch_tab", (svc, id, a) -> svc.switchTab(id, reqInt(a, "pageIndex")));
-    put("switch_tab_by_url", (svc, id, a) -> svc.switchTabByUrl(id, reqStr(a, "url")));
-    put("close_tab", (svc, id, a) -> svc.closeTab(id, reqInt(a, "pageIndex")));
-    put("close_other_tabs", (svc, id, a) -> svc.closeOtherTabs(id, a.getInteger("pageIndex")));
-    put("bring_to_front", (svc, id, a) -> svc.bringToFront(id, a.getInteger("pageIndex")));
+    put("get_tabs", "", (svc, id, a) -> svc.getTabs(id));
+    put("new_tab", "url:string", (svc, id, a) -> svc.newTab(id, optStr(a, "url")));
+    put("switch_tab", "pageIndex:integer!", (svc, id, a) -> svc.switchTab(id, reqInt(a, "pageIndex")));
+    put("switch_tab_by_url", "url:string!", (svc, id, a) -> svc.switchTabByUrl(id, reqStr(a, "url")));
+    put("close_tab", "pageIndex:integer!", (svc, id, a) -> svc.closeTab(id, reqInt(a, "pageIndex")));
+    put("close_other_tabs", "pageIndex:integer", (svc, id, a) -> svc.closeOtherTabs(id, a.getInteger("pageIndex")));
+    put("bring_to_front", "pageIndex:integer", (svc, id, a) -> svc.bringToFront(id, a.getInteger("pageIndex")));
 
     // ---------- 等待 ----------
-    put("wait_for_element",
+    put("wait_for_element", "selector:string! frame:string timeoutMs:number timeoutSeconds:number",
         (svc, id, a) -> svc.waitForElement(id, reqStr(a, "selector"), waitSeconds(a),
             optStr(a, "frame")));
-    put("wait_for_text", (svc, id, a) -> svc.waitForText(id, reqStr(a, "text"), waitSeconds(a)));
-    put("wait_for_url", (svc, id, a) -> svc.waitForUrl(id, reqStr(a, "url"), waitSeconds(a)));
-    put("wait_for_load", (svc, id, a) -> svc.waitForLoad(id, optStr(a, "state"), waitSeconds(a)));
-    put("wait_for_function",
+    put("wait_for_text", "text:string! timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForText(id, reqStr(a, "text"), waitSeconds(a)));
+    put("wait_for_url", "url:string! timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForUrl(id, reqStr(a, "url"), waitSeconds(a)));
+    put("wait_for_load", "state:string timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForLoad(id, optStr(a, "state"), waitSeconds(a)));
+    put("wait_for_function", "expression:string! timeoutMs:number timeoutSeconds:number",
         (svc, id, a) -> svc.waitForFunction(id, reqStr(a, "expression"), waitSeconds(a)));
     // 等页面安静下来:连续 quietMs 毫秒既没有 DOM 变更、也没有在途请求(比固定 wait 可靠,比手写
     // wait_for_function 省事);selector/text 是额外条件
-    put("wait_for_idle", (svc, id, a) -> svc.waitForIdle(id, a.getInteger("quietMs"), waitSeconds(a),
+    put("wait_for_idle", "quietMs:integer selector:string text:string timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForIdle(id, a.getInteger("quietMs"), waitSeconds(a),
         optStr(a, "selector"), optStr(a, "text")));
     // 等内容稳定:正文/表单值/表格内容连续 quietMs 毫秒不再变化。查/搜索结果是异步刷新的,
     // 点完「查询」立刻读会读到上一次的结果,先 wait_for_stable 再读就不会错位
-    put("wait_for_stable", (svc, id, a) -> svc.waitForStable(id, optStr(a, "selector"), a.getInteger("quietMs"),
+    put("wait_for_stable", "selector:string quietMs:integer timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForStable(id, optStr(a, "selector"), a.getInteger("quietMs"),
         waitSeconds(a)));
     // 等选择器的命中数量达标:等弹窗全部消失用 max:0,等结果行出现用 min:1
-    put("wait_for_count", (svc, id, a) -> svc.waitForCount(id, reqStr(a, "selector"), a.getInteger("min"),
+    put("wait_for_count", "selector:string! min:integer max:integer equals:integer timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForCount(id, reqStr(a, "selector"), a.getInteger("min"),
         a.getInteger("max"), a.getInteger("equals"), waitSeconds(a)));
 
     // ---------- 鼠标 ----------
-    put("mouse_move", (svc, id, a) -> svc.mouseMove(id, reqDouble(a, "x"), reqDouble(a, "y")));
-    put("mouse_down", (svc, id, a) -> svc.mouseDown(id, optStr(a, "button")));
-    put("mouse_up", (svc, id, a) -> svc.mouseUp(id, optStr(a, "button")));
-    put("mouse_wheel", (svc, id, a) -> svc.mouseWheel(id, reqDouble(a, "deltaY")));
+    put("mouse_move", "x:number! y:number!", (svc, id, a) -> svc.mouseMove(id, reqDouble(a, "x"), reqDouble(a, "y")));
+    put("mouse_down", "button:string", (svc, id, a) -> svc.mouseDown(id, optStr(a, "button")));
+    put("mouse_up", "button:string", (svc, id, a) -> svc.mouseUp(id, optStr(a, "button")));
+    put("mouse_wheel", "deltaY:number!", (svc, id, a) -> svc.mouseWheel(id, reqDouble(a, "deltaY")));
     // 真实鼠标点击(一条顶原来的 move+down+up 三条):JS 派发无效的按钮、被遮挡但要点到的元素都用它
-    put("mouse_click",
+    put("mouse_click", "x:number! y:number! button:string clickCount:integer",
         (svc, id, a) -> svc.mouseClick(id, reqDouble(a, "x"), reqDouble(a, "y"), optStr(a, "button"),
             a.getInteger("clickCount")));
-    put("mouse_click_by_selector",
+    put("mouse_click_by_selector", "selector:string! button:string clickCount:integer timeoutMs:integer",
         (svc, id, a) -> svc.mouseClickBySelector(id, reqStr(a, "selector"), optStr(a, "button"),
             a.getInteger("clickCount"), a.getInteger("timeoutMs")));
 
     // ---------- 截图与 PDF ----------
     // 默认落盘并只回路径/URL;要内联图片(会把整张图塞进上下文)才传 inline:true
-    put("screenshot",
+    put("screenshot", "path:string fullPage:boolean index:integer selector:string clipX:number clipY:number clipWidth:number clipHeight:number inline:boolean timeoutMs:integer force:boolean fallbackToViewport:boolean",
         (svc, id, a) -> svc.screenshot(id, optStr(a, "path"), a.getBoolean("fullPage"), a.getInteger("index"),
             optStr(a, "selector"), a.getDouble("clipX"), a.getDouble("clipY"), a.getDouble("clipWidth"),
             a.getDouble("clipHeight"), a.getBoolean("inline"), a.getInteger("timeoutMs"), a.getBoolean("force"), a.getBoolean("fallbackToViewport")));
-    put("get_element_screenshot", (svc, id, a) -> svc.getElementScreenshot(id, a.getInteger("index"),
+    put("get_element_screenshot", "index:integer selector:string path:string inline:boolean frame:string timeoutMs:integer force:boolean", (svc, id, a) -> svc.getElementScreenshot(id, a.getInteger("index"),
         optStr(a, "selector"), optStr(a, "path"), a.getBoolean("inline"), optStr(a, "frame"), a.getInteger("timeoutMs"), a.getBoolean("force")));
-    put("pdf", (svc, id, a) -> svc.pdf(id, optStr(a, "path")));
+    put("pdf", "path:string", (svc, id, a) -> svc.pdf(id, optStr(a, "path")));
 
     // ---------- Cookie 与本地存储 ----------
-    put("get_cookies", (svc, id, a) -> svc.getCookies(id, optStr(a, "url")));
-    put("set_cookie", (svc, id, a) -> svc.setCookie(id, reqStr(a, "name"), reqStr(a, "value"), optStr(a, "url")));
-    put("clear_cookies", (svc, id, a) -> svc.clearCookies(id));
-    put("get_local_storage", (svc, id, a) -> svc.getLocalStorage(id, optStr(a, "key")));
-    put("set_local_storage", (svc, id, a) -> svc.setLocalStorage(id, reqStr(a, "key"), optStr(a, "value")));
-    put("clear_local_storage", (svc, id, a) -> svc.clearLocalStorage(id));
+    put("get_cookies", "url:string", (svc, id, a) -> svc.getCookies(id, optStr(a, "url")));
+    put("set_cookie", "name:string! value:string! url:string", (svc, id, a) -> svc.setCookie(id, reqStr(a, "name"), reqStr(a, "value"), optStr(a, "url")));
+    put("clear_cookies", "", (svc, id, a) -> svc.clearCookies(id));
+    put("get_local_storage", "key:string", (svc, id, a) -> svc.getLocalStorage(id, optStr(a, "key")));
+    put("set_local_storage", "key:string! value:string", (svc, id, a) -> svc.setLocalStorage(id, reqStr(a, "key"), optStr(a, "value")));
+    put("clear_local_storage", "", (svc, id, a) -> svc.clearLocalStorage(id));
 
     // ---------- 浏览器设置 ----------
-    put("set_viewport", (svc, id, a) -> svc.setViewport(id, reqInt(a, "width"), reqInt(a, "height")));
-    put("set_geolocation", (svc, id, a) -> svc.setGeolocation(id, reqDouble(a, "latitude"), reqDouble(a, "longitude")));
-    put("set_offline", (svc, id, a) -> svc.setOffline(id, optBool(a, "offline")));
-    put("set_headers", (svc, id, a) -> svc.setHeaders(id, reqStr(a, "headersJson")));
-    put("set_credentials", (svc, id, a) -> svc.setCredentials(id, reqStr(a, "username"), reqStr(a, "password")));
-    put("set_media", (svc, id, a) -> svc.setMedia(id, reqStr(a, "colorScheme")));
+    put("set_viewport", "width:integer! height:integer!", (svc, id, a) -> svc.setViewport(id, reqInt(a, "width"), reqInt(a, "height")));
+    put("set_geolocation", "latitude:number! longitude:number!", (svc, id, a) -> svc.setGeolocation(id, reqDouble(a, "latitude"), reqDouble(a, "longitude")));
+    put("set_offline", "offline:boolean", (svc, id, a) -> svc.setOffline(id, optBool(a, "offline")));
+    put("set_headers", "headersJson:string!", (svc, id, a) -> svc.setHeaders(id, reqStr(a, "headersJson")));
+    put("set_credentials", "username:string! password:string!", (svc, id, a) -> svc.setCredentials(id, reqStr(a, "username"), reqStr(a, "password")));
+    put("set_media", "colorScheme:string!", (svc, id, a) -> svc.setMedia(id, reqStr(a, "colorScheme")));
     // permissions: e.g. ["microphone"]; origin defaults to the current page origin
-    put("grant_permissions", (svc, id, a) -> svc.grantPermissions(id, reqStrList(a, "permissions"), optStr(a, "origin")));
+    put("grant_permissions", "permissions:array! origin:string", (svc, id, a) -> svc.grantPermissions(id, reqStrList(a, "permissions"), optStr(a, "origin")));
 
     // ---------- 弹窗与控制台 ----------
     // 注意:下面两个是浏览器**原生**对话框(window.alert/confirm/prompt);页面里的 DOM 弹窗
     // (ant-design Modal、用户服务协议层)是 get_modals / close_modal,两者完全不同
-    put("get_dialog", (svc, id, a) -> svc.getDialog(id, a.getBoolean("consume")));
-    put("clear_dialog", (svc, id, a) -> svc.clearDialog(id));
-    put("get_js_dialog", (svc, id, a) -> svc.getDialog(id, a.getBoolean("consume")));
-    put("clear_js_dialog", (svc, id, a) -> svc.clearDialog(id));
-    put("set_dialog_behavior", (svc, id, a) -> svc.setDialogBehavior(id, optBool(a, "dismiss")));
+    put("get_dialog", "consume:boolean", (svc, id, a) -> svc.getDialog(id, a.getBoolean("consume")));
+    put("clear_dialog", "", (svc, id, a) -> svc.clearDialog(id));
+    put("get_js_dialog", "consume:boolean", (svc, id, a) -> svc.getDialog(id, a.getBoolean("consume")));
+    put("clear_js_dialog", "", (svc, id, a) -> svc.clearDialog(id));
+    put("set_dialog_behavior", "dismiss:boolean", (svc, id, a) -> svc.setDialogBehavior(id, optBool(a, "dismiss")));
     // DOM 弹窗栈:标题、按钮、右上角 × 的坐标。被遮挡/点了没反应时先看它
-    put("get_modals", (svc, id, a) -> svc.getModals(id));
+    put("get_modals", "", (svc, id, a) -> svc.getModals(id));
     // 关掉弹窗:which=top(默认)/first/all,title 按标题匹配,button 指定点哪个按钮。
     // 一律用真实鼠标点,并且点完校验弹窗数量是否真的减少
-    put("close_modal", (svc, id, a) -> svc.closeModal(id, optStr(a, "which"), optStr(a, "title"),
+    put("close_modal", "which:string title:string button:string", (svc, id, a) -> svc.closeModal(id, optStr(a, "which"), optStr(a, "title"),
         optStr(a, "button")));
-    put("get_console_logs", (svc, id, a) -> svc.getConsoleLogs(id));
-    put("clear_console_logs", (svc, id, a) -> svc.clearConsoleLogs(id));
+    put("get_console_logs", "", (svc, id, a) -> svc.getConsoleLogs(id));
+    put("clear_console_logs", "", (svc, id, a) -> svc.clearConsoleLogs(id));
 
     // ---------- 网络 ----------
-    put("route", (svc, id, a) -> svc.route(id, reqStr(a, "urlPattern"), optStr(a, "action"), optStr(a, "body"),
+    put("route", "urlPattern:string! action:string body:string status:integer contentType:string", (svc, id, a) -> svc.route(id, reqStr(a, "urlPattern"), optStr(a, "action"), optStr(a, "body"),
         a.getInteger("status"), optStr(a, "contentType")));
-    put("unroute", (svc, id, a) -> svc.unroute(id, optStr(a, "urlPattern")));
-    put("get_requests", (svc, id, a) -> svc.getRequests(id, optStr(a, "filter"), optStr(a, "resourceType"),
+    put("unroute", "urlPattern:string", (svc, id, a) -> svc.unroute(id, optStr(a, "urlPattern")));
+    put("get_requests", "filter:string resourceType:string limit:integer since:integer", (svc, id, a) -> svc.getRequests(id, optStr(a, "filter"), optStr(a, "resourceType"),
         a.getInteger("limit"), a.getLong("since")));
-    put("wait_for_response", (svc, id, a) -> svc.waitForResponse(id, reqStr(a, "urlPattern"),
+    put("wait_for_response", "urlPattern:string! maxChars:integer lookBackSeconds:integer timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForResponse(id, reqStr(a, "urlPattern"),
         waitSeconds(a), a.getInteger("maxChars"), a.getInteger("lookBackSeconds")));
-    put("get_response_body", (svc, id, a) -> svc.getResponseBody(id, optStr(a, "filter"), a.getInteger("index"),
+    put("get_response_body", "filter:string index:integer maxChars:integer requestId:string", (svc, id, a) -> svc.getResponseBody(id, optStr(a, "filter"), a.getInteger("index"),
         a.getInteger("maxChars"), optStr(a, "requestId")));
 
     // ---------- 页面状态汇总与快照差异 ----------
-    put("get_page_snapshot", (svc, id, a) -> svc.getPageSnapshot(id, a.getBoolean("includeConsole"),
+    put("get_page_snapshot", "includeConsole:boolean includeRequests:boolean requestFilter:string", (svc, id, a) -> svc.getPageSnapshot(id, a.getBoolean("includeConsole"),
         a.getBoolean("includeRequests"), optStr(a, "requestFilter")));
-    put("diff_dom_text",
+    put("diff_dom_text", "highlight:boolean viewportExpansion:integer",
         (svc, id, a) -> svc.diffDomText(id, a.getBoolean("highlight"), a.getInteger("viewportExpansion")));
-    put("get_interactive_map", (svc, id, a) -> svc.getInteractiveMap(id));
+    put("get_interactive_map", "", (svc, id, a) -> svc.getInteractiveMap(id));
     // 一次读回整张表单:每个控件的标签/值/可见性/禁用/只读/校验错误 + 错误清单(密码字段不返回值)
-    put("get_form_state", (svc, id, a) -> svc.getFormState(id, optStr(a, "selector"), a.getBoolean("includeHidden"),
+    put("get_form_state", "selector:string includeHidden:boolean max:integer", (svc, id, a) -> svc.getFormState(id, optStr(a, "selector"), a.getBoolean("includeHidden"),
         a.getInteger("max")));
 
     // ---------- 其它 ----------
-    put("extract_structured_data",
+    put("extract_structured_data", "query:string extractLinks:boolean",
         (svc, id, a) -> svc.extractStructuredData(id, optStr(a, "query"), optBool(a, "extractLinks")));
     // 页面 -> Markdown(表格按 GFM 表格输出,不摊平)。selector 为空转整个 body;给了就转命中的元素,
     // 命中多个时用 nth 指定第几个(0 基;先 list_tables 拿现成的 selector 与序号更省事)
-    put("extract_markdown", (svc, id, a) -> svc.extractMarkdown(id, optStr(a, "selector"), optStr(a, "frame"),
+    put("extract_markdown", "selector:string frame:string includeLinks:boolean maxChars:integer nth:integer", (svc, id, a) -> svc.extractMarkdown(id, optStr(a, "selector"), optStr(a, "frame"),
         optBool(a, "includeLinks"), a.getInteger("maxChars"), a.getInteger("nth")));
     // 在页面文本里找东西,只把命中与前后文带回来 —— 免得为了找一行而把整页(实测三万字符)拉进上下文
-    put("find_text", (svc, id, a) -> svc.findText(id, reqStr(a, "text"), optBool(a, "regex"),
+    put("find_text", "text:string! regex:boolean contextChars:integer maxMatches:integer selector:string frame:string", (svc, id, a) -> svc.findText(id, reqStr(a, "text"), optBool(a, "regex"),
         a.getInteger("contextChars"), a.getInteger("maxMatches"), optStr(a, "selector"), optStr(a, "frame")));
     // 列出页面上所有表格,并给出可直接填进 extract_markdown 的 selector("table >> nth=N")
-    put("list_tables", (svc, id, a) -> svc.listTables(id, optStr(a, "frame")));
+    put("list_tables", "frame:string", (svc, id, a) -> svc.listTables(id, optStr(a, "frame")));
     // 把页面上的图片**原始文件**取到服务端(data/<id>/):path 直接喂 ocr_image,url 直接贴给人看。
     // 公告扫描件、票据、表格截图这类"图就是数据"的场景,截图与 innerText 都不够用
-    put("download_image", (svc, id, a) -> svc.downloadImage(id, a.getInteger("index"), optStr(a, "selector"),
+    put("download_image", "index:integer selector:string frame:string filename:string", (svc, id, a) -> svc.downloadImage(id, a.getInteger("index"), optStr(a, "selector"),
         optStr(a, "frame"), optStr(a, "filename")));
     // body 直接写脚本;或用 bodyFile 从服务端脚本目录读(见 get_config 的 jsDir),
     // 再用 vars 注入 {{变量}} —— 中文/引号/换行都不用在客户端拼字符串
-    put("execute_js", (svc, id, a) -> {
+    put("execute_js", "body:string bodyFile:string vars:object frame:string timeoutMs:integer", (svc, id, a) -> {
       if (optStr(a, "body") == null && optStr(a, "bodyFile") == null) {
         // 两个都没给:报「缺少参数 body」,与老版本的行为一致(老版本只认 body)
         throw new IllegalArgumentException("缺少参数 body");
@@ -361,7 +361,7 @@ public class CommandTable {
 
     // ---------- 服务自省与配方 ----------
     // 命令清单:不知道方法名时先问它,别靠猜(猜错只会拿到一句「不支持的方法」)
-    put("list_methods", (svc, id, a) -> {
+    put("list_methods", "filter:string details:boolean", (svc, id, a) -> {
       String filter = optStr(a, "filter");
       List<String> names = new java.util.ArrayList<>();
       for (String name : names()) {
@@ -370,28 +370,31 @@ public class CommandTable {
         }
       }
       Kv data = Kv.by("count", names.size()).set("methods", names).set("total", names().size());
+      if (Boolean.TRUE.equals(a.getBoolean("details"))) {
+        data.set("schemas", CommandSchema.describe(names));
+      }
       if (filter != null) {
         data.set("filter", filter);
       }
       return RespBodyVo.ok(data);
     });
     // 生效配置:引擎/类型、解析后的 profile 目录、降级开关、脚本与日志目录、任务数
-    put("get_config", (svc, id, a) -> svc.getConfig(id));
+    put("get_config", "", (svc, id, a) -> svc.getConfig(id));
     // 当前活着的任务一览(URL/标题/页签数/在途请求)+ 共享浏览器信息
-    put("list_tasks", (svc, id, a) -> svc.listTasks());
+    put("list_tasks", "", (svc, id, a) -> svc.listTasks());
     // 清理落盘产物:截图/结构化文本/追踪日志;默认只做预演(dryRun),不会真删
-    put("cleanup", (svc, id, a) -> svc.cleanup(optStr(a, "scope"), a.getInteger("olderThanHours"),
+    put("cleanup", "scope:string olderThanHours:integer keepLatest:integer dryRun:boolean", (svc, id, a) -> svc.cleanup(optStr(a, "scope"), a.getInteger("olderThanHours"),
         a.getInteger("keepLatest"), a.getBoolean("dryRun")));
     // 站点配方:list 看有哪些,run 跑一个(必须显式点名,不做任何隐式推断)
-    put("list_recipes", (svc, id, a) -> {
+    put("list_recipes", "", (svc, id, a) -> {
       List<Kv> recipes = RecipeStore.list();
       return RespBodyVo.ok(Kv.by("count", recipes.size()).set("recipes", recipes)
           .set("dir", RecipeStore.dir().toString()));
     });
-    put("run_recipe", (svc, id, a) -> runRecipe(id, reqStr(a, "name"), a.getJSONObject("vars"),
+    put("run_recipe", "name:string! vars:object stopOnError:boolean", (svc, id, a) -> runRecipe(id, reqStr(a, "name"), a.getJSONObject("vars"),
         a.getBoolean("stopOnError")));
     // 长批次(commands + async:true)的结果查询与取消
-    put("get_job", (svc, id, a) -> {
+    put("get_job", "jobId:string! includeResult:boolean", (svc, id, a) -> {
       String jobId = reqStr(a, "jobId");
       nexus.io.ai.browser.service.JobRegistry.Job job = nexus.io.ai.browser.service.JobRegistry.get(jobId);
       if (job == null) {
@@ -405,7 +408,7 @@ public class CommandTable {
       }
       return RespBodyVo.ok(data);
     });
-    put("cancel_job", (svc, id, a) -> {
+    put("cancel_job", "jobId:string!", (svc, id, a) -> {
       String jobId = reqStr(a, "jobId");
       nexus.io.ai.browser.service.JobRegistry.Job job = nexus.io.ai.browser.service.JobRegistry.get(jobId);
       if (job == null) {
@@ -415,7 +418,7 @@ public class CommandTable {
       return RespBodyVo.ok(Kv.by("jobId", jobId).set("cancelRequested", accepted).set("status", job.status)
           .set("note", "取消是协作式的:批次会在下一步之前停下来,当前这一步不会被中断"));
     });
-    put("list_jobs", (svc, id, a) -> {
+    put("list_jobs", "limit:integer", (svc, id, a) -> {
       Integer limit = a.getInteger("limit");
       List<Kv> jobs = new java.util.ArrayList<>();
       for (nexus.io.ai.browser.service.JobRegistry.Job job : nexus.io.ai.browser.service.JobRegistry
@@ -427,7 +430,7 @@ public class CommandTable {
 
     // ---------- 人机协同 ----------
     // 一次请求可以带多个待办(steps):扫码 + 输码 + 支付确认是**一串**动作,人一次做完比来回多次往返省事
-    put("request_human_input", (svc, id, a) -> {
+    put("request_human_input", "steps:array prompt:string index:integer selector:string timeoutSeconds:integer expiresAt:integer expiresInSeconds:integer ocr:boolean ocrLanguage:string inline:boolean frame:string", (svc, id, a) -> {
       // prompt 与 steps 二选一:两个都没给时在**碰浏览器对象之前**就说清楚是缺哪个参数
       if (a.getJSONArray("steps") == null && optStrRaw(a, "prompt") == null) {
         throw new IllegalArgumentException("缺少参数 prompt");
@@ -442,19 +445,19 @@ public class CommandTable {
     });
     // 向用户「要一个值」,而不是「请人去页面上操作」:银行卡号、身份证号、验证码、二选一。
     // 与 request_human_input 共用同一套待办存储,所以 submit_human_input / get_human_input 原样可用。
-    put("ask_user", (svc, id, a) -> {
+    put("ask_user", "questions:array! timeoutSeconds:integer expiresAt:integer expiresInSeconds:integer", (svc, id, a) -> {
       if (a.getJSONArray("questions") == null) {
         throw new IllegalArgumentException("缺少参数 questions");
       }
       return svc.askUser(id, questionListOf(a.getJSONArray("questions")), a.getInteger("timeoutSeconds"),
           a.getLong("expiresAt"), a.getInteger("expiresInSeconds"));
     });
-    put("submit_human_input", (svc, id, a) -> svc.submitHumanInput(id, reqStr(a, "requestId"),
+    put("submit_human_input", "requestId:string! answer:string stepId:string answers:object", (svc, id, a) -> svc.submitHumanInput(id, reqStr(a, "requestId"),
         optStrRaw(a, "answer"), optStr(a, "stepId"), a.getJSONObject("answers")));
-    put("get_human_input",
+    put("get_human_input", "requestId:string! timeoutSeconds:integer",
         (svc, id, a) -> svc.getHumanInput(id, reqStr(a, "requestId"), a.getInteger("timeoutSeconds")));
     // 读图上的文字(Windows 自带 OCR):读不了图的模型也能答「验证码是什么」
-    put("ocr_image", (svc, id, a) -> svc.ocrImage(id, optStr(a, "path"), a.getInteger("index"),
+    put("ocr_image", "path:string index:integer selector:string frame:string language:string", (svc, id, a) -> svc.ocrImage(id, optStr(a, "path"), a.getInteger("index"),
         optStr(a, "selector"), optStr(a, "frame"), optStr(a, "language")));
   }
 
@@ -489,7 +492,8 @@ public class CommandTable {
 
   private CommandTable() {
   }
-  private static void put(String command, Executor executor) {
+  private static void put(String command, String parameters, Executor executor) {
+    CommandSchema.register(command, parameters);
     TABLE.put(command, executor);
   }
 

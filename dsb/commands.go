@@ -360,33 +360,21 @@ func cmdBatch(client CommandAPI, args *Args, out *Printer) (int, error) {
 		return 0, err
 	}
 	if args.AsyncMode {
-		out.Response(response, "commands(async)", false, 0, false, nil)
 		if !response.Ok() || !args.Wait {
-			return verdict(response), nil
+			return emitCommandResult(response, args, out, "commands(async)")
 		}
 		jobID := objStr(response.Data(), "jobId")
 		if jobID == "" {
 			out.Warn("服务端没有返回 jobId,无法等待")
 			return ExitBusiness, nil
 		}
-		return waitAndReport(client, out, jobID, pollValue(args), waitTimeoutValue(args))
+		return waitAndReport(client, args, out, jobID, pollValue(args), waitTimeoutValue(args))
 	}
-	hasPayload := false
-	var payload Value
-	if args.Index != nil {
-		picked, pickErr := pickIndex(response.Envelope, *args.Index, true)
-		if pickErr != nil {
-			return 0, pickErr
-		}
-		payload = picked
-		hasPayload = true
-	}
-	out.Response(response, "commands", false, 0, hasPayload, payload)
-	return verdict(response), nil
+	return emitCommandResult(response, args, out, "commands")
 }
 
 // waitAndReport 轮询异步任务并汇报进度(每步一行,方便盯长批次)。
-func waitAndReport(client CommandAPI, out *Printer, jobID string, poll, timeout float64) (int, error) {
+func waitAndReport(client CommandAPI, args *Args, out *Printer, jobID string, poll, timeout float64) (int, error) {
 	seen := 0
 	tick := func(response *Response) {
 		data := asObj(response.Data())
@@ -401,7 +389,7 @@ func waitAndReport(client CommandAPI, out *Printer, jobID string, poll, timeout 
 		}
 		if steps > seen {
 			seen = steps
-			out.Line(fmt.Sprintf("  任务 %s:已跑 %d 步(状态 %s)", jobID, steps, pyStr(mustGet(data, "status"))))
+			out.Warn(fmt.Sprintf("  任务 %s:已跑 %d 步(状态 %s)", jobID, steps, pyStr(mustGet(data, "status"))))
 		}
 	}
 	final, err := client.WaitJob(jobID, poll, timeout, tick)
@@ -418,42 +406,38 @@ func waitAndReport(client CommandAPI, out *Printer, jobID string, poll, timeout 
 		status = objStr(data, "status")
 	}
 	result := asObj(objGet(data, "data"))
-	out.Line(fmt.Sprintf("任务 %s 结束:状态=%s 成功=%s 失败=%s 断言未过=%s 耗时=%sms", jobID, status,
+	out.Warn(fmt.Sprintf("任务 %s 结束:状态=%s 成功=%s 失败=%s 断言未过=%s 耗时=%sms", jobID, status,
 		pyStr(objGet(result, "succeeded")), pyStr(objGet(result, "failed")),
 		pyStr(objGet(result, "expectFailed")), pyStr(objGet(data, "durationMs"))))
 	if final.Msg() != "" {
-		out.Line("  原因:" + final.Msg())
+		out.Warn("  原因:" + final.Msg())
 	}
 	if data != nil {
 		if errorValue, ok := data.Get("error"); ok && !isEmptyJSON(errorValue) {
-			out.Line("  错误:" + pyStr(errorValue))
+			out.Warn("  错误:" + pyStr(errorValue))
 		}
 	}
-	if out.Mode != "compact" {
-		out.JSON(data)
+	code, outputErr := emitCommandResult(final, args, out, "job")
+	if outputErr != nil && status != "done" {
+		return ExitBusiness, nil
 	}
-	if status == "done" {
-		return ExitOK, nil
+	if status != "done" && code == ExitOK {
+		code = ExitBusiness
 	}
-	return ExitBusiness, nil
+	return code, outputErr
 }
 
 // cmdJob 查/等异步任务。
 func cmdJob(client CommandAPI, args *Args, out *Printer) (int, error) {
 	jobID := derefOr(args.JobID, "")
 	if args.Wait {
-		return waitAndReport(client, out, jobID, pollValue(args), waitTimeoutValue(args))
+		return waitAndReport(client, args, out, jobID, pollValue(args), waitTimeoutValue(args))
 	}
 	response, err := client.Job(jobID, true)
 	if err != nil {
 		return 0, err
 	}
-	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
-	if err != nil {
-		return 0, err
-	}
-	out.JSON(value)
-	return verdict(response), nil
+	return emitCommandResult(response, args, out, "job")
 }
 
 // cmdUpload 把文件送到服务端暂存区。
@@ -791,4 +775,25 @@ func cmdControl(client CommandAPI, args *Args, out *Printer) (int, error) {
 		out.JSON(value)
 	}
 	return verdict(response), nil
+}
+
+// Output failures must not hide an already failed execution or cause a replay.
+func emitCommandResult(response *Response, args *Args, out *Printer, label string) (int, error) {
+	code := verdict(response)
+	value, handled, err := prepare(response, args, out)
+	if err != nil {
+		out.Warn("Output failed after execution; inspect recorded response, do not replay: " + err.Error())
+		if code != ExitOK {
+			return code, nil
+		}
+		return 0, err
+	}
+	if !handled || out.Mode == "json" {
+		if args.Index != nil {
+			out.JSON(value)
+		} else {
+			out.Response(response, label, false, 0, false, nil)
+		}
+	}
+	return code, nil
 }

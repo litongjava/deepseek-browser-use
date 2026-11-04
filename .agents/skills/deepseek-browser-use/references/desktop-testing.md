@@ -33,4 +33,6 @@ dsb run click_element_by_selector -p selector=#refresh -p mode=mouse --precondit
 dsb report --record-dir logs/agent/native-test --out report.json --markdown report.md
 ```
 
-报告只读已有记录，不操作浏览器。JSON 保留响应证据、命令/动作/业务状态及成功、失败、跳过、未知计数；Markdown 是证据索引。缺响应、脱敏和未知动作不补成成功；执行前被拒绝（`ok:false`、`actionStatus:not-started`）计为失败，`actionStatus:unknown` 仍计未知，每步附 `actionStatus` 和 `errorCode`。未记录用例无法推断；截图路径不证明图片存在或完整，按 [测试与证据](testing-evidence.md) 核验。版本、时间及真实/模拟身份缺失时仍是未知。
+报告只读已有记录，不操作浏览器。JSON 保留响应证据、命令/动作/业务状态及成功、失败、跳过、未知计数；Markdown 是证据索引。缺响应和未知动作不补成成功；新脱敏记录保留协议状态，detailsRedacted 不再强制将命令标为未知，旧记录无法恢复的细节仍为未知；执行前被拒绝（`ok:false`、`actionStatus:not-started`）计为失败，`actionStatus:unknown` 仍计未知，每步附 `actionStatus` 和 `errorCode`。未记录用例无法推断；截图路径不证明图片存在或完整，按 [测试与证据](testing-evidence.md) 核验。版本、时间及真实/模拟身份缺失时仍是未知。
+
+连接信息中 `attachment` 是固定快照（targetId、attachedUrl、attachedAt），`page` 是本次观测（currentUrl、title、observedAt、available）。旧 url 字段仅为兼容保留，表示连接时地址；页面恢复不更新 attachment。environment 仍为 unknown，只有独立业务证据才能证明应用使用真实后端。报告按 children 展开 batch，明确执行和未执行；不能从缺失记录补造成功。

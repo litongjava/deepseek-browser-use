@@ -1,0 +1,34 @@
+{
+  "data": {
+    "retryable": false,
+    "execution": {
+      "note": "Cancellation prevents pending dispatch; diagnostics do not access the browser.",
+      "dispatchStarted": true,
+      "method": "click_element_by_selector",
+      "observationCompleted": false,
+      "workerRunning": false,
+      "commandId": "707612774609178624",
+      "retrySafe": false,
+      "stage": "failure-observation",
+      "actionStatus": "unknown",
+      "cancelled": false,
+      "cancelRequested": false,
+      "taskId": "11004",
+      "status": "failed",
+      "elapsedMs": "413"
+    },
+    "urlAfter": "about:blank",
+    "retryBudget": {
+      "retries": 0,
+      "commandAttempts": 1,
+      "remainingMs": "29588",
+      "attempts": 1,
+      "elapsedMs": "412"
+    },
+    "errorCode": "ELEMENT_OBSCURED",
+    "titleAfter": "DSB reliability fixture"
+  },
+  "msg": "click_element_by_selector 失败：[ELEMENT_OBSCURED] 元素被遮挡，无法接收点击: 选择器 #go；目标中心点上实际命中的是别的元素: <DIV class=>(被遮挡；调用 get_modals 查看 DOM 弹窗和 covers，get_dialog 只检查原生 alert/confirm)",
+  "ok": false,
+  "code": 0
+}

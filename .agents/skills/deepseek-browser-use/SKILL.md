@@ -31,7 +31,7 @@ dsb start --browser chrome --summary
 dsb run go_to_url -p 'url=https://example.com' --summary
 dsb state --text-only
 dsb js '@query.js' --select data.result
-dsb batch commands.json --async --wait --summary
+dsb batch commands.json --async --wait --out result.json --summary
 ~~~
 
 - `list_methods` / `methods` 查询当前服务的能力，不按文档中的固定方法数量判断。开发后需更新本机后端时用 `dsb server build`、`dsb server restart`；先确认没有其他任务使用共享服务。
@@ -58,7 +58,7 @@ dsb batch commands.json --async --wait --summary
 | 需要元素属性 | `get_interactive_map`、`get_element_attribute` 或只读 JS |
 | 多个同名元素 | role 定位返回 `AMBIGUOUS_LOCATOR` 时读 candidates，缩小 scope 或明确 nth |
 | 上传后表单仍空 | 核对目标 file input、`consumed` 和 `get_element_listeners`，再检查组件状态；不盲目重传 |
-| 有遮挡或弹窗 | `get_modals` / `close_modal`；未识别时读 DOM 定位可见浮层 |
+| 有遮挡或弹窗 | `get_modals` 查看 DOM 弹窗与 covers 候选；`get_dialog` 只看原生弹窗。covers 仅诊断，不自动关闭 |
 | 需要接口响应 | `get_response_body` 回看或 `wait_for_response` 等待；`get_requests` 只有请求元数据 |
 | 新页签动作报错 | 先 `get_tabs` 核对是否已创建、当前操作页是否切换；不要直接重开 |
 
@@ -76,7 +76,7 @@ dsb batch commands.json --async --wait --summary
 
 ## 批量与 JavaScript
 
-一个批次只包含一个计划段，末尾读取结果。依赖动作保持失败即停；仅对相互独立的观测按需用 `--keep-going`。长批次用 `--async --wait`，收集结果；超时不代表后台已停止。
+批次执行前校验所有步骤的静态参数；`INVALID_PARAMS` 表示整批未执行。通过预校验不保证运行时成功，也不提供回滚。一个批次只包含一个计划段，末尾读取结果。依赖动作保持失败即停；仅对相互独立的观测按需用 `--keep-going`。长批次用 `--async --wait`，收集结果；超时不代表后台已停止。
 
 `expect` 与动作放在同一个步骤中，判断具体业务条件：
 
@@ -116,25 +116,10 @@ dsb batch commands.json --async --wait --summary
 | [测试与证据](references/testing-evidence.md) | 前置条件、业务断言、截图完整性 |
 | [商户申请](references/payment-onboarding.md) | 多层验证、密钥上传与资料脱敏 |
 
-## 方法索引
+## 方法参数
 
-以下按用途列出方法；参数与返回字段只在 [命令分册](references/commands.md) 维护。实际可用性以 `dsb list_methods` 为准。
+用 `dsb list_methods` 找方法名；必填、类型和组合要求见 [自动生成的参数表](references/parameters.md)，语义和返回值见 [命令分册](references/commands.md)。运行时精确查询：
 
-| 用途 | 方法 |
-| --- | --- |
-| 实例生命周期 | `start`、`close`、`shutdown`；外部 CDP 目标用 `targets` 列出、`attach` 接入 |
-| 导航与页面信息 | `navigate`、`go_to_url`、`go_back`、`go_forward`、`reload`、`get_url`、`get_title`、`get_browser_state`、`list_frames`、`wait` |
-| 元素交互 | `click_element_by_index`、`double_click_element_by_index`、`hover_element_by_index`、`focus_element_by_index`、`check_element_by_index`、`uncheck_element_by_index`、`input_text`、`type_text`、`send_keys`、`key_down`、`key_up`、`upload_file`、`drag_element_by_index`、`get_dropdown_options`、`select_dropdown_option`、`scroll`、`scroll_to_text`、`clear_text` |
-| 读取元素信息与状态 | `get_element_text`、`get_element_html`、`get_element_value`、`get_element_attribute`、`get_element_listeners`、`get_element_count`、`get_element_box`、`is_visible`、`is_enabled`、`is_checked` |
-| 按选择器 / 文本 / 语义定位 | `click_element_by_selector`、`input_text_by_selector`、`click_element_by_text`、`click_element_by_role`、`input_text_by_label`、`hover_and_click` |
-| 标签页 | `get_tabs`、`new_tab`、`switch_tab`、`switch_tab_by_url`、`close_tab`、`close_other_tabs`、`bring_to_front` |
-| 等待 | `wait_for_element`、`wait_for_text`、`wait_for_url`、`wait_for_load`、`wait_for_function`、`wait_for_idle`、`wait_for_stable`、`wait_for_count` |
-| 鼠标 | `mouse_move`、`mouse_down`、`mouse_up`、`mouse_wheel`、`mouse_click`、`mouse_click_by_selector` |
-| 截图与 PDF | `screenshot`、`get_element_screenshot`、`pdf` |
-| Cookie 与本地存储 | `get_cookies`、`set_cookie`、`clear_cookies`、`get_local_storage`、`set_local_storage`、`clear_local_storage` |
-| 浏览器设置 | `set_viewport`、`set_geolocation`、`set_offline`、`set_headers`、`set_credentials`、`set_media`、`grant_permissions` |
-| 弹窗与控制台 | `get_dialog`、`get_js_dialog`、`clear_dialog`、`clear_js_dialog`、`set_dialog_behavior`、`get_modals`、`close_modal`、`get_console_logs`、`clear_console_logs` |
-| 网络 | `route`、`unroute`、`get_requests`、`wait_for_response`、`get_response_body` |
-| 其它与服务自省 | `extract_structured_data`、`extract_markdown`、`find_text`、`list_tables`、`download_image`、`execute_js`、`list_methods`、`get_config`、`list_tasks`、`get_diagnostics`、`cancel_command`、`cleanup`、`list_recipes`、`run_recipe`、`get_job`、`cancel_job`、`list_jobs` |
-| 人机协同 | `request_human_input`、`ask_user`、`submit_human_input`、`get_human_input`、`ocr_image` |
-| profile 与批量 | `list_profiles`、`clone_profile`、`press_key`、`get_page_snapshot`、`diff_dom_text`、`get_interactive_map`、`get_form_state`、`commands` |
+```powershell
+dsb run list_methods -p details=true -p filter=wait_for_function --json
+```

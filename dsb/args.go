@@ -252,7 +252,7 @@ var subcommandSpecs = map[string][]argSpec{
 
 // commandsWithOutputSwitches 与 Python 版的循环一致。
 var commandsWithOutputSwitches = map[string]bool{
-	"report": true, "attach": true, "targets": true, "profiles": true, "profile": true,
+	"batch": true, "job": true, "report": true, "attach": true, "targets": true, "profiles": true, "profile": true,
 	"diagnose": true, "cancel": true, "health": true, "methods": true, "list_methods": true, "config": true, "tasks": true,
 	"start": true, "close": true, "state": true, "run": true, "js": true,
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -59,7 +60,7 @@ func cmdReport(client *Client, args *Args, out *Printer) (int, error) {
 					status = "skipped"
 				}
 			}
-			if objGet(data, "redacted") == true {
+			if objGet(data, "redacted") == true && objGet(data, "evidenceVersion") == nil {
 				status = "unknown"
 			}
 		}
@@ -78,9 +79,17 @@ func cmdReport(client *Client, args *Args, out *Printer) (int, error) {
 		if reqErr != nil || parseErr != nil || resErr != nil || decodeErr != nil {
 			step.Set("evidenceMissing", true)
 		}
+		step.Set("detailsRedacted", objGet(data, "redacted") == true)
+		batchData := data
+		if objStr(request, "method") == "get_job" {
+			batchData = objGet(data, "data")
+		}
+		if children := reportBatchSteps(batchData); children != nil {
+			step.Set("children", children)
+		}
 		steps = append(steps, step)
 	}
-	report := ObjOf("schemaVersion", numberFromInt(1), "toolVersion", version, "recordDirectory", client.RecordDir,
+	report := ObjOf("schemaVersion", numberFromInt(2), "toolVersion", version, "recordDirectory", client.RecordDir,
 		"scope", "Recorded commands only; success does not imply business success. Missing timestamps and application identity remain unknown.",
 		"counts", ObjOf("success", numberFromInt(counts["success"]), "failure", numberFromInt(counts["failure"]), "skipped", numberFromInt(counts["skipped"]), "unknown", numberFromInt(counts["unknown"])), "steps", steps)
 	if args.Markdown != nil {
@@ -91,6 +100,9 @@ func cmdReport(client *Client, args *Args, out *Printer) (int, error) {
 			method := cell.Replace(objStr(step, "method"))
 			action := cell.Replace(objStr(step, "actionStatus"))
 			fmt.Fprintf(&md, "| %d | %s | %s | %s | %s |\n", i+1, method, objStr(step, "status"), action, objStr(step, "response"))
+			for j, child := range asArray(objGet(step, "children")) {
+				fmt.Fprintf(&md, "| %d.%d | %s | %s | %s | %s |\n", i+1, j+1, cell.Replace(objStr(child, "method")), objStr(child, "status"), objStr(child, "actionStatus"), objStr(step, "response"))
+			}
 		}
 		if err := writeTextFile(*args.Markdown, md.String()); err != nil {
 			return 0, err
@@ -126,4 +138,44 @@ func reportErrorCode(response Value) string {
 		return match[1]
 	}
 	return ""
+}
+
+func reportBatchSteps(data Value) []Value {
+	results := asArray(objGet(data, "results"))
+	if results == nil {
+		return nil
+	}
+	children := []Value{}
+	for _, result := range results {
+		detail := objGet(result, "data")
+		status := "unknown"
+		if ok, known := objGet(result, "ok").(bool); known {
+			if ok {
+				status = "success"
+			} else {
+				status = "failure"
+			}
+		}
+		if reportActionStatus(detail) == "unknown" {
+			status = "unknown"
+		}
+		if objGet(detail, "redacted") == true && objGet(detail, "evidenceVersion") == nil {
+			status = "unknown"
+		}
+		passed := objGet(objGet(result, "expectResult"), "passed")
+		if passed == nil {
+			passed = objGet(objGet(detail, "expectResult"), "passed")
+		}
+		children = append(children, ObjOf("index", objGet(result, "index"), "method", objGet(result, "command"),
+			"status", status, "commandSucceeded", objGet(result, "ok"), "actionStatus", reportActionStatus(detail),
+			"actionSucceeded", objGet(detail, "actionSucceeded"), "businessSucceeded", passed,
+			"errorCode", reportErrorCode(result), "detailsRedacted", objGet(detail, "redacted") == true))
+	}
+	// Only explicit server accounting proves which trailing steps never started.
+	if n, err := strconv.Atoi(pyStr(objGet(data, "notExecuted"))); err == nil && n > 0 && n <= 10000 {
+		for i := 0; i < n; i++ {
+			children = append(children, ObjOf("index", numberFromInt(len(results)+i), "status", "skipped", "actionStatus", "not-started"))
+		}
+	}
+	return children
 }

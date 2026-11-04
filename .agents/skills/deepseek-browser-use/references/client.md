@@ -36,7 +36,7 @@ PowerShell 的 `> 文件` 与客户端 `--out` 不是一回事：Windows PowerSh
 
 ### 回执太大：`--out` 落盘、`--grep` 只看命中行
 
-`run`、`js`、`start`、`close`、`state`、`health`、`methods`（别名 `list_methods`）、`config`、`tasks` 统一提供两个输出开关（只影响**怎么打印**，不改变发出去的请求，也不会多一次往返）：
+`batch`、`job`、`run`、`js`、`start`、`close`、`state`、`health`、`methods`（别名 `list_methods`）、`config`、`tasks` 统一提供两个输出开关（只影响**怎么打印**，不改变发出去的请求，也不会多一次往返）：
 
 ```bash
 # 完整 JSON 写进文件，stdout 只留一行「已写入 …（N 字符，M 行）」
@@ -49,21 +49,7 @@ dsb --id 1001 run get_browser_state --grep mediaCount
 - 读页面时最常用：一条回执动辄几万字符，而你只想确认某一行的存在。**服务端侧的等价能力是 `find_text`**
   （它连文本都不用传回来），这里两个开关是给"回执已经拿到、只想看其中几行"准备的。
 - 两者可以同时用：先落盘，再从同一份文本里打命中行。
-- **落盘文件的回执里中文是乱码（`ä¾èµ–` 这种）？先怀疑你的读法，不是文件坏了。** `dsb` 一律以 UTF-8
-  写盘，服务端也按 UTF-8 回；但 **Windows PowerShell 5.1 的 `Get-Content` 默认按 ANSI 解码**，
-  含中文的 UTF-8 回执就会被显示成 Latin-1 乱码 —— 而 `read` 工具或 `Get-Content -Encoding utf8`
-  读同一个文件是完全正常的。先看版本（`$PSVersionTable.PSVersion`：`5.1.x` 就是老的 Windows PowerShell，
-  `7.x` 才是 pwsh，7 默认 UTF-8 没有这个问题），是 5.1 就一律加 `-Encoding utf8`：
-
-  ```powershell
-  $PSVersionTable.PSVersion                                  # 5.1.x → 下面三条都必须带 -Encoding
-  dsb --id 1001 run execute_js --params '@p.json' --out state.json
-  Get-Content state.json -Encoding utf8 -TotalCount 20        # ✗ 不带 -Encoding 会看到乱码
-  Select-String -Path state.json -Pattern '中央仓库' -Encoding utf8
-  ```
-
-  **别据乱码去报「服务端/客户端编码 bug」**：先读同一份文件的留档（`logs/agent/<会话>/*.res.json`，
-  UTF-8），或者用 harness 的 read 工具再判断一次。
+- 文件为 UTF-8；PowerShell 使用 `Get-Content -Raw -Encoding UTF8`。乱码时先核对读取编码。
 
 复杂请求继续使用 `--params '@文件.json'` / `batch 文件.json`，不为过滤输出改用裸 HTTP 请求，
 否则会丢失统一退出码和调用留档。
@@ -238,3 +224,15 @@ $result.data.path
 ```
 
 `data.path` 是服务端文件路径；远程服务使用 `data.url`，相对 URL 需按服务地址解析。不要将 JSON 输出文件命名为 `.png`。仅需路径时可在原命令使用 `--select data.path`。PowerShell 启动时若 profile 被执行策略拦截，宿主应使用 `powershell.exe -NoProfile`，无需修改系统执行策略。
+
+### batch/job 输出与 PowerShell 退出码
+
+`batch --async --wait --json` 和 `job --wait --json` 的 stdout 仅输出一个最终响应信封，进度在 stderr；非等待 job 查询的 ok 表示查询成功，执行状态看 data.status。`--out` 保存收到的响应；成功保存不改变执行退出码，保存失败会明确报错，不能重放动作补文件。
+
+```powershell
+dsb batch steps.json --async --wait --json --out result.json
+$dsbExit = $LASTEXITCODE
+$result = Get-Content result.json -Raw -Encoding UTF8 | ConvertFrom-Json
+# 脚本退出时传递原生命令状态；不要用后续 PowerShell 命令的状态代替。
+exit $dsbExit
+```

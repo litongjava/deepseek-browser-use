@@ -2,6 +2,8 @@
 
 > 本文是 [SKILL.md](../SKILL.md) 的分册，按需阅读：这里逐条列出方法名、参数与返回字段，写法与 SKILL.md 完全一致，只是不再占入口文件的篇幅。
 
+必填与 JSON 类型以 [自动生成参数表](parameters.md) 为准；该表与运行时校验共用定义。
+
 下面的名字就是 `method` 的取值，也是 `params` 里的参数名。
 
 ### 实例生命周期
@@ -536,3 +538,5 @@ list_tables / get_browser_state 的 mediaHint 发现有图
 ```
 
 | `wework-qykit-open-console` | 企业微信后台的「邮件 / 微盘 / 文档 / 会议」：现取一个未被消费的 token，把 `exmail.qq.com` 控制台当顶层页面打开 |
+
+`get_modals` 另返回最多 24 个 `covers` 候选（diagnosticOnly、matchedBy、rect、frameIndex、pointerEvents），超过上限时 coversTruncated 为 true。候选不证明其拦截了目标，也不参与 close_modal。实际点击命中信息见 coveredBy。

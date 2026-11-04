@@ -428,13 +428,15 @@ public class PlaywrightService {
       instance.externalBrowser = browser;
       instance.externalIdentity = Kv.by("mode", "external-cdp").set("lifecycleOwner", "external")
           .set("targetId", ids.get(0)).set("url", page.url()).set("targetType", "page")
-          .set("host", "unknown").set("product", browser.version()).set("environment", "unknown");
+          .set("host", "unknown").set("product", browser.version()).set("environment", "unknown")
+          .set("attachment", Kv.by("targetId", ids.get(0)).set("attachedUrl", page.url())
+              .set("attachedAt", java.time.Instant.now().toString()));
       instance.pages.add(page);
       instance.recorderMode = "off";
       attachListeners(instance, page);
       INSTANCES.put(taskId, instance);
       retained = true;
-      return RespBodyVo.ok(Kv.by("id", taskId).set("browser", instance.externalIdentity));
+      return RespBodyVo.ok(Kv.by("id", taskId).set("browser", externalObservation(instance)));
     } catch (RuntimeException error) {
       return RespBodyVo.fail("External CDP attach failed; enable the debugging port and verify endpoint: "
           + briefMessage(error.getMessage()));
@@ -1424,10 +1426,22 @@ public class PlaywrightService {
    * {@code chrome} 表示「用的是不是本机安装的 Google Chrome」,{@code userProfile} 表示「用的是不是用户
    * 自己那份 Chrome profile(现成的登录态)」,{@code mode} 是 {@code cdp} / {@code managed}。
    */
+  public Kv externalObservation(BrowserInstance instance) {
+    Kv identity = new Kv();
+    identity.putAll(instance.externalIdentity);
+    Kv page = Kv.by("observedAt", java.time.Instant.now().toString());
+    try {
+      page.set("currentUrl", instance.page.url()).set("title", instance.page.title()).set("available", true);
+    } catch (RuntimeException unavailable) {
+      page.set("available", false);
+    }
+    return identity.set("page", page);
+  }
+
   public Kv browserInfo(Long taskId) {
     BrowserInstance instance = INSTANCES.get(taskId);
     SharedBrowser browser = sharedBrowser;
-    if (instance != null && instance.externalIdentity != null) { return instance.externalIdentity; }
+    if (instance != null && instance.externalIdentity != null) { return externalObservation(instance); }
     if (instance == null || browser == null) {
       return null;
     }
@@ -3553,7 +3567,7 @@ public class PlaywrightService {
    * 原来写死在 ActionService 里(200)。批量上限与「服务端要扛多久」直接相关:超时、并发、
    * 网络保留深度都已经是可配的,唯独这一项调不了。
    */
-  static int commandMaxPerBatch() {
+  public static int commandMaxPerBatch() {
     Double configured = positiveDouble(ChromeBrowser.config(KEY_COMMAND_MAX_PER_BATCH), 0);
     return configured <= 0 ? DEFAULT_COMMAND_MAX_PER_BATCH : configured.intValue();
   }
@@ -4645,7 +4659,7 @@ public class PlaywrightService {
     }
     outcome.extra.set("coveredBy", probe.get("hit")).set("coveredHint",
         "目标中心点上实际命中的是别的元素(常见:用户服务协议层、弹窗遮罩、叠起来的确认框),"
-            + "auto 模式不会穿透遮挡层；请读取当前弹窗并定位其中的目标，或完成当前弹窗后再操作背景页面");
+            + "auto 模式不会穿透遮挡层；调用 get_modals 检查 DOM 弹窗和 covers 候选遮罩（get_dialog 仅检查原生 alert/confirm），再定位目标");
     return true;
   }
 
@@ -4679,7 +4693,7 @@ public class PlaywrightService {
     String description = hit instanceof Map ? String.valueOf(((Map<?, ?>) hit).get("text")) + " <"
         + String.valueOf(((Map<?, ?>) hit).get("tag")) + " class=" + String.valueOf(((Map<?, ?>) hit).get("className"))
         + ">" : String.valueOf(hit);
-    return "；目标中心点上实际命中的是别的元素:" + description + "(被遮挡，请先读取并处理当前弹窗，再定位目标)";
+    return "；目标中心点上实际命中的是别的元素:" + description + "(被遮挡；调用 get_modals 查看 DOM 弹窗和 covers，get_dialog 只检查原生 alert/confirm)";
   }
 
   private static void jsClick(Locator locator) {
@@ -9618,6 +9632,14 @@ public class PlaywrightService {
         const blocking = modals.filter(m => m.blocking);
         const strictCount = modals.filter(m => m.confidence === 'strict').length;
         return {
+          covers: covers.slice(0, 24).map(el => {
+            const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+            return {kind:'cover-candidate', matchedBy:'heuristic:viewport-cover', diagnosticOnly:true,
+              tag:el.tagName, id:(el.id || '').slice(0,120), className:classOf(el).slice(0,120),
+              rect:[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)],
+              zIndex:cs.zIndex, pointerEvents:cs.pointerEvents};
+          }),
+          coversTruncated: covers.length > 24,
           count: modals.length,
           countStrict: strictCount,
           countHeuristic: modals.length - strictCount,
@@ -9653,6 +9675,8 @@ public class PlaywrightService {
   private static Kv modalProbe(BrowserInstance inst) {
     Kv merged = new Kv();
     List<Kv> modals = new ArrayList<>();
+    List<Kv> covers = new ArrayList<>();
+    boolean coversTruncated = false;
     List<String> errors = new ArrayList<>();
     boolean any = false;
     List<DomService.FrameNode> nodes;
@@ -9677,6 +9701,19 @@ public class PlaywrightService {
       }
       any = true;
       double[] offset = ordinal == 0 ? new double[] {0, 0} : frameOffset(node.frame);
+      coversTruncated |= Boolean.TRUE.equals(probe.get("coversTruncated"));
+      if (probe.get("covers") instanceof List<?> candidates) {
+        for (Object candidate : candidates) {
+          if (covers.size() >= 24) { coversTruncated = true; break; }
+          if (candidate instanceof Map<?, ?> fields) {
+            Kv cover = new Kv();
+            cover.putAll(fields);
+            shiftPoints(cover, offset);
+            cover.set("frameIndex", ordinal);
+            covers.add(cover);
+          }
+        }
+      }
       Object rawModals = probe.get("modals");
       if (!(rawModals instanceof List)) {
         continue;
@@ -9720,7 +9757,7 @@ public class PlaywrightService {
     if (top == null && !modals.isEmpty()) {
       top = modals.get(modals.size() - 1);
     }
-    merged.set("count", modals.size()).set("countStrict", strict).set("countHeuristic", modals.size() - strict)
+    merged.set("covers", covers).set("coversTruncated", coversTruncated).set("count", modals.size()).set("countStrict", strict).set("countHeuristic", modals.size() - strict)
         .set("countBlocking", blocking).set("modals", modals).set("top", top)
         .set("topIsBlocking", top != null && Boolean.TRUE.equals(top.get("blocking")));
     if (!errors.isEmpty()) {

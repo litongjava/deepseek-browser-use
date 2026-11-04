@@ -26,13 +26,13 @@ dsb --port 10049 --id 1001 batch cmds.json --async --wait
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `params.stopOnError` | `true` | `true`＝遇到第一个失败就停止；`false`＝继续跑完并把每一步结果都返回，**批量里推荐 `false`** |
+| `params.stopOnError` | `true` | `true`＝遇到第一个失败就停止；`false`＝继续跑完并把每一步结果都返回，依赖动作保持默认失败即停，仅独立观测按需设 false |
 | `params.commands` | 必填 | 命令数组，每项**只能有一个键**（外加可选的 `expect`），键是方法名、值是参数对象 |
 | `params.async` | `false` | `true`＝立刻返回 `data.jobId`，批次在后台跑，用 `get_job` 取结果、`cancel_job` 取消。**长批次（几十秒以上）用它**，否则客户端容易超时——而超时**不代表批次停了**，它还在服务端继续跑 |
 | `params.stopOnExpectFailure` | `false` | `true`＝某一步的 `expect` 断言没过就停下 |
 | `params.maxDurationMs` | 无 | 整批的总时长上限，超了就停在当前这一步，`data.stopReason` 说明原因 |
 
-返回值里**每一步的结果都在**：
+返回已尝试步骤的 `results`；`planned` 为计划步数，`notExecuted` 为明确未执行的后续步数。超时或连接中断缺少回执时，不能推断剩余步骤没有执行：
 
 ```jsonc
 {"data":{
@@ -47,7 +47,7 @@ dsb --port 10049 --id 1001 batch cmds.json --async --wait
 - **覆盖范围**：`commands.md` 里的方法，除 `commands` 自身（不允许嵌套）之外**全部都能批量调用**，命令名与单独调用完全一致。
 - 每一步的 `data` 原样返回，所以 `get_browser_state` 的 `data.text`、`execute_js` 的 `data.result`、`is_checked` 的 `data.checked` 在批量里都能直接读到；**动作类命令的 `data.screenshot` 也在**，一个批次就是一段页面变化历史。
 - 有失败时整体响应是 `code:0`，但 `data.results` 仍然完整返回，`msg` 指出第一条失败的命令。
-- 参数缺失会得到 `第 N 条命令 xxx 失败：缺少参数 index`，不会 500。
+- 执行前整批检查必填、类型、参数组合、等待单位和断言结构；错误定位到 `steps[N].方法.字段`，返回 `INVALID_PARAMS`、`actionStatus:not-started`，整批尚未执行。动态元素是否存在仍在运行时检查。
 - 数组最多 200 条；空数组、非对象项、嵌套 `commands` 都会得到中文提示。
 - 布尔参数不传按 `false` 处理（和单独调用一致），所以批量里 **`scroll` 要写 `"down":true` 才向下**；`start` 不传 `headless` 时默认显示窗口，仅显式传 `headless:true` 才使用无头模式。
 
@@ -55,7 +55,7 @@ dsb --port 10049 --id 1001 batch cmds.json --async --wait
 
 ```json
 // search.json：搜索全过程 —— 输入 → 回车 → 等结果 → 取新快照，一次请求完成
-{"id":1001,"method":"commands","params":{"stopOnError":false,"commands":[
+{"id":1001,"method":"commands","params":{"stopOnError":true,"commands":[
   {"input_text":{"index":14,"text":"Mac Mini M4"}},
   {"send_keys":{"keys":"Enter"}},
   {"wait_for_text":{"text":"Mac Mini","timeoutSeconds":10}},
@@ -78,7 +78,7 @@ dsb --port 10049 --id 1001 batch reads.json
 ```
 
 - 需要循环、条件判断这类逻辑，就在批次里用 `execute_js` 一步做完，不要拆成几十条命令。
-- 未知命令返回 `第 N 条命令 xxx 失败：不支持的方法：xxx`。
+- 未知命令在整批预校验中拒绝。参数以 [生成参数表](parameters.md) 或运行时 details 查询为准。`execute_js` 使用 body 或 bodyFile，`wait_for_function` 使用 expression，等待参数不接受 timeout。
 
 ### 用 `expect` 断言「动作真的生效了」
 
@@ -123,7 +123,7 @@ dsb 不执行 Node/Playwright 脚本，按下表逐步改写成 `commands`：
 | `page.on('console')` | 末尾 `get_console_logs` |
 | 需要麦克风/摄像头 | `dsb start --fake-media`，再按需 `grant_permissions` |
 
-关键动作带 `expect` 读业务状态。`dsb batch` 不支持 `--out`；`--async --wait --json` 依次输出提交回执和最终结果，取最后一个 JSON 对象。
+关键动作带 `expect` 读业务状态。`batch` 和 `job` 支持 `--out` / `--grep`；`--async --wait --json` 的 stdout 只有最终回执，进度走 stderr。
 
 ## 八、执行 JavaScript
 

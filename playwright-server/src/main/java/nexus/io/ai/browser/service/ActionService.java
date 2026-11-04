@@ -29,6 +29,7 @@ import com.jfinal.kit.Kv;
 
 import nexus.io.ai.browser.actions.registry.CommandFlags;
 import nexus.io.ai.browser.actions.registry.CommandTable;
+import nexus.io.ai.browser.actions.registry.CommandSchema;
 import nexus.io.ai.browser.actions.registry.TrackedArgs;
 
 import nexus.io.jfinal.aop.Aop;
@@ -153,7 +154,7 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
    * 把「传了但一次也没被用过」的参数写进回执
    *
    * <p>
-   * 命令表里的执行体各自读自己认识的键,没有一份声明式的参数清单,所以拼错的参数名会被**静默丢弃**:
+   * 预校验负责静态参数约束；这里保留实际未使用字段的兼容提示，避免新增或条件参数被静默忽略:
    * 回执照样 {@code ok:true},调用方以为自己的意图生效了。
    *
    * <p>
@@ -338,6 +339,10 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
    * @param params 命令参数,可以为空
    */
   public RespBodyVo execute(Long id, String method, JSONObject params) {
+    if ("commands".equals(method)) { params = normalizeBatchParams(params); }
+    List<String> validation = "commands".equals(method) ? CommandSchema.batch(params)
+        : CommandSchema.validate(method, params, method == null ? "method" : method);
+    if (!validation.isEmpty()) { return validationFailure(validation); }
     if ("get_diagnostics".equals(method)) {
       return RespBodyVo.ok(CommandControl.diagnostics(id));
     }
@@ -918,7 +923,7 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
         Kv observed = result.getData() instanceof Kv existing ? existing : Kv.by("result", result.getData());
         if (preconditionResult != null) { observed.set("preconditionResult", preconditionResult); }
         if (attached != null && attached.externalIdentity != null) {
-          observed.set("environmentIdentity", attached.externalIdentity);
+          observed.set("environmentIdentity", svc.externalObservation(attached));
         }
         CommandControl.actionCompleted();
         if (expectation != null) {
@@ -1232,6 +1237,9 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
    * @param jobId 非空表示这是一次异步任务:每步之间检查取消标记,并把已跑步数写回任务
    */
   public RespBodyVo batchExecute(Long id, JSONObject params, String jobId) {
+    params = normalizeBatchParams(params);
+    List<String> validation = CommandSchema.batch(params);
+    if (!validation.isEmpty()) { return validationFailure(validation); }
     Long browserId = id;
     boolean stopOnError = true;
     if (params == null) {
@@ -1355,7 +1363,8 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
       }
     }
 
-    Kv data = Kv.by("count", results.size()).set("succeeded", succeeded).set("failed", failed)
+    Kv data = Kv.by("count", results.size()).set("planned", commands.size())
+        .set("notExecuted", commands.size() - results.size()).set("succeeded", succeeded).set("failed", failed)
         .set("expectFailed", expectFailed)
         .set("stopped", stopReason != null || (stopOnError && failed > 0)
             || (stopOnExpectFailure && expectFailed > 0))
@@ -1376,6 +1385,22 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     }
     resp.setData(data);
     return resp;
+  }
+
+  private static JSONObject normalizeBatchParams(JSONObject params) {
+    if (params != null && params.size() == 1 && !params.containsKey("commands") && !params.containsKey("stopOnError")) {
+      JSONArray steps = new JSONArray();
+      steps.add(params);
+      return JSONObject.of("commands", steps);
+    }
+    return params;
+  }
+
+  private static RespBodyVo validationFailure(List<String> errors) {
+    RespBodyVo failure = RespBodyVo.fail("[INVALID_PARAMS] " + String.join("; ", errors) + "; no commands executed");
+    failure.setData(Kv.by("errorCode", "INVALID_PARAMS").set("errors", errors)
+        .set("stage", "validation").set("retrySafe", true).set("actionExecuted", false).set("actionStatus", "not-started"));
+    return failure;
   }
 
   /** 解析 JSON 请求体,失败时给出中文原因 */

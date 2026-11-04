@@ -1,0 +1,15 @@
+{
+  "data": {
+    "stage": "validation",
+    "actionExecuted": false,
+    "actionStatus": "not-started",
+    "errorCode": "INVALID_PARAMS",
+    "errors": [
+      "steps[1].wait_for_function.expression required",
+      "steps[1].wait_for_function.body is unsupported; use expression"
+    ]
+  },
+  "msg": "[INVALID_PARAMS] steps[1].wait_for_function.expression required; steps[1].wait_for_function.body is unsupported; use expression; no commands executed",
+  "ok": false,
+  "code": 0
+}

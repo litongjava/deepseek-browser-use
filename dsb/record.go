@@ -17,13 +17,13 @@ func (c *Client) recordCall(label string, payload Value, response *Response, sen
 		return
 	}
 	// Redact copies only; callers still receive the original live response.
-	sensitive := sensitiveRequest(payload)
+	sensitive := sensitiveRequest(payload) || objStr(payload, "method") == "get_job"
 	if response != nil {
 		copy := *response
 		copy.Envelope = redactCookieRecords(response.Envelope)
 		if sensitive {
 			if envelope := asObj(copy.Envelope); envelope != nil {
-				envelope.Set("data", ObjOf("redacted", true))
+				envelope.Set("data", safeRecordedData(objGet(response.Envelope, "data"), payload))
 				envelope.Set("msg", redactedCookieValue)
 			}
 		}
@@ -41,6 +41,9 @@ func (c *Client) recordCall(label string, payload Value, response *Response, sen
 	}
 	writeErr := func() error {
 		requestText := EncodeJSON(redactCookieRecords(payload), encIndent2)
+		if sensitive {
+			requestText = EncodeJSON(safeRecordedRequest(payload), encIndent2)
+		}
 		// 用 writeTextFile 而不是 os.WriteFile:它与旧 Python 版一样按文本模式把 \n 翻成 \r\n,
 		// 换掉客户端之后留档文件的字节不变(实测旧记录就是 CRLF)。
 		if err := writeTextFile(filepath.Join(c.RecordDir, fmt.Sprintf("%03d.req.json", index)),

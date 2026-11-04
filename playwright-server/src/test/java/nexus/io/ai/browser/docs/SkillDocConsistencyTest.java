@@ -158,10 +158,11 @@ public class SkillDocConsistencyTest {
 
   /** 命令表里的每个方法都要在文档里出现,否则模型根本不知道有这个能力 */
   @Test
-  public void everyCommandIsDocumented() {
+  public void everyCommandIsDocumented() throws IOException {
+    String reference = doc + Files.readString(REPO_ROOT.resolve(".agents/skills/deepseek-browser-use/references/parameters.md"));
     List<String> missing = new ArrayList<>();
     for (String command : CommandTable.names()) {
-      if (!doc.contains("`" + command + "`")) {
+      if (!reference.contains("`" + command + "`")) {
         missing.add(command);
       }
     }

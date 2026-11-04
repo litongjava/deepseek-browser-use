@@ -30,7 +30,7 @@ func sensitiveRequest(value Value) bool {
 }
 
 func inputMethod(method string) bool {
-	return strings.HasPrefix(method, "input_text") || method == "type_text" || method == "send_keys" || method == "press_key"
+	return strings.HasPrefix(method, "input_text") || method == "type_text" || method == "send_keys" || method == "press_key" || method == "key_down" || method == "key_up"
 }
 
 // redactCookieRecords copies structured credentials and input payloads before recording.
@@ -71,7 +71,7 @@ func redactCookieRecords(value Value) Value {
 		}
 		if strings.HasPrefix(method, "input_text") || method == "type_text" || method == "send_keys" {
 			if result.Has("data") {
-				result.Set("data", ObjOf("redacted", true))
+				result.Set("data", safeEvidence(objGet(typed, "data")))
 			}
 		}
 		redactInput(result, method)
@@ -199,7 +199,7 @@ func redactInput(params *Obj, method string) {
 		}
 		return
 	}
-	if strings.HasPrefix(method, "input_text") || method == "type_text" || method == "send_keys" || method == "press_key" {
+	if strings.HasPrefix(method, "input_text") || method == "type_text" || method == "send_keys" || method == "press_key" || method == "key_down" || method == "key_up" {
 		for _, key := range []string{"text", "value", "keys", "key"} {
 			if params.Has(key) {
 				params.Set(key, redactedCookieValue)

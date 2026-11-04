@@ -1,0 +1,38 @@
+{
+  "data": {
+    "note": "当前没有可见的 DOM 弹窗(已跑过框架选择器 + 类名线索 + 几何兜底三轮扫描,整页遮罩不算弹窗;get_dialog 看的是原生 alert/confirm,两者不同)",
+    "countBlocking": 0,
+    "scannedBy": [
+      "selector",
+      "heuristic:class-name",
+      "heuristic:fixed-overlay"
+    ],
+    "countStrict": 0,
+    "count": 0,
+    "modals": [],
+    "topIsBlocking": false,
+    "coversTruncated": false,
+    "countHeuristic": 0,
+    "covers": [
+      {
+        "rect": [
+          0,
+          0,
+          1664,
+          937
+        ],
+        "frameIndex": 0,
+        "kind": "cover-candidate",
+        "pointerEvents": "auto",
+        "className": "",
+        "matchedBy": "heuristic:viewport-cover",
+        "tag": "DIV",
+        "id": "cover",
+        "diagnosticOnly": true,
+        "zIndex": "999"
+      }
+    ]
+  },
+  "ok": true,
+  "code": 1
+}
