@@ -154,7 +154,8 @@ public final class CommandTraceLog {
           warnOnce(e);
         }
       });
-    } catch (RuntimeException | OutOfMemoryError e) {
+    } catch (RuntimeException | OutOfMemoryError | StackOverflowError e) {
+      // Tracing must never turn a successful command into HTTP 500.
       warnOnce(e);
     }
   }
@@ -258,7 +259,12 @@ public final class CommandTraceLog {
     String mask = mask();
     String result = text;
     for (java.util.regex.Pattern pattern : compiledPatterns()) {
-      result = pattern.matcher(result).replaceAll(java.util.regex.Matcher.quoteReplacement(mask));
+      try {
+        result = pattern.matcher(result).replaceAll(java.util.regex.Matcher.quoteReplacement(mask));
+      } catch (StackOverflowError e) {
+        // A configured rule may overflow on long values; masking everything is the only safe result.
+        return mask;
+      }
     }
     return result;
   }
@@ -341,7 +347,7 @@ public final class CommandTraceLog {
 
   private static boolean inputMethod(String method) {
     return method != null && (method.startsWith("input_text") || method.equals("type_text")
-        || method.equals("send_keys") || method.equals("press_key"));
+        || method.equals("send_keys") || method.equals("press_key") || method.equals("keyboard_type"));
   }
 
   private static boolean sensitiveRequest(Object value) {

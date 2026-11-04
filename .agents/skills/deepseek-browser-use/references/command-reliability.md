@@ -155,3 +155,18 @@ dsb --id 1001 run execute_js --params '@private-query.json' --sensitive
 实时 stdout 与显式 `--out` 导出保留原值；`--sensitive` 不关闭截图、页面文本产物或其他浏览器采集。任意文本中的秘密无法仅凭字段名识别，历史文件不会追溯处理。`--no-record` 仅关闭 CLI 留档；服务端 trace 由其配置独立控制。新日志中的命令 ID、状态和阶段仍可用于排查。
 
 敏感 CLI 留档仅保留白名单协议证据：步骤序号、与请求匹配的命令名、成功布尔值、标准错误码、阶段和断言 passed；不保存输入、正文、任意 JS 返回、断言实际值或自由错误文本。job 查询留档也使用此投影，无法可靠恢复的命令名留空。实时输出和显式导出的隐私边界不变。
+
+## 拒绝类错误：什么都没有执行
+
+以下错误码的 `actionStatus` 为 `not-started`，`retrySafe` 为 `true`，不需要先观察页面，按回执的 `hint` 改正即可：
+
+| 错误码 | 含义 | 处理 |
+| --- | --- | --- |
+| `BROWSER_CONFIG_CONFLICT` | 与已保留浏览器的 headless、display、profile 或媒体配置不同 | 改用相同配置共用它，或换 `--port`；不要关闭别人在用的浏览器 |
+| `DISPLAY_UNAVAILABLE` | Linux 服务没有 `DISPLAY`，又要显示窗口 | `--display :1`，或 `--headless` |
+| `TASK_ALREADY_EXISTS` | 这个任务 ID 已在运行 | 复用它，或换 `--id` |
+| `TASK_NOT_FOUND` | 任务不存在（常见于服务重启后） | 先 `dsb tasks`，再重新 `start` |
+
+## 动作已发生的错误：不要重复
+
+`POPUP_NOT_OPENED` 表示点击已完成，只是没等到新页签。先 `get_tabs` 或 `wait_for_new_tab -p baseline=<点击前页签数>`，不要再点一次。

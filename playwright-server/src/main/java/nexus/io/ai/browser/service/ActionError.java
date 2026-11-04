@@ -20,6 +20,16 @@ public final class ActionError {
    * 重复下载 / 重复提交。所以单独给一个码,并固定为不可重试。
    */
   public static final String ACTION_UNCERTAIN = "ACTION_UNCERTAIN";
+  /** The retained browser was launched with other settings; nothing was started. */
+  public static final String BROWSER_CONFIG_CONFLICT = "BROWSER_CONFIG_CONFLICT";
+  /** A headed start was requested on a machine without a usable display; nothing was started. */
+  public static final String DISPLAY_UNAVAILABLE = "DISPLAY_UNAVAILABLE";
+  public static final String TASK_ALREADY_EXISTS = "TASK_ALREADY_EXISTS";
+  public static final String TASK_NOT_FOUND = "TASK_NOT_FOUND";
+  /** The click completed but the requested new tab never appeared; repeating may click twice. */
+  public static final String POPUP_NOT_OPENED = "POPUP_NOT_OPENED";
+  /** The page stopped changing but still shows no content or a loading indicator. */
+  public static final String CONTENT_NOT_READY = "CONTENT_NOT_READY";
 
   /**
    * Playwright 事件泵投递过来的「伪故障」:异常不是本次命令产生的,却砸在本次命令上

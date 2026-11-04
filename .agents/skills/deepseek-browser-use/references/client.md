@@ -141,7 +141,11 @@ dsb --use lab methods                                    # 之后就不用敲 IP
 **远端目标不自动拉起**:那台机器上的服务得由它自己起(客户端没有理由去启动别人的进程;硬起只会把
 「地址写错了」变成「在本机起了个没用的服务,然后照样失败」)。远端连不上时得到的是明确提示,不是傻等。
 
-`start` 默认显示浏览器窗口。`--headful` 保留兼容旧命令；`--headless` 显式选择无头模式，两个开关不能同时传。`--fake-media` 启用假麦克风/摄像头；后端过旧时 CLI 直接拒绝。
+`--raw` 配合 `--select`：取到字符串时直接打印原文。`-p` 中 `text`、`selector`、`url`、`expression`、`key(s)`、`name`、`label`、`role`、`filter`、`scope`、`frame`、`body`、`prompt`、`path`、`mode`、`state` 一律按原文传，`-p text=2026` 不会变成数字；其他参数仍按 JSON 解析。
+
+`dsb --version` 带构建时的 commit。`dsb server status` 显示运行中的 jar、是否需要重启和活动任务数。`server restart`/`stop` 在有活动任务时拒绝执行：`--when-idle` 等任务结束（`--idle-timeout` 默认 600 秒，等不到就放弃），`--force` 中断它们。
+
+`start` 默认显示浏览器窗口。`--display :1` 指定 X display，`--ephemeral` 使用临时 profile（见[浏览器](browsers.md)）。`run` 的 `--expect-popup` 和 `--popup-timeout-ms` 用于等待点击打开的新页签。`--headful` 保留兼容旧命令；`--headless` 显式选择无头模式，两个开关不能同时传。`--fake-media` 启用假麦克风/摄像头；后端过旧时 CLI 直接拒绝。
 
 `dsb` 的要点（完整用法与退出码见 `dsb/README.md`）：
 

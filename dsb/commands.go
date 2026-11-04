@@ -282,6 +282,15 @@ func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if args.Sensitive {
 		params.Set("sensitive", true)
 	}
+	if args.ExpectPopup {
+		params.Set("expectPopup", true)
+	}
+	if args.PopupTimeoutMs != nil {
+		if *args.PopupTimeoutMs < 0 || *args.PopupTimeoutMs > 120000 {
+			return 0, usageErrorf("--popup-timeout-ms must be 0..120000")
+		}
+		params.Set("popupTimeoutMs", numberFromInt(*args.PopupTimeoutMs))
+	}
 
 	method := "run"
 	if args.Method != nil {
@@ -300,6 +309,7 @@ func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 	}
 	// 常见别名容错: press_key -> send_keys(key 与 keys 二选一,统一成 keys 后再发,
 	// 并把 key 从参数里摘掉,避免服务端回 unknownParams:["key"] 的噪音)
+	label := method
 	if method == "press_key" {
 		method = "send_keys"
 		if val, ok := params.Get("key"); ok {
@@ -330,7 +340,7 @@ func cmdRun(client CommandAPI, args *Args, out *Printer) (int, error) {
 		return 0, err
 	}
 	if !handled {
-		out.Response(response, method, false, 0, hasPayload, payload)
+		out.Response(response, label, false, 0, hasPayload, payload)
 	}
 	return verdict(response), nil
 }

@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -57,6 +58,7 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.BrowserType.LaunchPersistentContextOptions;
 import com.microsoft.playwright.Frame;
+import com.microsoft.playwright.Keyboard;
 import com.microsoft.playwright.FileChooser;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Mouse;
@@ -525,6 +527,13 @@ public class PlaywrightService {
     return RespBodyVo.ok(Kv.by("profiles", Aop.get(BrowserProfileService.class).listProfiles().stream().map(BrowserProfile::toKv).toList()));
   }
 
+  public RespBodyVo deleteProfile(String name) {
+    synchronized (PlaywrightService.class) {
+      Path deleted = Aop.get(BrowserProfileService.class).deleteProfile(name);
+      return RespBodyVo.ok(Kv.by("name", name).set("deleted", deleted.toString()));
+    }
+  }
+
   public RespBodyVo cloneProfile(CloneProfileRequest input) {
     synchronized (PlaywrightService.class) {
       return RespBodyVo.ok(Aop.get(BrowserProfileService.class).cloneProfile(input).toKv());
@@ -543,7 +552,34 @@ public class PlaywrightService {
    */
   public long start(Long id, boolean headless, String browser, Boolean networkRecording, ProfileSelection selection,
       Boolean fakeMedia) {
+    return start(id, headless, browser, networkRecording, selection, fakeMedia, null, false);
+  }
+
+  /**
+   * Same as above.
+   *
+   * @param display   X display for the browser window (for example {@code :1} for a VNC session); fixed at launch
+   * @param ephemeral use a throwaway profile deleted when the browser closes, so no login survives the task
+   */
+  public long start(Long id, boolean headless, String browser, Boolean networkRecording, ProfileSelection selection,
+      Boolean fakeMedia, String display, boolean ephemeral) {
     synchronized (PlaywrightService.class) {
+      if (display != null && !display.isBlank() && !display.matches("[A-Za-z0-9._-]*:\\d+(\\.\\d+)?")) {
+        throw new IllegalArgumentException("display must look like :1 or host:0.0; received: " + display);
+      }
+      if (ephemeral && selection != null && selection.explicit()) {
+        throw new IllegalArgumentException("ephemeral creates its own profile; do not combine it with profile or userDataDir");
+      }
+      if (ephemeral && browser != null && !browser.isBlank()) {
+        BrowserChoice wanted = BrowserChoice.parse(browser);
+        if (wanted != BrowserChoice.AUTO && wanted != BrowserChoice.CHROME) {
+          throw new IllegalArgumentException("ephemeral requires browser=chrome (or auto)");
+        }
+      }
+      if (ephemeral) {
+        BrowserProfile temporary = ephemeralProfile(headless);
+        return startSelected(id, headless, "chrome", networkRecording, temporary, fakeMedia, display);
+      }
       BrowserProfile profile = Aop.get(BrowserProfileService.class).resolve(selection);
       if (profile != null) {
         BrowserChoice choice = browser == null || browser.isBlank() ? BrowserChoice.AUTO : BrowserChoice.parse(browser);
@@ -552,12 +588,46 @@ public class PlaywrightService {
         }
         browser = "chrome";
       }
-      return startSelected(id, headless, browser, networkRecording, profile, fakeMedia);
+      return startSelected(id, headless, browser, networkRecording, profile, fakeMedia, display);
+    }
+  }
+
+  private static final String EPHEMERAL_SOURCE = "ephemeral";
+
+  /** Reuses the running throwaway browser, or prepares a new private directory for one. */
+  private static BrowserProfile ephemeralProfile(boolean headless) {
+    SharedBrowser current = sharedBrowser;
+    if (current != null) {
+      if (current.ephemeralDir == null) {
+        throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT,
+            "A non-ephemeral browser is already retained (" + current.describe() + ")",
+            "Close it with closeBrowser=true once no task uses it, or use another service port.");
+      }
+      return current.selectedProfile;
+    }
+    try {
+      Path root = Files.createTempDirectory("dsb-ephemeral-");
+      Files.createDirectories(root.resolve("Default"));
+      return new BrowserProfile(null, root.toString(), "Default", EPHEMERAL_SOURCE, true, null, EPHEMERAL_SOURCE);
+    } catch (java.io.IOException e) {
+      throw new IllegalStateException("Could not create an ephemeral profile: " + e.getMessage());
+    }
+  }
+
+  /** Deletes a throwaway profile; failures are logged because the login data must not be silently kept. */
+  private static void deleteEphemeral(Path root) {
+    if (root == null) {
+      return;
+    }
+    try {
+      BrowserProfileService.deleteTree(root);
+    } catch (RuntimeException e) {
+      log.warn("Ephemeral profile was not fully deleted, remove it manually: {}", root, e);
     }
   }
 
   private long startSelected(Long id, boolean headless, String browser, Boolean networkRecording, BrowserProfile profile,
-      Boolean fakeMedia) {
+      Boolean fakeMedia, String display) {
     BrowserChoice requested = null;
     if (browser != null && !browser.isBlank()) {
       requested = BrowserChoice.parse(browser);
@@ -567,7 +637,8 @@ public class PlaywrightService {
     }
     long taskId = id == null ? SnowflakeIdUtils.id() : id;
     if (INSTANCES.containsKey(taskId)) {
-      throw new IllegalStateException("该 id 已经有正在运行的浏览器实例：" + taskId + "，请先调用 close，或换一个 id");
+      throw new CommandRefusedException(ActionError.TASK_ALREADY_EXISTS, "该 id 已经有正在运行的浏览器实例：" + taskId,
+          "直接复用这个任务；要新开就换一个 --id，或先 close 它。");
     }
     long startedAt = System.currentTimeMillis();
     // 「这份 profile 之前用过吗」必须在启动**之前**判断:启动之后目录一定存在,再问就永远是「用过」
@@ -580,19 +651,39 @@ public class PlaywrightService {
     }
     SharedBrowser current = sharedBrowser;
     if (fakeMedia != null && current != null && current.fakeMedia != fakeMedia) {
-      throw new IllegalStateException("fakeMedia=" + fakeMedia + " differs from the retained browser ("
-          + current.describe() + "). Media flags are fixed at launch: finish active tasks and close the browser with "
-          + "closeBrowser=true, then start again; or omit fakeMedia to reuse the current browser.");
+      throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT, "fakeMedia=" + fakeMedia
+          + " differs from the retained browser (" + current.describe() + "). Media flags are fixed at launch",
+          "Omit fakeMedia to reuse the current browser; close it with closeBrowser=true once idle; or use another --port.");
+    }
+    String wantedDisplay = display == null || display.isBlank() ? null : display.trim();
+    if (wantedDisplay != null && current != null && !wantedDisplay.equals(current.display)) {
+      throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT, "display=" + wantedDisplay
+          + " differs from the retained browser (" + current.describe() + "). The display is fixed at launch",
+          "Omit --display to reuse the current browser, or use another --port to get a separate browser on that display.");
+    }
+    if (current == null) {
+      requireUsableDisplay(headless, wantedDisplay);
     }
     SharedBrowser shared;
     pendingFakeMedia.set(Boolean.TRUE.equals(fakeMedia));
+    pendingDisplay.set(wantedDisplay);
     try {
       shared = sharedBrowser(headless, requested, profile);
+    } catch (RuntimeException | Error failure) {
+      if (current == null && profile != null && EPHEMERAL_SOURCE.equals(profile.source())) {
+        deleteEphemeral(Path.of(profile.userDataDir()));
+      }
+      throw failure;
     } finally {
       pendingFakeMedia.remove();
+      pendingDisplay.remove();
     }
     if (shared != current) {
       shared.fakeMedia = Boolean.TRUE.equals(fakeMedia);
+      shared.display = wantedDisplay != null ? wantedDisplay : (headless ? null : System.getenv("DISPLAY"));
+      if (profile != null && EPHEMERAL_SOURCE.equals(profile.source())) {
+        shared.ephemeralDir = Path.of(profile.userDataDir());
+      }
     }
     applyProfileHistory(shared, existedBefore);
     if (networkRecording != null) {
@@ -644,6 +735,22 @@ public class PlaywrightService {
    * Same pattern as {@link #pendingRecorderMode}: launch runs synchronously under the class lock in
    * the calling thread, so the value is written and cleared within one start call.
    */
+  /** Refuses a headed launch that cannot work, instead of failing later with a raw browser error. */
+  private static void requireUsableDisplay(boolean headless, String display) {
+    String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+    if (headless || display != null || !os.contains("linux")) {
+      return;
+    }
+    String x11 = System.getenv("DISPLAY");
+    String wayland = System.getenv("WAYLAND_DISPLAY");
+    if ((x11 == null || x11.isBlank()) && (wayland == null || wayland.isBlank())) {
+      throw new CommandRefusedException(ActionError.DISPLAY_UNAVAILABLE, "This service has no DISPLAY, so a headed browser cannot open",
+          "Pass --display :1 for an existing X/VNC session, or --headless when no one needs to see the window.");
+    }
+  }
+
+  private static final ThreadLocal<String> pendingDisplay = new ThreadLocal<>();
+
   private static final ThreadLocal<Boolean> pendingFakeMedia = new ThreadLocal<>();
 
   // ==================== profile 的登录态来历 ====================
@@ -858,6 +965,10 @@ public class PlaywrightService {
     volatile List<String> cdpNotes;
     /** Launched with {@link PlaywrightService#FAKE_MEDIA_ARGS} (synthetic microphone/camera) */
     volatile boolean fakeMedia;
+    /** X display the browser window is on; null when headless or unknown. */
+    volatile String display;
+    /** Throwaway profile deleted when this browser closes; null for persistent profiles. */
+    volatile Path ephemeralDir;
     /**
      * 接上时就已经存在的页签
      *
@@ -918,8 +1029,8 @@ public class PlaywrightService {
 
     /** 一句话说清「现在是哪个浏览器」,用在「不能中途切换」的报错里 */
     String describe() {
-      return "browser=" + resolvedType.id() + "，headless=" + headless + "，fakeMedia=" + fakeMedia + "，profile="
-          + profileDir;
+      return "browser=" + resolvedType.id() + "，headless=" + headless + "，fakeMedia=" + fakeMedia + "，display=" + display
+          + "，profile=" + profileDir;
     }
   }
 
@@ -946,9 +1057,12 @@ public class PlaywrightService {
       if (current.matches(headless, requested, selection)) {
         return current;
       }
-      throw new IllegalStateException("Browser configuration differs from the retained browser (" + current.describe()
-          + "). Finish active tasks and explicitly close the browser with closeBrowser=true before switching configuration; "
-          + "or use another service port and profile.");
+      String reuse = current.headless != headless
+          ? "Retry with " + (current.headless ? "--headless" : "--headful") + " to share it; "
+          : "";
+      throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT,
+          "Browser configuration differs from the retained browser (" + current.describe() + ")",
+          reuse + "use another --port for a separate browser; or, once no task uses it, close it with closeBrowser=true.");
     }
     synchronized (PlaywrightService.class) {
       if (sharedBrowser == null) {
@@ -1196,7 +1310,8 @@ public class PlaywrightService {
     if (!userProfile && explicitDirectory == null) {
       seedAutomationPrefs(profileDir);
     }
-    ChromeLauncher.Launched launched = ChromeLauncher.launch(executable, profileDir, args, CDP_LAUNCH_TIMEOUT_MS);
+    ChromeLauncher.Launched launched = ChromeLauncher.launch(executable, profileDir, args, CDP_LAUNCH_TIMEOUT_MS,
+        pendingDisplay.get());
     try {
       Browser browser = playwright().chromium().connectOverCDP(launched.endpoint(),
           new BrowserType.ConnectOverCDPOptions().setTimeout(CDP_CONNECT_TIMEOUT_MS));
@@ -1453,6 +1568,8 @@ public class PlaywrightService {
         .set("profileDir", browser.profileDir.toAbsolutePath().toString())
         .set("headless", browser.headless)
         .set("fakeMedia", browser.fakeMedia)
+        .set("display", browser.display)
+        .set("ephemeral", browser.ephemeralDir != null)
         // cdp =自己拉进程 + --remote-debugging-port + connectOverCDP(本机 Chrome / Edge 都走这条),
         // managed = Playwright 的持久化上下文(内置 Chromium / Firefox)
         .set("mode", browser.browser != null ? "cdp" : "managed");
@@ -1524,6 +1641,7 @@ public class PlaywrightService {
     if (browser != null) {
       data.set("browser", Kv.by("type", browser.resolvedType.id()).set("engine", browser.engine.id())
           .set("profileDir", browser.profileDir.toAbsolutePath().toString()).set("headless", browser.headless)
+          .set("display", browser.display).set("ephemeral", browser.ephemeralDir != null)
           .set("mode", browser.browser != null ? "cdp" : "managed"));
     } else {
       data.set("browser", null);
@@ -1898,6 +2016,13 @@ public class PlaywrightService {
   private static BrowserContext launchContext(Path profileDir, LaunchPersistentContextOptions opts,
       BrowserEngine engine) {
     releaseStaleProfileLock(profileDir);
+    String display = pendingDisplay.get();
+    if (display != null) {
+      // Playwright replaces the environment when one is given, so it must carry everything the browser inherits.
+      Map<String, String> environment = new HashMap<>(System.getenv());
+      environment.put("DISPLAY", display);
+      opts.setEnv(environment);
+    }
     try {
       return playwrightType(engine).launchPersistentContext(profileDir, opts);
     } catch (RuntimeException first) {
@@ -2206,7 +2331,7 @@ public class PlaywrightService {
     // (这一族异常在真实站点上会稳定复现:几条毫不相干的命令报同一个已释放的对象)。
     // 下载的判定改成纯服务端地数下载目录,见 countDownloadFiles —— 不碰 Playwright 对象,少一份分发面。
     // 这个页签弹出的新窗口归同一个任务,别人看不见
-    listen(inst, page, page::onPopup, page::offPopup, popup -> { if (inst.externalBrowser == null) { claimPage(inst, popup); } });
+    listen(inst, page, page::onPopup, page::offPopup, popup -> { if (inst.externalBrowser == null) { inst.lastPopupAt = System.currentTimeMillis(); claimPage(inst, popup); } });
     // 页签被人工关掉(共用浏览器时很常见)后要有人接管「当前页」
     listen(inst, page, page::onClose, page::offClose, closed -> onPageClosed(inst, closed));
   }
@@ -2537,13 +2662,19 @@ public class PlaywrightService {
   }
 
   private static void addBounded(List<String> list, String item) {
+    String bounded = item != null && item.length() > MAX_LOG_LINE_CHARS
+        ? item.substring(0, MAX_LOG_LINE_CHARS) + "...[truncated " + (item.length() - MAX_LOG_LINE_CHARS) + " chars]"
+        : item;
     synchronized (list) {
       if (list.size() >= 200) {
         list.remove(0);
       }
-      list.add(item);
+      list.add(bounded);
     }
   }
+
+  /** Sites log whole payloads to the console; one such line must not dominate every later response. */
+  private static final int MAX_LOG_LINE_CHARS = 4000;
 
   private static void addBoundedRequest(List<Kv> list, Kv item) {
     synchronized (list) {
@@ -2585,7 +2716,7 @@ public class PlaywrightService {
       java.util.function.Function<BrowserInstance, RespBodyVo> body) {
     BrowserInstance inst = INSTANCES.get(browserId);
     if (inst == null) {
-      return RespBodyVo.fail(notFoundMessage);
+      return taskNotFound(notFoundMessage);
     }
     return body.apply(inst);
   }
@@ -4098,12 +4229,20 @@ public class PlaywrightService {
    * 是**实例只在内存里,重启即失效**。把「服务于 X 启动」写进报错,这件事就不用靠人再想一遍,也不会被
    * {@code retryable:false} 误导(它不是「这个 id 不存在」,而是「这个进程里没有这个 id」)。
    */
+  /** No task means nothing ran, so callers must not be told to observe a page for side effects. */
+  private static RespBodyVo taskNotFound(String message) {
+    RespBodyVo failure = RespBodyVo.fail(message);
+    failure.setData(Kv.by("errorCode", ActionError.TASK_NOT_FOUND).set("retryable", false)
+        .set("actionExecuted", false).set("actionStatus", "not-started"));
+    return failure;
+  }
+
   private static RespBodyVo notFound(Long browserId) {
     StringBuilder message = new StringBuilder("没有找到对应的浏览器实例：").append(browserId);
     message.append("（本服务进程启动于 ").append(STARTED_AT_TEXT)
         .append(",任务实例只存在内存里、重启即失效。先用 list_tasks 看现存任务;"
             + "确认是重启导致的话重新 start 一个即可——登录态在 profile 里,不会因为这个丢）");
-    return RespBodyVo.fail(message.toString());
+    return taskNotFound(message.toString());
   }
 
   /**
@@ -5675,29 +5814,110 @@ public class PlaywrightService {
     });
   }
 
+  public int tabCount(Long browserId) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null) {
+      return -1;
+    }
+    try {
+      return pagesOf(inst).size();
+    } catch (PlaywrightException e) {
+      return -1;
+    }
+  }
+
   /**
-   * 点击后如果有新页签弹出,把它切成当前页并带到最前
+   * Looks for a tab opened by the click that just finished and makes it the current page.
    *
-   * <p>
-   * 最多等 1.5 秒;没有新页签就什么也不做。
+   * <p>A receipt that changed nothing is exactly when a caller is tempted to click again, while window.open after an
+   * API call can take seconds. So an unchanged click always gets a short extra watch, and expectPopup waits longer.
+   *
+   * @return false only when a tab was explicitly expected and never appeared
    */
-  private void adoptNewTab(BrowserInstance inst, int tabCountBefore) {
-    for (int i = 0; i < 15; i++) {
+  public boolean watchNewTab(Long browserId, int tabCountBefore, Kv data, boolean expect, Integer timeoutMs) {
+    BrowserInstance inst = INSTANCES.get(browserId);
+    if (inst == null || inst.externalBrowser != null || tabCountBefore < 0) {
+      return !expect;
+    }
+    boolean unchanged = Boolean.FALSE.equals(data.getBoolean("changed"));
+    long window = timeoutMs != null ? timeoutMs : expect ? 10000 : unchanged ? 1000 : 0;
+    Page opened = awaitNewTab(inst, tabCountBefore, window);
+    if (opened != null) {
+      describeNewTab(inst, opened, data);
+      // The receipt was computed before the tab arrived; "nothing changed yet" is no longer true.
+      if (unchanged) {
+        data.set("changed", true);
+        data.remove("hint");
+      }
+      return true;
+    }
+    if (expect || unchanged) {
+      data.set("newTabOpened", false).set("popupWatchMs", window);
+    }
+    if (unchanged && !expect) {
+      data.set("popupNote", "没有观察到页面变化或新页签，但新页签可能晚到：重复点击前先 get_tabs 或 wait_for_new_tab。");
+    }
+    return !expect;
+  }
+
+  private static Page awaitNewTab(BrowserInstance inst, int tabCountBefore, long windowMs) {
+    long deadline = System.currentTimeMillis() + windowMs;
+    while (true) {
       List<Page> pages = pagesOf(inst);
       if (pages.size() > tabCountBefore) {
-        Page newest = pages.get(pages.size() - 1);
-        inst.page = newest;
-        activate(newest);
-        try {
-          newest.waitForLoadState(LoadState.DOMCONTENTLOADED,
-              new Page.WaitForLoadStateOptions().setTimeout(INDEX_ACTION_TIMEOUT_MS));
-        } catch (PlaywrightException e) {
-          log.debug("新页签等待加载超时:{}", briefMessage(e.getMessage()));
-        }
-        return;
+        return pages.get(pages.size() - 1);
       }
-      sleepQuietly(100);
+      if (System.currentTimeMillis() >= deadline) {
+        return null;
+      }
+      pumpEvents(inst);
     }
+  }
+
+  /** Playwright Java delivers popup events only during its own calls, so a plain sleep would never see one. */
+  private static void pumpEvents(BrowserInstance inst) {
+    try {
+      inst.page.waitForTimeout(50);
+    } catch (PlaywrightException | NullPointerException e) {
+      sleepQuietly(50);
+    }
+  }
+
+  private void describeNewTab(BrowserInstance inst, Page opened, Kv data) {
+    inst.page = opened;
+    activate(opened);
+    try {
+      opened.waitForLoadState(LoadState.DOMCONTENTLOADED,
+          new Page.WaitForLoadStateOptions().setTimeout(INDEX_ACTION_TIMEOUT_MS));
+    } catch (PlaywrightException e) {
+      log.debug("新页签等待加载超时:{}", briefMessage(e.getMessage()));
+    }
+    String title = "";
+    try {
+      title = opened.title();
+    } catch (PlaywrightException e) {
+      log.debug("读取新页签标题失败:{}", briefMessage(e.getMessage()));
+    }
+    data.set("newTabOpened", true).set("newTab", Kv.by("index", pagesOf(inst).indexOf(opened))
+        .set("url", safeUrl(opened)).set("title", title));
+  }
+
+  /** Waits for a late tab; baseline defaults to the current tab count, so pass it when the click already happened. */
+  public RespBodyVo waitForNewTab(Long browserId, Integer baseline, Double timeoutSeconds) {
+    return withInstance(browserId, inst -> {
+      int before = baseline != null ? baseline : pagesOf(inst).size();
+      long window = (long) timeoutMillis(timeoutSeconds);
+      long startedAt = System.currentTimeMillis();
+      Page opened = awaitNewTab(inst, before, window);
+      Kv data = Kv.by("baseline", before).set("waitedMs", System.currentTimeMillis() - startedAt);
+      if (opened == null) {
+        RespBodyVo failure = RespBodyVo.fail("[" + ActionError.POPUP_NOT_OPENED + "] wait_for_new_tab 失败：" + window + " 毫秒内没有新页签");
+        failure.setData(data.set("errorCode", ActionError.POPUP_NOT_OPENED).set("newTabOpened", false).set("tabCount", pagesOf(inst).size()));
+        return failure;
+      }
+      describeNewTab(inst, opened, data);
+      return RespBodyVo.ok(data);
+    });
   }
 
   public RespBodyVo inputTextByIndex(Long browserId, int index, String value) {
@@ -6878,6 +7098,42 @@ public class PlaywrightService {
   }
 
   /**
+   * Types literal text with real key events, without needing an element index.
+   *
+   * <p>Editors such as Ace and CodeMirror take input through a hidden textarea that snapshots do not index, so
+   * type_text cannot reach them. The text is not echoed back because it may be a credential.
+   */
+  public RespBodyVo keyboardType(Long browserId, String text, String selector, String frame, Integer delayMs) {
+    return withInstance(browserId, inst -> {
+      try {
+        if (selector != null && !selector.isBlank()) {
+          Locator target = frameOf(inst, frame).locator(selector);
+          if (target.count() == 0) {
+            return RespBodyVo.fail("[ELEMENT_NOT_FOUND] keyboard_type 失败：选择器没有命中元素 " + selector);
+          }
+          target.first().focus();
+        }
+        if (delayMs != null && delayMs > 0) {
+          inst.page.keyboard().type(text, new Keyboard.TypeOptions().setDelay(delayMs));
+        } else {
+          inst.page.keyboard().type(text);
+        }
+      } catch (IllegalArgumentException | PlaywrightException e) {
+        return RespBodyVo.fail("keyboard_type 失败：" + briefMessage(e.getMessage()));
+      }
+      Kv data = Kv.by("mode", "type").set("textLength", text.length());
+      Kv focused = focusedElement(inst);
+      if (focused != null) {
+        data.set("focused", focused);
+        if (Boolean.TRUE.equals(focused.getBoolean("isBody"))) {
+          data.set("focusNote", "文字发出时焦点在 <body> 上，内容不会进入任何输入框：传 selector，或先 click 目标。");
+        }
+      }
+      return RespBodyVo.ok(data);
+    });
+  }
+
+  /**
    * 这段输入该按「文本」打,还是该当「按键」按
    *
    * <p>
@@ -7009,6 +7265,32 @@ public class PlaywrightService {
   }
 
   /**
+   * Playwright turns a JS Error into a Java exception; serialized as is, that is a Java stack trace in the response.
+   * Callers wrote JavaScript, so they get the JavaScript message back.
+   */
+  static Object plainJsValue(Object value, int depth) {
+    if (depth > 64) {
+      return value;
+    }
+    if (value instanceof Throwable error) {
+      String message = String.valueOf(error.getMessage());
+      int lineEnd = message.indexOf('\n');
+      return Kv.by("error", lineEnd < 0 ? message : message.substring(0, lineEnd));
+    }
+    if (value instanceof Map<?, ?> map) {
+      Map<Object, Object> copy = new LinkedHashMap<>();
+      map.forEach((key, item) -> copy.put(key, plainJsValue(item, depth + 1)));
+      return copy;
+    }
+    if (value instanceof List<?> list) {
+      List<Object> copy = new ArrayList<>(list.size());
+      list.forEach(item -> copy.add(plainJsValue(item, depth + 1)));
+      return copy;
+    }
+    return value;
+  }
+
+  /**
    * 执行 JavaScript(bodyFile / vars 见下)
    *
    * <p>
@@ -7086,7 +7368,7 @@ public class PlaywrightService {
       String scriptPreview = truncate(script, 400);
       String executable = withEvalTimeout(script, evalBudget);
       try {
-        Object result = target.evaluate(executable);
+        Object result = plainJsValue(target.evaluate(executable), 0);
         Kv data = Kv.by("result", result);
         if (vars != null && !vars.isEmpty()) {
           data.set("varsApplied", new ArrayList<>(vars.keySet()));
@@ -7859,7 +8141,6 @@ public class PlaywrightService {
   public RespBodyVo clickElementBySelector(Long browserId, String selector, String mode, Integer timeoutMs,
       String frame, Integer nth) {
     return withInstance(browserId, inst -> {
-      int tabCountBefore = pagesOf(inst).size();
       ActionTarget resolved;
       Frame probeFrame;
       try {
@@ -7884,7 +8165,6 @@ public class PlaywrightService {
             locateFailure("click_element_by_selector", "选择器 " + selector + frameSuffix(frame), e)
                 + resolved.failureSuffix() + blockerSuffix(target));
       }
-      adoptNewTab(inst, tabCountBefore);
       return okWithReceipt(before, inst, "click_element_by_selector", outcome.extra, probeFrame);
     });
   }
@@ -7946,9 +8226,14 @@ public class PlaywrightService {
   }
 
   public RespBodyVo clickElementByText(Long browserId, String text, String mode) {
+    return clickElementByText(browserId, text, mode, null, null);
+  }
+
+  /** Same as above; {@code exact} requires the whole text to match instead of a substring. */
+  public RespBodyVo clickElementByText(Long browserId, String text, String mode, Boolean exact, Integer timeoutMs) {
     return withInstance(browserId, inst -> {
       Kv before = stateProbe(inst);
-      TextHit hit = resolveByText(inst, text);
+      TextHit hit = resolveByText(inst, text, Boolean.TRUE.equals(exact));
       if (hit == null) {
         return RespBodyVo.fail("click_element_by_text 失败：没找到文本为「" + text + "」的元素");
       }
@@ -7957,7 +8242,7 @@ public class PlaywrightService {
         info.set(hit.describeMatch());
         ActionOutcome outcome = new ActionOutcome();
         try {
-          clickWithMode(hit.locator, mode, outcome, () -> hit.locator.click(clickOptions()));
+          clickWithMode(hit.locator, mode, outcome, () -> hit.locator.click(clickOptions(timeoutMs)));
         } catch (PlaywrightException e) {
           return actionErrorOrEffect("click_element_by_text", before, inst, null, e,
               locateFailure("click_element_by_text", "文本 " + text, e));
@@ -8043,7 +8328,12 @@ public class PlaywrightService {
    * 一并写进回执({@link TextHit#describeMatch()}),点错元素时一眼可见。
    */
   private TextHit resolveByText(BrowserInstance inst, String text) {
-    Locator candidates = inst.page.getByText(text);
+    return resolveByText(inst, text, false);
+  }
+
+  private TextHit resolveByText(BrowserInstance inst, String text, boolean exact) {
+    Locator candidates = exact ? inst.page.getByText(text, new Page.GetByTextOptions().setExact(true))
+        : inst.page.getByText(text);
     int count;
     try {
       count = candidates.count();
@@ -8287,7 +8577,8 @@ public class PlaywrightService {
 
   public RespBodyVo getTabs(Long browserId) {
     return withInstance(browserId, inst -> {
-      return RespBodyVo.ok(Kv.by("tabs", tabs(inst)));
+      pumpEvents(inst);
+      return RespBodyVo.ok(Kv.by("tabs", tabs(inst)).set("lastPopupAt", inst.lastPopupAt));
     });
   }
 
@@ -8372,10 +8663,51 @@ public class PlaywrightService {
         inst.page.waitForFunction(expression, null,
             new Page.WaitForFunctionOptions().setTimeout(timeoutMillis(timeoutSeconds)));
       } catch (PlaywrightException e) {
-        return RespBodyVo.fail(waitFailure("wait_for_function", e));
+        if (!blockedByCsp(e)) {
+          return RespBodyVo.fail(waitFailure("wait_for_function", e));
+        }
+        return pollFunction(inst, expression, (long) timeoutMillis(timeoutSeconds));
       }
       return RespBodyVo.ok();
     });
+  }
+
+  /** Playwright's waitForFunction needs eval inside the page, which strict sites forbid; evaluate does not. */
+  private static boolean blockedByCsp(PlaywrightException e) {
+    String message = String.valueOf(e.getMessage());
+    return message.contains("unsafe-eval") || message.contains("Content Security Policy") || message.contains("EvalError");
+  }
+
+  private static RespBodyVo pollFunction(BrowserInstance inst, String expression, long timeoutMs) {
+    long startedAt = System.currentTimeMillis();
+    long deadline = startedAt + timeoutMs;
+    String lastError = null;
+    while (System.currentTimeMillis() < deadline) {
+      try {
+        if (truthyJs(inst.page.evaluate(expression))) {
+          return RespBodyVo.ok(Kv.by("fallback", "evaluate-poll").set("waitedMs", System.currentTimeMillis() - startedAt));
+        }
+        lastError = null;
+      } catch (PlaywrightException e) {
+        // Navigation destroys the execution context, so an error here usually means "try again".
+        lastError = briefMessage(e.getMessage());
+      }
+      pumpEvents(inst);
+    }
+    RespBodyVo failure = RespBodyVo.fail("wait_for_function 失败：" + timeoutMs + " 毫秒内表达式没有变为真"
+        + (lastError == null ? "" : "（最后一次报错：" + lastError + "）"));
+    failure.setData(Kv.by("errorCode", "ACTION_TIMEOUT").set("fallback", "evaluate-poll"));
+    return failure;
+  }
+
+  private static boolean truthyJs(Object value) {
+    if (value == null || Boolean.FALSE.equals(value)) {
+      return false;
+    }
+    if (value instanceof Number number) {
+      return number.doubleValue() != 0 && !Double.isNaN(number.doubleValue());
+    }
+    return !(value instanceof String text) || !text.isEmpty();
   }
 
   /** 页面「安静下来」的判据:DOM 变更计数与在途请求数都不再变化 */
@@ -8519,8 +8851,22 @@ public class PlaywrightService {
         const source = parts.join('|');
         let hash = 2166136261;
         for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
+        const content = scope ? root : (document.querySelector('main,[role="main"]') || root);
+        const visible = (e) => {
+          const box = e.getBoundingClientRect();
+          if (box.width <= 0 || box.height <= 0) return false;
+          const style = getComputedStyle(e);
+          return style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+        };
+        const hasContent = (content.innerText || '').trim().length > 0
+            || !!content.querySelector('input,textarea,select,img,canvas,svg,video,iframe');
+        const loading = [...root.querySelectorAll(
+            '[aria-busy="true"],[role="progressbar"],[class*="spinner" i],[class*="loading" i],[class*="skeleton" i]')]
+            .slice(0, 50).some(visible);
         return {
           length: source.length,
+          hasContent,
+          loading,
           fingerprint: String(hash >>> 0),
           // 稳定之后调用方多半就是要读这段内容:顺手带回去,省掉一次 get_element_text / execute_js
           text: (root.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 2000)
@@ -8546,9 +8892,22 @@ public class PlaywrightService {
    *         「已变化几次 / 距上次变化多久」,便于判断是内容一直在刷还是压根没加载
    */
   public RespBodyVo waitForStable(Long browserId, String selector, Integer quietMs, Double timeoutSeconds) {
+    return waitForStable(browserId, selector, quietMs, timeoutSeconds, false, null);
+  }
+
+  /**
+   * Same as above, but an empty page or a visible spinner is not mistaken for "done".
+   *
+   * <p>A single-page app often sits unchanged and blank before it renders, which looks perfectly stable. Such a page
+   * gets up to contentGraceMs more. It then reports contentReady:false, or fails when requireContent is set, because a
+   * page can legitimately be empty and waiting forever would be worse.
+   */
+  public RespBodyVo waitForStable(Long browserId, String selector, Integer quietMs, Double timeoutSeconds,
+      boolean requireContent, Integer contentGraceMs) {
     return withInstance(browserId, inst -> {
       long quiet = quietMs == null || quietMs < 0 ? 800 : quietMs;
       long timeout = (long) timeoutMillis(timeoutSeconds);
+      long grace = contentGraceMs == null || contentGraceMs < 0 ? 5000 : contentGraceMs;
       long startedAt = System.currentTimeMillis();
       long deadline = startedAt + timeout;
       String last = null;
@@ -8571,10 +8930,28 @@ public class PlaywrightService {
           stableSince = now;
           changes++;
         }
-        if (now - stableSince >= quiet) {
-          return RespBodyVo.ok(Kv.by("stable", true).set("waitedMs", now - startedAt).set("quietMs", quiet)
+        boolean loading = Boolean.TRUE.equals(probe.get("loading"));
+        boolean contentReady = Boolean.TRUE.equals(probe.get("hasContent")) && !loading;
+        boolean quietEnough = now - stableSince >= quiet;
+        boolean graceOver = now - stableSince >= quiet + grace || now >= deadline;
+        if (quietEnough && (contentReady || graceOver)) {
+          if (!contentReady && requireContent) {
+            RespBodyVo failure = RespBodyVo.fail("[" + ActionError.CONTENT_NOT_READY + "] wait_for_stable 失败：页面不再变化，但"
+                + (loading ? "仍显示加载指示器" : "主内容区是空的"));
+            failure.setData(Kv.by("errorCode", ActionError.CONTENT_NOT_READY).set("stable", true).set("contentReady", false)
+                .set("loading", loading).set("waitedMs", now - startedAt).set("url", safeUrl(inst.page))
+                .set("hint", "用 get_page_diagnostics 查失败的请求与控制台错误。"));
+            return failure;
+          }
+          Kv data = Kv.by("stable", true).set("contentReady", contentReady).set("loading", loading)
+              .set("waitedMs", now - startedAt).set("quietMs", quiet)
               .set("changes", changes).set("length", length).set("fingerprint", fingerprint)
-              .set("text", probe.get("text")).set("selector", selector).set("url", safeUrl(inst.page)));
+              .set("text", probe.get("text")).set("selector", selector).set("url", safeUrl(inst.page));
+          if (!contentReady) {
+            data.set("warning", (loading ? "页面不再变化，但仍显示加载指示器" : "页面不再变化，但主内容区是空的")
+                + "：内容可能还没渲染或加载失败，用 get_page_diagnostics 排查。");
+          }
+          return RespBodyVo.ok(data);
         }
         if (now >= deadline) {
           RespBodyVo failure = RespBodyVo.fail("wait_for_stable 失败：" + (timeout / 1000.0)
@@ -10012,6 +10389,131 @@ public class PlaywrightService {
     return null;
   }
 
+  public RespBodyVo getConsoleLogs(Long browserId, String level, Integer limit) {
+    return withInstance(browserId, inst -> {
+      List<String> logs = newestLogs(inst.consoleLogs, level, limit);
+      return RespBodyVo.ok(Kv.by("logs", logs).set("errors", newestLogs(inst.pageErrors, null, limit))
+          .set("total", inst.consoleLogs.size()));
+    });
+  }
+
+  /** Console lines are stored as "type: text", so a level filter is a prefix match. */
+  private static List<String> newestLogs(List<String> source, String level, Integer limit) {
+    List<String> matched = new ArrayList<>();
+    synchronized (source) {
+      for (String line : source) {
+        if (level == null || level.isBlank() || line.startsWith(level + ":")) {
+          matched.add(line);
+        }
+      }
+    }
+    if (limit != null && limit > 0 && matched.size() > limit) {
+      return new ArrayList<>(matched.subList(matched.size() - limit, matched.size()));
+    }
+    return matched;
+  }
+
+  private static final String PAGE_HEALTH_PROBE = """
+      () => {
+        const main = document.querySelector('main,[role="main"]');
+        const body = document.body;
+        return {
+          readyState: document.readyState,
+          title: document.title,
+          hasMain: !!main,
+          mainTextLength: main ? (main.innerText || '').trim().length : -1,
+          bodyTextLength: body ? (body.innerText || '').trim().length : 0
+        };
+      }
+      """;
+
+  /**
+   * Answers "why did this page not render" in one call.
+   *
+   * <p>Requests are recorded from the moment a tab is claimed. When the recorder starts lazily here, earlier
+   * failures are gone, so the response says to reload and read again rather than implying that nothing failed.
+   */
+  public RespBodyVo getPageDiagnostics(Long browserId, Integer limit) {
+    return withInstance(browserId, inst -> {
+      int cap = limit == null || limit <= 0 ? 30 : limit;
+      boolean alreadyRecording = inst.recorderAttached;
+      boolean recording = ensureRequestRecorder(inst);
+      pumpEvents(inst);
+      List<Kv> failed = new ArrayList<>();
+      List<Kv> httpErrors = new ArrayList<>();
+      for (Kv entry : new ArrayList<>(inst.requests)) {
+        Object failure = entry.get("failure");
+        int status = asInt(entry.get("status"));
+        if (failure != null || status >= 400) {
+          Kv row = Kv.by("url", truncate(String.valueOf(entry.get("url")), 300)).set("method", entry.get("method"))
+              .set("resourceType", entry.get("resourceType"));
+          if (failure != null) {
+            failed.add(row.set("failure", failure));
+          } else {
+            httpErrors.add(row.set("status", status));
+          }
+        }
+      }
+      List<String> consoleErrors = shortened(newestLogs(inst.consoleLogs, "error", cap));
+      List<String> cspViolations = new ArrayList<>();
+      synchronized (inst.consoleLogs) {
+        for (String line : inst.consoleLogs) {
+          if (line.contains("Content Security Policy")) {
+            cspViolations.add(truncate(line, DIAGNOSTIC_LINE_CHARS));
+          }
+        }
+      }
+      Kv data = Kv.by("url", safeUrl(inst.page)).set("failedRequests", newestRows(failed, cap))
+          .set("failedRequestCount", failed.size()).set("httpErrors", newestRows(httpErrors, cap))
+          .set("httpErrorCount", httpErrors.size()).set("consoleErrors", consoleErrors)
+          .set("pageErrors", shortened(newestLogs(inst.pageErrors, null, cap))).set("cspViolations", newestRows(cspViolations, cap))
+          .set("recordedSince", inst.recorderAttachedAt);
+      List<String> findings = new ArrayList<>();
+      try {
+        Object health = inst.page.evaluate(PAGE_HEALTH_PROBE);
+        data.set("page", health);
+        if (health instanceof Map<?, ?> values && asInt(values.get("mainTextLength")) == 0) {
+          findings.add("主内容区是空的：页面框架加载了，但内容没有渲染。");
+        }
+      } catch (PlaywrightException e) {
+        data.set("pageProbeError", briefMessage(e.getMessage()));
+      }
+      if (!failed.isEmpty()) {
+        findings.add(failed.size() + " 个请求在网络层失败，通常是被拦截、代理或地址不通。");
+      }
+      if (!httpErrors.isEmpty()) {
+        findings.add(httpErrors.size() + " 个请求返回 HTTP 4xx/5xx。");
+      }
+      if (!cspViolations.isEmpty()) {
+        findings.add(cspViolations.size() + " 条 CSP 拦截记录。");
+      }
+      if (!recording) {
+        findings.add("这个任务关闭了网络记录，读不到请求数据。");
+      } else if (!alreadyRecording) {
+        findings.add("网络记录刚刚开启，更早的失败没有记到：reload 后再读一次。");
+      }
+      if (findings.isEmpty()) {
+        findings.add("没有发现失败的请求或错误。");
+      }
+      return RespBodyVo.ok(data.set("findings", findings));
+    });
+  }
+
+  /** Diagnostics are read for their cause; get_console_logs still has the longer text. */
+  private static final int DIAGNOSTIC_LINE_CHARS = 500;
+
+  private static List<String> shortened(List<String> lines) {
+    List<String> result = new ArrayList<>(lines.size());
+    for (String line : lines) {
+      result.add(truncate(line, DIAGNOSTIC_LINE_CHARS));
+    }
+    return result;
+  }
+
+  private static <T> List<T> newestRows(List<T> rows, int cap) {
+    return rows.size() <= cap ? rows : new ArrayList<>(rows.subList(rows.size() - cap, rows.size()));
+  }
+
   public RespBodyVo getConsoleLogs(Long browserId) {
     return withInstance(browserId, inst -> {
       return RespBodyVo
@@ -10094,12 +10596,21 @@ public class PlaywrightService {
    * @param since        只返回这个时间戳(毫秒)之后发起的请求,可选
    */
   public RespBodyVo getRequests(Long browserId, String filter, String resourceType, Integer limit, Long since) {
+    return getRequests(browserId, filter, false, resourceType, limit, since);
+  }
+
+  /** Same as above; {@code failedOnly} keeps network failures and HTTP 4xx/5xx responses. */
+  public RespBodyVo getRequests(Long browserId, String filter, boolean failedOnly, String resourceType, Integer limit,
+      Long since) {
     return withInstance(browserId, inst -> {
       if (!ensureRequestRecorder(inst)) {
         return RespBodyVo.ok(Kv.by("requests", new ArrayList<>()).set("count", 0).set("total", 0)
             .set(networkRecordingOffNote()));
       }
       List<Kv> matched = filterRequests(inst, filter, resourceType, since);
+      if (failedOnly) {
+        matched.removeIf(entry -> entry.get("failure") == null && asInt(entry.get("status")) < 400);
+      }
       if (limit != null && limit > 0 && matched.size() > limit) {
         matched = new ArrayList<>(matched.subList(matched.size() - limit, matched.size()));
       }
@@ -11271,9 +11782,12 @@ public class PlaywrightService {
         return RespBodyVo.ok(Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0));
       }
       RespBodyVo result = closeTask(browserId);
-      if (closeBrowser && result.isOk()) {
+      SharedBrowser retained = sharedBrowser;
+      boolean ephemeralIdle = retained != null && retained.ephemeralDir != null && INSTANCES.isEmpty();
+      if ((closeBrowser || ephemeralIdle) && result.isOk()) {
         closeSharedBrowser();
-        result.setData(Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0));
+        result.setData(Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0)
+            .set("ephemeralProfileDeleted", ephemeralIdle));
       }
       return result;
     }
@@ -11282,7 +11796,7 @@ public class PlaywrightService {
   private RespBodyVo closeTask(Long browserId) {
     BrowserInstance inst = INSTANCES.remove(browserId);
     if (inst == null) {
-      return RespBodyVo.fail("没有找到对应的浏览器实例：" + browserId);
+      return taskNotFound("没有找到对应的浏览器实例：" + browserId);
     }
     inst.detached = true;
     if (inst.externalBrowser != null) {
@@ -11349,6 +11863,7 @@ public class PlaywrightService {
       log.warn("关闭共享浏览器失败:{}", e.getMessage());
     } finally {
       ChromeLauncher.stop(browser.process);
+      deleteEphemeral(browser.ephemeralDir);
     }
   }
 
@@ -11372,11 +11887,15 @@ public class PlaywrightService {
     // 重建前后都要保住这个任务的页签归属:先摘掉,重建完再认领一个新页签
     instance.detached = true;
     instance.pages.clear();
+    // The replacement browser reuses a throwaway profile, so this restart must not delete it.
+    Path ephemeralDir = browser.ephemeralDir;
+    browser.ephemeralDir = null;
     closeSharedBrowser();
     SharedBrowser fresh;
     synchronized (PlaywrightService.class) {
       // Keep the media flags of the browser being replaced
       pendingFakeMedia.set(browser.fakeMedia);
+      pendingDisplay.set(browser.display);
       try {
         fresh = browser.selectedProfile == null
             ? launch(browser.executable, browser.profileDir, browser.userProfile, browser.headless, browser.profileNote,
@@ -11384,8 +11903,11 @@ public class PlaywrightService {
             : launchSelectedProfile(browser.headless, browser.selectedProfile);
       } finally {
         pendingFakeMedia.remove();
+        pendingDisplay.remove();
       }
       fresh.fakeMedia = browser.fakeMedia;
+      fresh.display = browser.display;
+      fresh.ephemeralDir = ephemeralDir;
       sharedBrowser = fresh;
     }
     instance.detached = false;

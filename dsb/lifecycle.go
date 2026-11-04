@@ -94,6 +94,8 @@ func healthInfoFrom(response *Response) *HealthInfo {
 	}
 	info.Name = healthTextField(data, "name")
 	info.StartedAt = healthTextField(data, "startedAt")
+	info.Jar = healthTextField(data, "jar")
+	info.Commit = healthTextField(data, "commit")
 	info.PID = healthIntField(data, "pid")
 	info.Port = healthIntField(data, "port")
 	return info

@@ -37,12 +37,19 @@ func validateProfileArgs(args *Args) error {
 			if args.ProfileName != nil || args.SourceUserDataDir != nil || args.SourceProfileDirectory != nil {
 				return usageErrorf("profile list does not accept clone options")
 			}
+		case "delete":
+			if args.ProfileName == nil {
+				return usageErrorf("profile delete requires --name")
+			}
+			if args.SourceUserDataDir != nil || args.SourceProfileDirectory != nil {
+				return usageErrorf("profile delete does not accept clone options")
+			}
 		case "clone":
 			if args.ProfileName == nil || args.SourceUserDataDir == nil {
 				return usageErrorf("profile clone requires --name and --source-user-data-dir")
 			}
 		default:
-			return usageErrorf("profile action must be list or clone")
+			return usageErrorf("profile action must be list, clone or delete")
 		}
 	}
 	return nil
@@ -57,7 +64,14 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 	if err := validateProfileArgs(args); err != nil {
 		return nil, err
 	}
-	if !hasProfileSelection(args) && !args.FakeMedia {
+	if args.Display != nil && args.Headless {
+		return nil, usageErrorf("--display 只用于显示窗口,不能与 --headless 同用")
+	}
+	if args.Ephemeral && hasProfileSelection(args) {
+		return nil, usageErrorf("--ephemeral 会自建临时 profile,不能与 --profile / --user-data-dir 同用")
+	}
+	newOptions := args.Display != nil || args.Ephemeral
+	if !hasProfileSelection(args) && !args.FakeMedia && !newOptions {
 		return client.Start(browser, args.Headless, nil)
 	}
 	methods, err := client.Methods()
@@ -80,12 +94,24 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 	if args.FakeMedia && !advertised["grant_permissions"] {
 		return nil, usageErrorf("backend does not advertise grant_permissions; --fake-media requires an updated backend (dsb server build && dsb server restart). No start request was sent")
 	}
+	// An older backend would silently ignore these and open the browser somewhere else.
+	if newOptions && !advertised["keyboard_type"] {
+		return nil, usageErrorf("backend does not support --display/--ephemeral; rebuild it (dsb server build) and restart")
+	}
 	if !hasProfileSelection(args) {
 		params := ObjOf("headless", args.Headless)
 		if browser != "" {
 			params.Set("browser", browser)
 		}
-		params.Set("fakeMedia", true)
+		if args.FakeMedia {
+			params.Set("fakeMedia", true)
+		}
+		if args.Display != nil {
+			params.Set("display", *args.Display)
+		}
+		if args.Ephemeral {
+			params.Set("ephemeral", true)
+		}
 		return client.Command("start", params, nil, 0, "start")
 	}
 	params := ObjOf("headless", args.Headless, "browser", "chrome")
@@ -101,6 +127,9 @@ func startWithProfile(client CommandAPI, args *Args, browser string) (*Response,
 	if args.FakeMedia {
 		params.Set("fakeMedia", true)
 	}
+	if args.Display != nil {
+		params.Set("display", *args.Display)
+	}
 	return client.Command("start", params, nil, 0, "start")
 }
 
@@ -115,6 +144,10 @@ func cmdProfiles(client CommandAPI, args *Args, out *Printer) (int, error) {
 		params.Set("name", *args.ProfileName)
 		params.Set("sourceUserDataDir", *args.SourceUserDataDir)
 		params.Set("sourceProfileDirectory", derefOr(args.SourceProfileDirectory, "Default"))
+	}
+	if args.Command == "profile" && derefOr(args.Action, "") == "delete" {
+		method = "delete_profile"
+		params.Set("name", *args.ProfileName)
 	}
 	response, err := client.Command(method, params, nil, 0, method)
 	if err != nil {

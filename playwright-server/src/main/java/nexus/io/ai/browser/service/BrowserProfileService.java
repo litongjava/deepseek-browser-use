@@ -260,6 +260,49 @@ public class BrowserProfileService {
     return fallback;
   }
 
+  /**
+   * Deletes a managed profile and every login it holds. Only named profiles under {@link #namedRoot()} qualify:
+   * a user's own Chrome data directory can never be removed through this path.
+   */
+  public Path deleteProfile(String input) {
+    requireNotInterrupted();
+    String name = ProfileValidator.name(input);
+    Path parent = namedRoot();
+    rejectLinks(parent);
+    Path root = parent.resolve(name).toAbsolutePath().normalize();
+    ParameterValidator.require(root.startsWith(parent.toAbsolutePath().normalize()) && !root.equals(parent.toAbsolutePath().normalize()),
+        "Profile name escapes the managed directory");
+    ParameterValidator.require(Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS), "Selected profile does not exist: " + name);
+    rejectLinks(root);
+    requireIdle(root);
+    deleteTree(root);
+    return root;
+  }
+
+  /** Removes a directory tree without following symbolic links out of it. */
+  static void deleteTree(Path root) {
+    try {
+      Files.walkFileTree(root, new SimpleFileVisitor<>() {
+        @Override
+        public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+          Files.deleteIfExists(file);
+          return FileVisitResult.CONTINUE;
+        }
+
+        @Override
+        public FileVisitResult postVisitDirectory(Path dir, IOException failure) throws IOException {
+          if (failure != null) {
+            throw failure;
+          }
+          Files.deleteIfExists(dir);
+          return FileVisitResult.CONTINUE;
+        }
+      });
+    } catch (IOException e) {
+      throw new IllegalStateException("Could not delete profile directory " + root + ": " + e.getMessage());
+    }
+  }
+
   public CloneProfileResult cloneProfile(CloneProfileRequest input) {
     requireNotInterrupted();
     ParameterValidator.require(input != null, "Clone request is required");

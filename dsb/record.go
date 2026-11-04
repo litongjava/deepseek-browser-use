@@ -156,7 +156,7 @@ func summarize(data Value) string {
 		return ""
 	}
 	order := []string{"count", "countBlocking", "countStrict", "succeeded", "failed", "expectFailed",
-		"seq", "status", "mode", "matched", "stable", "closed", "elementCount", "jobId", "step",
+		"seq", "status", "mode", "matched", "stable", "contentReady", "newTabOpened", "closed", "elementCount", "jobId", "step",
 		"title", "url", "value", "visible", "enabled", "checked", "result", "actionStatus",
 		"retrySafe", "observationComplete", "snapshotConsistent", "indicesUsable"}
 	parts := make([]string, 0, 8)

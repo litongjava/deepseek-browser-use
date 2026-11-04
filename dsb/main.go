@@ -24,7 +24,7 @@ func run(argv []string) int {
 			return ExitOK
 		}
 		if _, ok := err.(*versionRequested); ok {
-			fmt.Printf("dsb %s\n", version)
+			fmt.Printf("dsb %s\n", versionText())
 			return ExitOK
 		}
 		fmt.Fprintln(os.Stderr, "用法错:"+err.Error())

@@ -23,6 +23,7 @@ PAGE_CHANGING
   input_text_by_selector
   key_down
   key_up
+  keyboard_type
   mouse_click
   mouse_click_by_selector
   mouse_down
@@ -83,6 +84,7 @@ SPURIOUS_RETRY_SAFE
   get_js_dialog
   get_local_storage
   get_modals
+  get_page_diagnostics
   get_page_snapshot
   get_requests
   get_response_body
@@ -117,6 +119,7 @@ SPURIOUS_RETRY_SAFE
   wait_for_function
   wait_for_idle
   wait_for_load
+  wait_for_new_tab
   wait_for_response
   wait_for_stable
   wait_for_text
@@ -139,6 +142,7 @@ LONG_RUNNING
   wait_for_function
   wait_for_idle
   wait_for_load
+  wait_for_new_tab
   wait_for_response
   wait_for_stable
   wait_for_text

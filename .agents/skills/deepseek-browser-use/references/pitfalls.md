@@ -705,3 +705,11 @@
 ## 截图与重试补充（2026-10-05）
 
 自动截图与显式截图已共用熔断及截图预算。熔断期间显式截图快速失败；``force:true``只探测一次。命令层与内部截图共用两次事件泵额外重试，不再按外层3次×内部2次叠加。全页失败可显式请求``fallbackToViewport:true``，返回的``fullPageCaptured:false``必须登记为部分证据。使用纯文本客户端时仍检查stderr告警。完整字段及测试判定模板见 [testing-evidence.md](testing-evidence.md)。
+
+## AWS 控制台实测补充（2026-11-04）
+
+- **`window.open` 可能在接口返回后才发生**：FinOps Agent 的 `Open` 按钮要先创建登录会话，立刻 `get_tabs` 看不到新页签，再点一次就开出两个。用 `--expect-popup`。
+- **`wait_for_stable` 的 `stable=True` 曾在正文为空时返回**：单页应用渲染前页面同样“不变”。现在读 `contentReady`。
+- **`click_element_by_text` 默认是子串匹配**：短文本可能命中包含它的其他元素。需要精确匹配时传 `exact:true`，它以前不是这个命令的参数，传了会被忽略。
+- **部分 AWS 控制台页面渲染不出内容**：Compute Optimizer、EC2 在 dsb 的 Chrome 中主内容为空，Billing、Cost Management 正常，原因未查明。用 `get_page_diagnostics` 排查；CloudShell 可作为替代，输入用 `keyboard_type`。
+- **CloudShell 输出按终端宽度折行，且夹带 NBSP**：读取时先把 `\u00a0` 换成空格，再按行匹配结束标记。

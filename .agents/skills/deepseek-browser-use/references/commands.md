@@ -10,8 +10,9 @@
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选), `fakeMedia`(bool，可选) | 开始一个任务；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法。`fakeMedia: true` = 假麦克风/摄像头（语音/视频通话测试），启动时固定，回读 `data.browser.fakeMedia` |
-| `close` | `id`, `closeBrowser`(bool，默认 false) | 结束任务；最后一个任务保留浏览器和页面。显式 `closeBrowser:true` 才关闭浏览器，有其他任务时拒绝；任务已结束后仍可显式关闭闲置浏览器 |
+| `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选), `fakeMedia`(bool，可选), `display`(可选，如 `:1`，启动后不能更改), `ephemeral`(bool，可选，临时 profile，浏览器关闭时删除；仅 Chrome) | 开始一个任务；配置与已保留的浏览器冲突时报 `BROWSER_CONFIG_CONFLICT`，Linux 无显示器又要显示窗口时报 `DISPLAY_UNAVAILABLE`，两者都未启动任何东西；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法。`fakeMedia: true` = 假麦克风/摄像头（语音/视频通话测试），启动时固定，回读 `data.browser.fakeMedia` |
+| `delete_profile` | `name` | 删除 `browser.profiles.dir` 下的命名 profile 及其中的登录状态；使用中的 profile 会被拒绝，用户自己的 Chrome 目录不能用它删除 |
+| `close` | `id`, `closeBrowser`(bool，默认 false) | 结束任务；最后一个任务保留浏览器和页面（`ephemeral` 例外：浏览器随最后一个任务关闭，临时 profile 被删除）。显式 `closeBrowser:true` 才关闭浏览器，有其他任务时拒绝；任务已结束后仍可显式关闭闲置浏览器 |
 | `targets` | `endpoint` | 列出外部 CDP 端点上的页面，返回 `data.targets`（`targetId`、`url`、`type`、`title`）；只读，不建任务。`endpoint` 是浏览器/WebView2 的调试地址，不是 dsb 服务端口 |
 | `attach` | `id`(可选), `endpoint`, `targetId` 或 `url`(精确匹配，二选一) | 把一个外部 CDP 页面接成任务，之后照常用页面命令。必须恰好匹配一个目标：零个报 `EXTERNAL_TARGET_NOT_FOUND`，多个报 `EXTERNAL_TARGET_AMBIGUOUS`，附候选 `targets` 与 `matched`，未执行（`not-started`），修正后可重试。外部任务固定在该页面：不认领弹窗、不能切换/新开/关闭页签；`close` 只断开连接，不关外部浏览器。目标断线后需重新 `attach`。详见 [桌面接入](desktop-testing.md) |
 
@@ -56,6 +57,7 @@
 | `input_text` | `id`, `index`, `text`, `mode`(可选) | 覆盖式填充（等价 `fill`，会清空）；`text` 必填，**清空请用 `clear_text`** |
 | `drag_element_by_index` | `id`, `index`, `targetIndex` | 把第 index 个元素拖到第 targetIndex 个元素 |
 | `upload_file` | `id`, `path`, `index` 或 `selector`(二选一), `nth`(可选), `timeoutMs`(可选), `frame`(可选) | `path` 是**服务器本地路径**：绝对路径或按服务端暂存目录解析的相对路径（见下面的「上传文件」）。**上传完会回读校验**，见下。`selector` 命中多个 file input 时回执报 `data.matched` / `data.chosenIndex` / `data.visibleMatched`（file input 基本都是隐藏的，所以**不做可见性挑选**，按文档顺序取第一个）——要精确指定就传 `nth`（0 基） |
+| `keyboard_type` | `id`, `text`, `selector`(可选，先聚焦，隐藏输入框也可以), `frame`(可选), `delayMs`(可选) | 用真实按键把文字输入当前焦点，不需要元素索引，适合 Ace、CodeMirror 这类隐藏 textarea。回执只有 `textLength` 和 `focused`，不回显文字。不过滤特殊按键；需要按键用 `send_keys` |
 | `send_keys` | `id`, `keys` | `keys` 收**两种形态**：① **按键**——单个键名（`Enter`、`Tab`、`ArrowDown`、`F5`）或「修饰键 + 一个键」的组合（`Control+A`、`Shift+Enter`、`Control+Shift+T`）；② **整段文本**（`CRCL`、`hello world`、中文）。回执里 `data.mode` 是 `press` 还是 `type` 直接告诉你走了哪条路，另有 `data.keys` / `data.text` 与 `data.focused`。整段文本走逐字符打字（会触发 `keydown/keypress/input`，受控输入框也认），所以「隐藏输入框没选择器、又不想先取快照拿索引」时可以直接用它 |
 | `key_down` | `id`, `keys` | 按住不放（配合 `key_up`） |
 | `key_up` | `id`, `keys` | 松开按键 |
@@ -214,11 +216,22 @@ dsb --port 10049 upload 图样.jpg
 | `clear_text` | `id`, `index`(可选), `selector`(可选) | 清空输入框，返回 `data.value`（清空后的值）。`input_text` 的 `text` 必填，所以清空走这里；`index` 与 `selector` 传一个即可 |
 | `hover_and_click` | `id`, `index`(可选), `selector`(可选), `hoverDelayMs`(可选), `mode`(可选) | 悬停后**立刻**点同一个元素，`hoverDelayMs` 默认 300 毫秒。悬浮菜单专用：分两步调用中间隔着一次推理往返，菜单早收起来了。返回命中信息与点击回执 |
 
+### 点击后的新页签
+
+`click_element_by_index`、`click_element_by_selector`、`click_element_by_text`、`click_element_by_role`、`hover_and_click` 都接受 `expectPopup`(bool) 和 `popupTimeoutMs`(0..120000)。
+
+- 只要检测到新页签，当前页就切换过去，回执带 `newTabOpened:true` 和 `newTab`。
+- 没传 `expectPopup` 时：页面有变化不额外等待；`changed:false` 时再观察约 1 秒，仍没有就带 `newTabOpened:false` 和 `popupNote`。
+- 传了 `expectPopup`（默认等 10 秒）却没等到时报 `POPUP_NOT_OPENED`：点击已经发生，不要重复点击。
+
+`click_element_by_text` 还接受 `exact`（整段文本精确匹配，默认是子串匹配）和 `timeoutMs`。
+
 ### 标签页
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `get_tabs` | `id` | 返回 `data.tabs`（`index`/`url`/`title`/`current`，`index` 是 0 基） |
+| `get_tabs` | `id` | 返回 `data.tabs`（`index`/`url`/`title`/`current`，`index` 是 0 基）和 `data.lastPopupAt`（最近一次弹出新页签的时间） |
+| `wait_for_new_tab` | `id`, `baseline`(可选，点击前的页签数，默认当前数量), `timeoutMs`/`timeoutSeconds`(可选) | 等晚到的新页签并切换过去，回执的 `newTab` 给出 `index`/`url`/`title`；超时报 `POPUP_NOT_OPENED`。点击已经发生时要传 `baseline`，否则新页签若已打开就等不到 |
 | `new_tab` | `id`, `url`(可选) | 新建标签页并切换过去，返回 `data.pageIndex`、`data.url`；新页签会被带到最前 |
 | `switch_tab` | `id`, `pageIndex` | 切换当前操作的标签页，并把该页签带到最前 |
 | `switch_tab_by_url` | `id`, `url` | 按 URL 匹配切换当前页签，返回 `data.pageIndex`/`data.url`/`data.title`。匹配规则见下面的「URL 匹配」；匹配不到时 `msg` 里列出当前全部页签 |
@@ -240,9 +253,9 @@ dsb --port 10049 upload 图样.jpg
 | `wait_for_text` | `id`, `text`, `timeoutSeconds` | 等文本出现 |
 | `wait_for_url` | `id`, `url`, `timeoutSeconds` | 等 URL 匹配（支持 `**/path` 这类通配），返回 `data.url` |
 | `wait_for_load` | `id`, `state`, `timeoutSeconds` | `state` 取 `load` / `domcontentloaded` / `networkidle` |
-| `wait_for_function` | `id`, `expression`, `timeoutSeconds` | 等 JS 表达式为真，如 `() => document.readyState === "complete"` |
+| `wait_for_function` | `id`, `expression`, `timeoutSeconds` | 等 JS 表达式为真，如 `() => document.readyState === "complete"`。站点 CSP 禁止 `unsafe-eval` 时自动改用轮询，回执带 `fallback:"evaluate-poll"` |
 | `wait_for_idle` | `id`, `quietMs`(可选，默认 500), `timeoutSeconds`(可选，默认 30), `selector`(可选), `text`(可选) | 等页面「忙完」：连续 `quietMs` 毫秒既没有 DOM 变更、也没有在途请求。**不知道要等多久时用它**，比固定 `wait` 稳、比手写 `wait_for_function` 省事 |
-| `wait_for_stable` | `id`, `selector`(可选，默认整个 body), `quietMs`(可选，默认 800), `timeoutSeconds`(可选) | 等**内容**稳定：正文 / 表单值 / 表格内容连续 `quietMs` 毫秒不再变化，返回 `data.stable`、`data.changes`、`data.length`、`data.fingerprint` 与**稳定后的文本 `data.text`** |
+| `wait_for_stable` | `id`, `selector`(可选，默认整个 body), `quietMs`(可选，默认 800), `timeoutSeconds`(可选), `requireContent`(bool，可选), `contentGraceMs`(可选，默认 5000) | 主内容为空或有可见加载指示器时，再最多多等 `contentGraceMs`：之后回执带 `contentReady:false` 和 `warning`；传 `requireContent:true` 则报 `CONTENT_NOT_READY`。等**内容**稳定：正文 / 表单值 / 表格内容连续 `quietMs` 毫秒不再变化，返回 `data.stable`、`data.changes`、`data.length`、`data.fingerprint` 与**稳定后的文本 `data.text`** |
 | `wait_for_count` | `id`, `selector`, `min`/`max`/`equals`(至少给一个), `timeoutSeconds`(可选) | 等命中数量达标。等弹窗/遮罩**全部消失**用 `max: 0`，等结果行**出现**用 `min: 1`。返回 `data.matched`、`data.count`、`data.waitedMs` |
 
 `wait_for_idle` 的返回：`data.idle`（成功时 true）、`data.waitedMs`、`data.mutations`（观察到的 DOM 变更次数）、`data.inflight`（结束时仍在途的请求数）。超时失败时同样带这几个计数，便于判断是「接口一直不回来」还是「页面有定时器一直在改 DOM」。传了 `selector` / `text` 时会同时要求该条件成立。
@@ -343,7 +356,8 @@ dsb run mouse_up -p button=left
 | `set_dialog_behavior` | `id`, `dismiss`(bool) | 弹窗**默认自动确认**；`dismiss=true` 改成自动取消 |
 | `get_modals` | `id` | 列出当前可见的 DOM 弹窗：`data.count` / `countStrict` / `countHeuristic` / `countBlocking`、`data.modals[]`（`kind`/`matchedBy`/`confidence`/`blocking`/`hasMask`/`className`/`id`/`title`/`text`/`buttons`/`buttonPoints`/`hasClose`/`closePoint`/`rect`/`zIndex`/`frameIndex`）、`data.top`（**最后一条 `blocking` 的**；没有 blocking 时才是最后一条）、`data.topIsBlocking`、`data.scannedBy`（跑了哪几轮扫描）。**主 frame 与每个 iframe 各扫一遍**，iframe 里的坐标已换算成主页面视口坐标 |
 | `close_modal` | `id`, `which`(可选，默认 `top`), `title`(可选), `button`(可选) | 关掉 DOM 弹窗。**一律用真实鼠标点**，并且点完**校验数量是否真的减少**，返回 `data.closed`、`data.countBefore`、`data.countAfter`、`data.clicked` |
-| `get_console_logs` | `id` | 返回 `data.logs` 与 `data.errors`，各最多 200 条 |
+| `get_console_logs` | `id`, `level`(可选，如 `error`), `limit`(可选，取最新 N 条) | 返回 `data.logs` 与 `data.errors`，各最多 200 条，单条超过 4000 字符时截断 |
+| `get_page_diagnostics` | `id`, `limit`(可选，每类最多条数，默认 30) | 一次回答“页面为什么没渲染”：`findings`（结论）、`failedRequests`、`httpErrors`、`consoleErrors`、`pageErrors`、`cspViolations`、`page`（主内容长度等）。网络记录默认从认领页签起记录；回执提示记录刚开启时先 reload 再读 |
 | `clear_console_logs` | `id` | 清空 |
 
 **`get_dialog` 是「最近一次弹窗」而不是「当前这一步的结果」**：实测提交验证码失败过一次之后，后面查询明明成功了，`get_dialog` 仍然返回上一轮的「验证码输入错误」，很容易误判成这次也失败了。判断弹窗是不是新的看 `data.dialog.seq`/`timestamp`；稳妥做法是**每次提交动作前先 `get_dialog` 加 `consume: true` 清一次**，动作后再读。
@@ -372,7 +386,7 @@ dsb run mouse_up -p button=left
 | --- | --- | --- |
 | `route` | `id`, `urlPattern`, `action`, `body`, `status`, `contentType` | `action` 取 `abort`（拦截）或 `mock`（返回自定义响应）；`urlPattern` 用 Playwright 通配，如 `**/api/ping` |
 | `unroute` | `id`, `urlPattern`(可选) | 不传则移除全部路由 |
-| `get_requests` | `id`, `filter`(可选), `resourceType`(可选), `limit`(可选), `since`(可选) | 返回 `data.requests`（`method/url/resourceType/status`，**带请求体的请求另有 `postData`，最多 4000 字符**；记录前已遮蔽 JSON/表单请求体中 password、token、API key、secret 等键的值，遮蔽过的带 `postDataRedacted: true`，`postDataLength` 仍是原文长度），最多 200 条。`filter` 按 URL 子串过滤，`resourceType` 按 `xhr`/`fetch`/`document`/`script` 等过滤，`limit` 限制条数，`since` 只返回该毫秒时间戳之后的。返回里另有 `data.count`/`data.total`/`data.recordedSince`/`data.inflight`/`data.note`。**只有元数据，没有响应体** |
+| `get_requests` | `id`, `filter`(可选), `resourceType`(可选), `limit`(可选), `since`(可选), `failedOnly`(bool，可选，只留网络失败和 HTTP 4xx/5xx) | 返回 `data.requests`（`method/url/resourceType/status`，**带请求体的请求另有 `postData`，最多 4000 字符**；记录前已遮蔽 JSON/表单请求体中 password、token、API key、secret 等键的值，遮蔽过的带 `postDataRedacted: true`，`postDataLength` 仍是原文长度），最多 200 条。`filter` 按 URL 子串过滤，`resourceType` 按 `xhr`/`fetch`/`document`/`script` 等过滤，`limit` 限制条数，`since` 只返回该毫秒时间戳之后的。返回里另有 `data.count`/`data.total`/`data.recordedSince`/`data.inflight`/`data.note`。**只有元数据，没有响应体** |
 | `wait_for_response` | `id`, `urlPattern`, `timeoutSeconds`(可选), `maxChars`(可选), `lookBackSeconds`(可选) | 等 `urlPattern` 匹配的响应并返回它的响应体：`data.url`、`data.status`、`data.body`（默认最多 20000 字符）、`data.bodyLength`、`data.ageMs`、`data.fromLookBack`。响应体的凭据处理同 `get_response_body`。匹配规则见下面的「URL 匹配」 |
 | `get_response_body` | `id`, `filter`(可选), `index`(可选), `maxChars`(可选), `requestId`(可选) | 回看**已经发生过**的响应体（保留最近 100 个响应）。`filter` 按 URL 子串过滤，不传取最近一个；`index` 在多个匹配里选第几个（默认最后一个）。可用 `requestId` 精确关联重复 URL 的某次请求。**xhr/fetch 响应体在下载完成回调里缓存**，所以跳转/等一会儿之后照样读得到；读的是缓存时另有 `data.bodyFromCache: true` 与 `data.bodyCapturedAt`，可缓存类型尚未完成缓存时是 `data.bodyCapturePending: true`。未缓存时按需读取，读取失败才给 `data.bodyError` / `data.bodyHint`、`data.bodyAvailable=false`。正常关联带 `correlationMissed: false`；缺失关联明确带 `correlationMissed: true`、`correlatedBy: "none"`，不按 URL 猜配。`data.request.postData` 与 `get_requests` 一样已遮蔽凭据；`data.body` 是响应原文，不遮蔽（读接口数据靠它），自动留档与服务端 trace 会遮蔽其中的凭据键值，显式 `--out` 和 stdout 不遮蔽 |
 

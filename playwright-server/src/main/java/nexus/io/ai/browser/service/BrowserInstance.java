@@ -139,6 +139,8 @@ public class BrowserInstance {
 
   /** 控制台日志与页面错误(最多保留 200 条) */
   public final List<String> consoleLogs = Collections.synchronizedList(new ArrayList<String>());
+  /** When this task last gained a tab through window.open; lets get_tabs flag popups that arrived late. */
+  public volatile long lastPopupAt;
   public final List<String> pageErrors = Collections.synchronizedList(new ArrayList<String>());
 
   /**

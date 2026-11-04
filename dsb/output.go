@@ -67,6 +67,8 @@ type Printer struct {
 	Select *string
 	// SelectLenient 为真时,--select 的路径不存在就退回打印整封(旧行为)。
 	SelectLenient bool
+	// Raw prints a selected string as is, so multi-line page text stays readable.
+	Raw bool
 	// SelectMissed 记录「这次 --select 打偏了」,由 report() 翻成退出码 3。
 	SelectMissed bool
 }
@@ -86,6 +88,7 @@ func NewPrinter(args *Args) *Printer {
 		ErrOut:        newTextSink(os.Stderr),
 		Select:        args.Select,
 		SelectLenient: args.SelectLenient,
+		Raw:           args.Raw,
 	}
 }
 
@@ -125,7 +128,7 @@ func (p *Printer) Response(response *Response, label string, hasIndex bool, inde
 			detail += " msg=" + message
 		}
 		if p.Mode == "compact" {
-			for _, key := range []string{"result", "expectResult", "readback", "execution"} {
+			for _, key := range []string{"result", "expectResult", "readback", "newTab", "hint", "warning", "popupNote", "execution"} {
 				if value := objGet(response.Data(), key); value != nil {
 					detail += " " + key + "=" + compactText(EncodeJSON(redactCookieRecords(value), encCompact), 600)
 				}
@@ -238,6 +241,10 @@ func (p *Printer) JSON(value Value) {
 			// 看得见的事实,而不是悄悄换成一个形状完全不同的东西还报成功。
 			p.Warn(fmt.Sprintf("--select %s 在这条响应里不存在,stdout 打 null(要整封加 --select-lenient)", *p.Select))
 			p.printLine("null")
+			return
+		}
+		if text, isText := picked.(string); isText && p.Raw {
+			p.printLine(text)
 			return
 		}
 		p.printLine(EncodeJSON(picked, encIndent2))

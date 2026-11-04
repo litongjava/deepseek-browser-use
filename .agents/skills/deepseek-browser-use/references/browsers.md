@@ -23,6 +23,26 @@ dsb --id 1001 start --browser chrome --headful --profile litongjava
 dsb --id 1002 start --headful --user-data-dir "<独立 User Data>" --profile-directory Default
 ```
 
+## 显示到 VNC、临时 profile 与清理登录状态
+
+```shell
+# 显示到 VNC 的 :1；用独立端口时不影响其他任务，也有独立的 profile
+dsb --port 10050 start --display :1
+# 敏感登录：临时 profile，最后一个任务 close 时连同登录状态一起删除
+dsb --port 10050 start --display :1 --ephemeral
+# 删除命名 profile
+dsb profile delete --name litongjava
+# 删除某个端口的持久 profile：先停服务，再确认
+dsb --port 10050 server stop
+dsb --port 10050 server wipe-profile --yes
+```
+
+- `display` 和 `headless` 一样在启动时固定。`dsb tasks` 的 `data.browser.display` 显示当前值。
+- 强杀服务（`server stop --keep-browser` 或 `kill -9`）来不及删除临时 profile，它会留在系统临时目录的 `dsb-ephemeral-*` 下，需要手动清理。
+- `--ephemeral` 只支持 Chrome，不能与 `--profile`、`--user-data-dir` 同用。
+
+## profile 列表与选择规则
+
 - `list_profiles` 返回 `data.profiles` 对象数组；`displayName` 优先取 Chrome Local State。只有命名托管项的 `name` 可供 `--profile` 使用，配置默认目录的 `name` 可能省略。本机 Chrome 子目录需显式选择或先复制。
 - 命名副本位于 `browser.profiles.dir` 下，默认 `~/.config/browseruse/profiles/named/<名称>`；子目录归一为 `Default`。路径均属于服务端机器。
 - 复制前关闭使用源目录的 Chrome。拒绝已存在目标、活跃源、符号链接及路径重叠；排除缓存和临时 LOCK 文件。`copiedFiles` / `copiedBytes` 在当前 JSON 配置下为十进制字符串。

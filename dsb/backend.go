@@ -155,6 +155,9 @@ type HealthInfo struct {
 	PID       int
 	Port      int
 	StartedAt string
+	// Jar and Commit identify what the process really runs; empty on backends older than this field.
+	Jar    string
+	Commit string
 }
 
 // ------------------------------------------------------------------ 构建

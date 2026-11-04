@@ -34,19 +34,19 @@ dsb js '@query.js' --select data.result
 dsb batch commands.json --async --wait --out result.json --summary
 ~~~
 
-- `list_methods` / `methods` 查询当前服务的能力，不按文档中的固定方法数量判断。开发后需更新本机后端时用 `dsb server build`、`dsb server restart`；先确认没有其他任务使用共享服务。
-- `start` 默认显示窗口；需要无头模式时才用 `--headless`。回读 `data.browser.headless` 和实际浏览器字段确认。
+- `list_methods` / `methods` 查询当前服务的能力，不按文档中的固定方法数量判断。开发后更新本机后端用 `dsb server build`、`dsb server restart --when-idle`：有活动任务时普通 `restart`/`stop` 会拒绝执行，`--when-idle` 等任务结束，`--force` 才会中断它们。`dsb server status` 显示运行中的 jar 和是否需要重启。
+- `start` 默认显示窗口；需要无头模式时才用 `--headless`。回读 `data.browser.headless` 和实际浏览器字段确认。报 `BROWSER_CONFIG_CONFLICT` 或 `DISPLAY_UNAVAILABLE` 时什么都没启动：按回执的 `hint` 处理，不要关闭别人的浏览器。要让用户在 VNC 里看到窗口，用独立端口：`dsb --port 10050 start --display :1`。
 - PowerShell 文件参数写成 `'@query.js'`、`--params '@params.json'`。多行 JS / 嵌套 JSON 放文件；协议示例 `{id,method,params}` 可存入参数文件交给 `dsb run`。
 - CLI 默认请求精简响应；需要完整诊断时用 `--diagnostics` 或 `--response-mode full`。不能重放动作补诊断。
 - 常规动作使用 `--summary`；只读回目标字段，避免反复打印整页。单行 JSON 配置不能用 `head`/`Get-Content -TotalCount` 控制大小，应解析后投影白名单字段。完整配置、规则正文、凭据不得进入对话或提交。
-- 结构化响应用 `--out result.json` 保存（不是图片）；截图文件位置读 `data.path`。PowerShell 读取时加 `-Encoding UTF8`。`--select` 保持单路径；多字段用可重复的 `--fields 别名=路径`，详细规则见 [客户端](references/client.md)。
+- `--select data.result --raw` 直接打印字符串原文（换行就是换行），读长文本不用再反转义。结构化响应用 `--out result.json` 保存（不是图片）；截图文件位置读 `data.path`。PowerShell 读取时加 `-Encoding UTF8`。`--select` 保持单路径；多字段用可重复的 `--fields 别名=路径`，详细规则见 [客户端](references/client.md)。
 - 退出码：0 成功、1 传输错误、2 业务失败、3 用法错误。输出筛选失败不等于动作未执行，先查对应留档，不能为了修输出重发动作。
 
 ## 读取与交互
 
 1. 导航后用 `get_browser_state` / `dsb state` 读页签和 `data.text`；文本中的 `[index]` 是可交互元素索引。
 2. 执行动作，优先用限定 scope 的 role/name/exact 或唯一选择器；按索引时带上当前 snapshotVersion。点击、导航、异步渲染后重新取快照；`indicesUsable:false` 或 `snapshotConsistent:false` 时不使用该次索引。
-3. 用有界的 `wait_for_text` / `wait_for_function` / `wait_for_response` 等待目标结果。轮询页不适合 `wait_for_idle`，可改用 `wait_for_stable` 或具体业务条件。
+3. 用有界的 `wait_for_text` / `wait_for_function` / `wait_for_response` 等待目标结果。轮询页不适合 `wait_for_idle`，可改用 `wait_for_stable` 或具体业务条件。`wait_for_stable` 返回 `contentReady:false` 表示页面虽不再变化，但主内容为空或仍在加载，不能当作已加载完；必须有内容时传 `requireContent:true`。
 4. 填完表单用 `get_form_state` 核对。自定义下拉还要核对显示值、选中项和错误状态；DOM 中有值不保证已进入框架模型。
 5. 回读业务后置条件，如目标订单状态、稿件列表或申请记录。`ok`、`changed`、`effective` 和 DOM diff 都不能单独证明业务成功或失败。
 
@@ -61,6 +61,9 @@ dsb batch commands.json --async --wait --out result.json --summary
 | 有遮挡或弹窗 | `get_modals` 查看 DOM 弹窗与 covers 候选；`get_dialog` 只看原生弹窗。covers 仅诊断，不自动关闭 |
 | 需要接口响应 | `get_response_body` 回看或 `wait_for_response` 等待；`get_requests` 只有请求元数据 |
 | 新页签动作报错 | 先 `get_tabs` 核对是否已创建、当前操作页是否切换；不要直接重开 |
+| 点击应打开新页签 | 加 `--expect-popup`，回执的 `newTab` 给出新页签，当前页已切换。普通点击的 `changed:false` 不代表没生效，新页签可能晚到：重复点击前先 `wait_for_new_tab -p baseline=<点击前页签数>` |
+| 输入框不在索引里（Ace、CodeMirror、CloudShell 等） | `keyboard_type -p selector=textarea.ace_text-input -p text=...`，用真实按键输入 |
+| 页面空白或控制台显示加载失败 | `get_page_diagnostics` 汇总失败请求、HTTP 错误、控制台错误和 CSP 拦截；回执提示记录刚开启时，先 reload 再读 |
 
 `actionStatus:unknown`、`probeTrustworthy:false` 或 `observationComplete:false` 时先观察业务结果，禁止自动补点。`--retry-on-spurious` 只用于可安全重发的只读脚本，点击、提交、支付和发送消息不能自动重发。
 
@@ -89,7 +92,7 @@ dsb batch commands.json --async --wait --out result.json --summary
 
 ## 人工协助与任务收尾
 
-需要登录、扫码、验证码或人工支付时，保留有头浏览器，用 `request_human_input` 记录请求并通过对话通知用户。不能仅凭接口成功就认为用户收到通知；等待期间不刷新或继续点击验证控件。用户完成后回读页面再继续，`pending` / 超时不表示已通过。参数见 [人机协同](references/human-in-loop.md)。
+需要登录、扫码、验证码或人工支付时，保留有头浏览器，用 `request_human_input` 记录请求并通过对话通知用户。root、管理员等敏感账号用 `--ephemeral` 启动：临时 profile 随浏览器关闭一起删除；否则登录状态会留在 profile 里，收尾时要明确告诉用户。不能仅凭接口成功就认为用户收到通知；等待期间不刷新或继续点击验证控件。用户完成后回读页面再继续，`pending` / 超时不表示已通过。参数见 [人机协同](references/human-in-loop.md)。
 
 默认所有任务共用浏览器和持久化 profile，通过页签隔离；每个任务只有一个所有者。切换浏览器或 profile 可能需要重新登录，不关闭其他任务排障。
 

@@ -24,7 +24,7 @@ func cmdServer(args *Args, out *Printer) (int, error) {
 		action = args.Positionals[0]
 	}
 	if action == "" {
-		return 0, usageErrorf("server 需要一个动作:init / build / start / stop / restart / status / logs / target")
+		return 0, usageErrorf("server 需要一个动作:init / build / start / stop / restart / status / logs / wipe-profile / target")
 	}
 
 	switch action {
@@ -55,18 +55,26 @@ func cmdServer(args *Args, out *Printer) (int, error) {
 	case "start":
 		return cmdServerStart(args, out, endpoint)
 	case "stop":
+		if code, guardErr := guardActiveTasks(args, out, endpoint, "stop"); guardErr != nil || code != ExitOK {
+			return code, guardErr
+		}
 		return cmdServerStop(args, out, endpoint)
 	case "restart":
+		if code, guardErr := guardActiveTasks(args, out, endpoint, "restart"); guardErr != nil || code != ExitOK {
+			return code, guardErr
+		}
 		if code, stopErr := cmdServerStop(args, out, endpoint); stopErr != nil || code != ExitOK {
 			return code, stopErr
 		}
 		return cmdServerStart(args, out, endpoint)
+	case "wipe-profile":
+		return cmdServerWipeProfile(args, out, endpoint)
 	case "status":
 		return cmdServerStatus(args, out, endpoint)
 	case "logs":
 		return cmdServerLogs(args, out, endpoint)
 	}
-	return 0, usageErrorf("server 不认识这个动作:%s(要 init / build / start / stop / restart / status / logs / target)", action)
+	return 0, usageErrorf("server 不认识这个动作:%s(要 init / build / start / stop / restart / status / logs / wipe-profile / target)", action)
 }
 
 // cmdServerTarget 管理「具名目标」:把一个主机+端口记个名字,之后用 `dsb --use <名字>` 就能连。
@@ -392,6 +400,14 @@ func cmdServerStatus(args *Args, out *Printer, endpoint Endpoint) (int, error) {
 	if len(candidates) > 0 {
 		selected = candidates[0].Path
 	}
+	running := runningJar(baseURL, healthy, layout)
+	restartNeeded := running != "" && selected != "" && !samePath(running, selected)
+	activeTasks := -1
+	if healthy {
+		if count, _, taskErr := readActiveTasks(baseURL); taskErr == nil {
+			activeTasks = count
+		}
+	}
 
 	if args.JSON {
 		result := ObjOf("baseUrl", baseURL, "port", numberFromInt(port), "healthy", healthy,
@@ -422,6 +438,13 @@ func cmdServerStatus(args *Args, out *Printer, endpoint Endpoint) (int, error) {
 				items = append(items, item)
 			}
 			result.Set("candidates", items)
+			if running != "" {
+				result.Set("runningJar", running)
+				result.Set("restartNeeded", restartNeeded)
+			}
+		}
+		if activeTasks >= 0 {
+			result.Set("activeTasks", numberFromInt(activeTasks))
 		}
 		out.JSON(result)
 		return ExitOK, nil
@@ -457,6 +480,17 @@ func cmdServerStatus(args *Args, out *Printer, endpoint Endpoint) (int, error) {
 		out.Line(fmt.Sprintf("进程:%d(%s)", pid, state))
 	} else {
 		out.Line("进程:没有 pid 文件")
+	}
+	if running != "" {
+		out.Line(fmt.Sprintf("运行中的 jar:%s", running))
+		if restartNeeded {
+			out.Line(fmt.Sprintf("需要重启:运行中的不是最新构建(最新 %s);用 dsb server restart --when-idle", selected))
+		} else {
+			out.Line("已是最新构建")
+		}
+	}
+	if activeTasks >= 0 {
+		out.Line(fmt.Sprintf("活动任务:%d", activeTasks))
 	}
 	if len(candidates) == 0 {
 		out.Line("后端 jar:没找到(跑 `dsb server build` 构建一份)")
@@ -511,4 +545,138 @@ func absPath(path string) (string, error) {
 		path = home + strings.TrimPrefix(path, "~")
 	}
 	return filepathAbs(path)
+}
+
+// runningJar names the jar the live process runs: the service's own report first, then the pid file.
+func runningJar(baseURL string, healthy bool, layout ServerLayout) string {
+	if healthy {
+		if info, ok := probeHealthInfoAttempts(baseURL, 3, 1); ok && info.Jar != "" && strings.HasSuffix(info.Jar, ".jar") {
+			return info.Jar
+		}
+	}
+	if layout.RepoDir == "" {
+		return ""
+	}
+	record, err := readPidRecord(layout.pidFile())
+	if err != nil || !processAlive(record.PID) {
+		return ""
+	}
+	return record.Jar
+}
+
+func samePath(left string, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+// readActiveTasks returns how many tasks the service holds and how many requests they have in flight.
+func readActiveTasks(baseURL string) (int, int, error) {
+	client, err := NewClient(ClientOptions{BaseURL: baseURL, TaskID: DefaultTaskID,
+		Timeout: 5, Session: "", Record: false, AutoStart: false})
+	if err != nil {
+		return 0, 0, err
+	}
+	response, err := client.Command("list_tasks", NewObj(), nil, 5, "list_tasks")
+	if err != nil {
+		return 0, 0, err
+	}
+	if !response.Ok() {
+		return 0, 0, fmt.Errorf("list_tasks failed: %s", response.Msg())
+	}
+	tasks := asArray(objGet(response.Data(), "tasks"))
+	inflight := 0
+	for _, task := range tasks {
+		inflight += healthIntField(asObj(task), "inflight")
+	}
+	return len(tasks), inflight, nil
+}
+
+// idlePollSeconds and idleConfirmations: a task list that empties for one poll is often just a handover between tasks.
+const (
+	idlePollSeconds    = 2.0
+	idleConfirmations  = 2
+	defaultIdleTimeout = 600.0
+)
+
+// guardActiveTasks protects tasks owned by other sessions: stopping the service destroys them with no warning.
+func guardActiveTasks(args *Args, out *Printer, endpoint Endpoint, action string) (int, error) {
+	if args.Force && args.WhenIdle {
+		return 0, usageErrorf("--force 与 --when-idle 不能同用")
+	}
+	if args.Force || !endpoint.Local || !probeHealth(endpoint.BaseURL) {
+		return ExitOK, nil
+	}
+	count, _, err := readActiveTasks(endpoint.BaseURL)
+	if err != nil {
+		// A service too old or too broken to list tasks must still be stoppable.
+		out.Warn("[warn] 读不到任务列表,无法确认是否有活动任务:" + err.Error())
+		return ExitOK, nil
+	}
+	if count == 0 {
+		return ExitOK, nil
+	}
+	if !args.WhenIdle {
+		out.Warn(fmt.Sprintf("这个服务还有 %d 个活动任务,%s 会中断它们。没有执行 %s。"+
+			"等它们结束用 --when-idle,确定要中断用 --force", count, action, action))
+		return ExitBusiness, nil
+	}
+	timeout := defaultIdleTimeout
+	if args.IdleTimeout != nil {
+		timeout = *args.IdleTimeout
+	}
+	out.Line(fmt.Sprintf("等待 %d 个活动任务结束(最多 %.0f 秒)...", count, timeout))
+	return waitForIdle(endpoint.BaseURL, timeout, action, out, readActiveTasks, time.Sleep)
+}
+
+// waitForIdle polls until the service stays empty; the read and sleep functions are injected for tests.
+func waitForIdle(baseURL string, timeout float64, action string, out *Printer,
+	read func(string) (int, int, error), sleep func(time.Duration)) (int, error) {
+	confirmed := 0
+	for waited := 0.0; ; waited += idlePollSeconds {
+		count, _, err := read(baseURL)
+		if err != nil {
+			// The service may have gone away by itself; the caller's stop handles that case.
+			return ExitOK, nil
+		}
+		if count == 0 {
+			confirmed++
+			if confirmed >= idleConfirmations {
+				return ExitOK, nil
+			}
+		} else {
+			confirmed = 0
+		}
+		if waited >= timeout {
+			out.Warn(fmt.Sprintf("等了 %.0f 秒仍有 %d 个活动任务。没有执行 %s", timeout, count, action))
+			return ExitBusiness, nil
+		}
+		sleep(time.Duration(idlePollSeconds * float64(time.Second)))
+	}
+}
+
+// cmdServerWipeProfile deletes one port's persistent profile, the only place its logins survive on this machine.
+func cmdServerWipeProfile(args *Args, out *Printer, endpoint Endpoint) (int, error) {
+	if !endpoint.Local {
+		return 0, usageErrorf("目标 %s 不是本机,wipe-profile 只能在本机执行", endpoint.BaseURL)
+	}
+	repoDir, _, err := resolveRepoDir(derefOr(args.RepoDir, ""))
+	if err != nil {
+		return 0, err
+	}
+	if probeHealth(endpoint.BaseURL) {
+		return 0, usageErrorf("端口 %d 的服务还在运行。先 dsb server stop --port %d,再清理", endpoint.Port, endpoint.Port)
+	}
+	layout := ServerLayout{RepoDir: repoDir, Port: endpoint.Port}
+	target := layout.profileDir()
+	if !args.Yes {
+		return 0, usageErrorf("这会删除 %s 和其中的所有登录状态。确认后加 --yes", target)
+	}
+	if _, statErr := os.Lstat(target); os.IsNotExist(statErr) {
+		out.Line("没有需要清理的 profile:" + target)
+		return ExitOK, nil
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return 0, transportErrorf("删除 %s 失败:%v", target, err)
+	}
+	out.Line("已删除 profile:" + target)
+	return ExitOK, nil
 }

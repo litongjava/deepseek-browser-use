@@ -12,8 +12,9 @@
 | `targets` | endpoint:string! |  | {} |
 | `get_diagnostics` |  |  | {} |
 | `cancel_command` | commandId:string! |  | {} |
-| `start` | headless:boolean browser:string networkRecording:boolean fakeMedia:boolean profile:string userDataDir:string profileDirectory:string |  | {} |
+| `start` | headless:boolean browser:string networkRecording:boolean fakeMedia:boolean profile:string userDataDir:string profileDirectory:string display:string ephemeral:boolean |  | {} |
 | `list_profiles` |  |  | {} |
+| `delete_profile` | name:string! |  | {} |
 | `clone_profile` | name:string sourceUserDataDir:string sourceProfileDirectory:string |  | {} |
 | `close` | closeBrowser:boolean |  | {} |
 | `shutdown` |  |  | {} |
@@ -27,7 +28,7 @@
 | `get_browser_state` | highlight:boolean viewportExpansion:integer includeElements:boolean maxElements:integer includeFrames:boolean strictSnapshot:boolean screenshot:boolean |  | {} |
 | `list_frames` | refresh:boolean |  | {} |
 | `wait` | seconds:integer! |  | {} |
-| `click_element_by_index` | index:integer! mode:string timeoutMs:integer |  | {} |
+| `click_element_by_index` | index:integer! mode:string timeoutMs:integer expectPopup:boolean popupTimeoutMs:integer |  | {} |
 | `double_click_element_by_index` | index:integer! mode:string |  | {} |
 | `hover_element_by_index` | index:integer! |  | {} |
 | `focus_element_by_index` | index:integer! |  | {} |
@@ -38,6 +39,7 @@
 | `upload_file` | trigger:string path:string timeoutMs:integer frame:string responseUrl:string contentBase64:string url:string index:integer selector:string filename:string contentType:string nth:integer | index / selector / trigger,path / contentBase64 / url | {} |
 | `drag_element_by_index` | index:integer! targetIndex:integer! |  | {} |
 | `send_keys` | keys:string! |  | {} |
+| `keyboard_type` | text:string! selector:string frame:string delayMs:integer |  | {} |
 | `press_key` | key:string keys:string | key / keys | {} |
 | `key_down` | keys:string! |  | {} |
 | `key_up` | keys:string! |  | {} |
@@ -55,14 +57,15 @@
 | `is_visible` | index:integer selector:string frame:string | index / selector | {} |
 | `is_enabled` | index:integer selector:string frame:string | index / selector | {} |
 | `is_checked` | index:integer selector:string frame:string | index / selector | {} |
-| `click_element_by_selector` | selector:string! mode:string timeoutMs:integer frame:string nth:integer |  | {} |
+| `click_element_by_selector` | selector:string! mode:string timeoutMs:integer frame:string nth:integer expectPopup:boolean popupTimeoutMs:integer |  | {} |
 | `input_text_by_selector` | selector:string! text:string! mode:string frame:string nth:integer |  | {} |
-| `click_element_by_text` | text:string! mode:string |  | {} |
-| `click_element_by_role` | role:string! name:string mode:string scope:string frame:string nth:integer exact:boolean timeoutMs:integer |  | {} |
+| `click_element_by_text` | text:string! mode:string exact:boolean timeoutMs:integer expectPopup:boolean popupTimeoutMs:integer |  | {} |
+| `click_element_by_role` | role:string! name:string mode:string scope:string frame:string nth:integer exact:boolean timeoutMs:integer expectPopup:boolean popupTimeoutMs:integer |  | {} |
 | `input_text_by_label` | label:string! text:string! mode:string |  | {} |
 | `clear_text` | index:integer selector:string | index / selector | {} |
-| `hover_and_click` | index:integer selector:string hoverDelayMs:integer mode:string | index / selector | {} |
+| `hover_and_click` | index:integer selector:string hoverDelayMs:integer mode:string expectPopup:boolean popupTimeoutMs:integer | index / selector | {} |
 | `get_tabs` |  |  | {} |
+| `wait_for_new_tab` | baseline:integer timeoutMs:number timeoutSeconds:number |  | {} |
 | `new_tab` | url:string |  | {} |
 | `switch_tab` | pageIndex:integer! |  | {} |
 | `switch_tab_by_url` | url:string! |  | {} |
@@ -75,7 +78,7 @@
 | `wait_for_load` | state:string timeoutMs:number timeoutSeconds:number |  | {state=[load, domcontentloaded, networkidle]} |
 | `wait_for_function` | expression:string! timeoutMs:number timeoutSeconds:number |  | {} |
 | `wait_for_idle` | quietMs:integer selector:string text:string timeoutMs:number timeoutSeconds:number |  | {} |
-| `wait_for_stable` | selector:string quietMs:integer timeoutMs:number timeoutSeconds:number |  | {} |
+| `wait_for_stable` | selector:string quietMs:integer timeoutMs:number timeoutSeconds:number requireContent:boolean contentGraceMs:integer |  | {} |
 | `wait_for_count` | selector:string! min:integer max:integer equals:integer timeoutMs:number timeoutSeconds:number |  | {} |
 | `mouse_move` | x:number! y:number! |  | {} |
 | `mouse_down` | button:string |  | {} |
@@ -106,11 +109,12 @@
 | `set_dialog_behavior` | dismiss:boolean |  | {} |
 | `get_modals` |  |  | {} |
 | `close_modal` | which:string title:string button:string |  | {} |
-| `get_console_logs` |  |  | {} |
+| `get_console_logs` | level:string limit:integer |  | {} |
+| `get_page_diagnostics` | limit:integer |  | {} |
 | `clear_console_logs` |  |  | {} |
 | `route` | urlPattern:string! action:string body:string status:integer contentType:string |  | {} |
 | `unroute` | urlPattern:string |  | {} |
-| `get_requests` | filter:string resourceType:string limit:integer since:integer |  | {} |
+| `get_requests` | filter:string resourceType:string limit:integer since:integer failedOnly:boolean |  | {} |
 | `wait_for_response` | urlPattern:string! maxChars:integer lookBackSeconds:integer timeoutMs:number timeoutSeconds:number |  | {} |
 | `get_response_body` | filter:string index:integer maxChars:integer requestId:string |  | {} |
 | `get_page_snapshot` | includeConsole:boolean includeRequests:boolean requestFilter:string |  | {} |

@@ -36,6 +36,7 @@ public final class CommandSchema {
     return switch (method) {
       case "execute_js" -> "body|bodyFile";
       case "press_key" -> "key|keys";
+      case "get_page_diagnostics" -> "";
       case "upload_file" -> "index|selector|trigger,path|contentBase64|url";
       case "get_element_text", "get_element_listeners", "is_visible", "is_enabled", "is_checked",
           "clear_text", "hover_and_click", "download_image", "get_element_screenshot" -> "index|selector";
@@ -86,6 +87,9 @@ public final class CommandSchema {
       try { CommandTable.waitSeconds(args); }
       catch (IllegalArgumentException error) { errors.add(path + "." + error.getMessage()); }
     }
+    if (args.get("popupTimeoutMs") instanceof Number n && (n.longValue() < 0 || n.longValue() > 120000)) {
+      errors.add(path + ".popupTimeoutMs must be 0..120000");
+    }
     if (args.get("commandTimeoutMs") instanceof Number n && (n.longValue() < 1 || n.longValue() > 900000)) {
       errors.add(path + ".commandTimeoutMs must be 1..900000");
     }
@@ -112,7 +116,18 @@ public final class CommandSchema {
         continue;
       }
       boolean valid = switch (type) {
-        case "string" -> value instanceof String;
+        case "string" -> {
+          // `-p text=2026` arrives as a JSON number; the caller clearly meant the literal text.
+          if (value instanceof java.math.BigDecimal decimal) {
+            args.put(key, decimal.toPlainString());
+            yield true;
+          }
+          if (value instanceof Number || value instanceof Boolean) {
+            args.put(key, String.valueOf(value));
+            yield true;
+          }
+          yield value instanceof String;
+        }
         case "boolean" -> value instanceof Boolean;
         case "object" -> value instanceof JSONObject;
         case "array" -> value instanceof JSONArray;

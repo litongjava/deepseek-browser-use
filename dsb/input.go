@@ -25,10 +25,20 @@ func parseKV(items []string) (*Obj, error) {
 		if key == "" {
 			return nil, usageErrorf("参数名不能为空:%s", pyRepr(item))
 		}
+		if alwaysTextParams[key] {
+			result.Set(key, item[cut+1:])
+			continue
+		}
 		result.Set(key, parseValue(item[cut+1:]))
 	}
 	return result, nil
 }
+
+// alwaysTextParams never hold anything but text, so JSON-decoding them only damages the value:
+// `-p text=2026` would become a number, `-p text=null` would vanish, `-p text=007` would stop being literal.
+var alwaysTextParams = map[string]bool{"text": true, "selector": true, "url": true, "expression": true,
+	"key": true, "keys": true, "name": true, "label": true, "role": true, "filter": true, "scope": true,
+	"frame": true, "body": true, "prompt": true, "path": true, "mode": true, "state": true}
 
 // parseValue 把值按 JSON 解析;解析不了就当字符串(这样 `-p text=Mac Mini` 也能用)。
 func parseValue(text string) Value {

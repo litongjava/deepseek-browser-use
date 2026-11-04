@@ -165,8 +165,11 @@ dsb server build          # 构建当前代码的后端 jar,归档进 releases/<
 dsb server start          # 起服务(已在跑就复用)
 dsb server status         # 服务地址、健康与否、pid、仓库、全部可用 jar、日志
 dsb server logs --lines 80  # 看日志尾部(排查启动失败最常用)
-dsb server stop           # 停服务(先让服务关掉浏览器,再按进程结束)
-dsb server restart        # 重启(想用上新构建的 jar 就得这一步)
+dsb server stop           # 停服务(先让服务关掉浏览器,再按进程结束);有活动任务时拒绝执行
+dsb server restart        # 重启(想用上新构建的 jar 就得这一步);有活动任务时拒绝执行
+dsb server restart --when-idle  # 等任务都结束再重启,等不到就放弃(--idle-timeout 默认 600 秒)
+dsb server restart --force      # 中断活动任务并重启
+dsb server wipe-profile --yes   # 服务停止后,删除这个端口的 profile 和登录状态
 ```
 
 > `server start` / `stop` / `status` 也认 `--port`,所以同一台机器上的多个实例可以逐个管理:

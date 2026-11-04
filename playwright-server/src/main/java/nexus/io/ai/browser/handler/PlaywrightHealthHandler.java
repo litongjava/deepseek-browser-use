@@ -31,9 +31,36 @@ public class PlaywrightHealthHandler {
     Kv kv = Kv.by("name", "playwright-server")
         .set("pid", ProcessHandle.current().pid())
         .set("startedAt", STARTED_AT)
-        .set("port", serverPort());
+        .set("port", serverPort())
+        .set("jar", JAR)
+        .set("commit", commitOf(JAR));
     response.body(RespBodyVo.ok(kv));
     return response;
+  }
+
+  /** The jar this process really runs, so clients can tell a stale service from a fresh build. */
+  private static final String JAR = runningJar();
+
+  private static String runningJar() {
+    try {
+      return java.nio.file.Path.of(PlaywrightHealthHandler.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+          .toAbsolutePath().toString();
+    } catch (Exception e) {
+      return "";
+    }
+  }
+
+  /** Release jars live in {@code releases/<commit>/backend.jar}; other layouts have no known commit. */
+  static String commitOf(String jarPath) {
+    if (jarPath == null || jarPath.isEmpty()) {
+      return "";
+    }
+    java.nio.file.Path parent = java.nio.file.Path.of(jarPath).getParent();
+    if (parent == null || parent.getFileName() == null) {
+      return "";
+    }
+    String name = parent.getFileName().toString();
+    return name.matches("[0-9a-f]{7,40}") ? name : "";
   }
 
   /** 实际监听的端口:客户端启动时用 -Dserver.port 指定;取不到就是 0。 */

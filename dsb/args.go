@@ -56,7 +56,7 @@ var commandHelp = map[string]string{
 	"last":         "读取本会话最近响应;显式 --id 按任务筛选",
 	"recipes":      "配方列表;--run 直接跑一个",
 	"profiles":     "列出可用浏览器 profiles",
-	"profile":      "管理 profiles: list / clone",
+	"profile":      "管理 profiles: list / clone / delete",
 	"start":        "起一个任务",
 	"close":        "关掉这个任务",
 	"shutdown":     "关掉所有任务与共享浏览器",
@@ -68,7 +68,7 @@ var commandHelp = map[string]string{
 	"state":        "页面状态摘要",
 	"js":           "执行 JavaScript",
 	"selftest":     "对当前服务跑一遍端到端自检",
-	"server":       "管理后端服务与目标(init/build/start/stop/restart/status/logs/target)",
+	"server":       "管理后端服务与目标(init/build/start/stop/restart/status/logs/wipe-profile/target)",
 }
 
 // commonSpecs 是通用选项:顶层与每个子命令都认。
@@ -99,6 +99,8 @@ func commonSpecs() []argSpec {
 		{names: []string{"--select"}, dest: "select", takesValue: true, metavar: "PATH",
 			help: "Select one dot-separated field path, e.g. data.text or data.results.1.data.changed. " +
 				"Comma-separated paths are not supported. Missing paths print null (exit 3 on successful responses). Automatic records redact structured credentials and sensitive input."},
+		{names: []string{"--raw"}, dest: "raw",
+			help: "--select 取到字符串时直接打印原文,不加 JSON 引号和转义(换行就是换行)"},
 		{names: []string{"--select-lenient"}, dest: "select_lenient",
 			help: "Preserve legacy selection: allow literal comma keys and print the full envelope when the path is missing."},
 		{names: []string{"--compact", "--summary"}, dest: "compact",
@@ -145,8 +147,8 @@ var subcommandSpecs = map[string][]argSpec{
 			help: "配方变量,写成 k=v,可重复"},
 	},
 	"profile": {
-		{names: []string{"action"}, dest: "action", metavar: "ACTION", help: "list / clone"},
-		{names: []string{"--name"}, dest: "profile_name", takesValue: true, metavar: "NAME", help: "新托管 profile 的名称"},
+		{names: []string{"action"}, dest: "action", metavar: "ACTION", help: "list / clone / delete"},
+		{names: []string{"--name"}, dest: "profile_name", takesValue: true, metavar: "NAME", help: "托管 profile 的名称(clone 新建,delete 删除)"},
 		{names: []string{"--source-user-data-dir"}, dest: "source_user_data_dir", takesValue: true, metavar: "PATH", help: "服务端上的源 Chrome User Data 目录"},
 		{names: []string{"--source-profile-directory"}, dest: "source_profile_directory", takesValue: true, metavar: "NAME", help: "源 profile 子目录(默认 Default);复制不保证登录态有效"},
 	},
@@ -158,6 +160,8 @@ var subcommandSpecs = map[string][]argSpec{
 			help: "auto/chromium/chrome/edge/firefox"},
 		{names: []string{"--headless"}, dest: "headless", help: "使用无头模式(默认显示浏览器窗口);不能与 --headful 同用"},
 		{names: []string{"--headful"}, dest: "headful", help: "显示浏览器窗口(默认行为,保留兼容旧命令);不能与 --headless 同用"},
+		{names: []string{"--display"}, dest: "display", takesValue: true, metavar: "DISPLAY", help: "浏览器窗口显示到哪个 X display,例如 VNC 的 :1;启动后不能更改"},
+		{names: []string{"--ephemeral"}, dest: "ephemeral", help: "使用临时 profile,浏览器关闭时连同登录状态一起删除;仅 Chrome,适合 root/管理员等敏感登录"},
 		{names: []string{"--fake-media"}, dest: "fake_media", help: "用假麦克风/摄像头并自动同意媒体授权(语音/视频通话测试);仅 Chromium 系,浏览器启动时生效"},
 	},
 	"close": {
@@ -169,6 +173,8 @@ var subcommandSpecs = map[string][]argSpec{
 		{names: []string{"--readback"}, dest: "readback", takesValue: true, metavar: "JS", help: "Read-only JavaScript expression or @file evaluated after the action"},
 		{names: []string{"--command-timeout-ms"}, dest: "command_timeout_ms", takesValue: true, metavar: "MS", help: "Server command deadline, 1..900000 milliseconds; distinct from HTTP --timeout"},
 		{names: []string{"--sensitive"}, dest: "sensitive", help: "Suppress automatic recording of this command payload and result"},
+		{names: []string{"--expect-popup"}, dest: "expect_popup", help: "点击后等待新页签并切换过去;等不到时报 POPUP_NOT_OPENED,不要重复点击"},
+		{names: []string{"--popup-timeout-ms"}, dest: "popup_timeout_ms", takesValue: true, metavar: "MS", help: "等新页签的时长,0..120000 毫秒;配合 --expect-popup 时默认 10000"},
 		{names: []string{"--wait-until"}, dest: "wait_until", takesValue: true, metavar: "STAGE", help: "导航等待阶段:commit/domcontentloaded/load/networkidle"},
 		{names: []string{"method"}, dest: "method", metavar: "METHOD", help: "命令名,例如 go_to_url"},
 		{names: []string{"--params"}, dest: "params", takesValue: true, metavar: "PARAMS",
@@ -234,7 +240,7 @@ var subcommandSpecs = map[string][]argSpec{
 		help: "自检时用哪个浏览器(默认服务配置)"}},
 	"server": {
 		{names: []string{"action"}, dest: "action", metavar: "ACTION",
-			help: "init / build / start / stop / restart / status / logs"},
+			help: "init / build / start / stop / restart / status / logs / wipe-profile"},
 		{names: []string{"--repo-dir"}, dest: "repo_dir", takesValue: true, metavar: "REPO_DIR",
 			help: "仓库根目录(默认读 ~/.dsb/config.json,或从当前目录向上探测)"},
 		{names: []string{"--jar"}, dest: "jar", takesValue: true, metavar: "JAR",
@@ -243,6 +249,14 @@ var subcommandSpecs = map[string][]argSpec{
 			help: "浏览器引擎 auto/chromium/chrome/edge/firefox(默认用服务端配置)"},
 		{names: []string{"--keep-browser"}, dest: "keep_browser",
 			help: "stop 时只结束进程,不让服务先关掉共享浏览器"},
+		{names: []string{"--when-idle"}, dest: "when_idle",
+			help: "restart/stop 时先等所有任务结束;等不到就放弃,不打断别人"},
+		{names: []string{"--idle-timeout"}, dest: "idle_timeout", takesValue: true, metavar: "SECONDS",
+			help: "--when-idle 最多等多少秒(默认 600)"},
+		{names: []string{"--force"}, dest: "force",
+			help: "restart/stop 时即使有活动任务也继续,这些任务会被中断"},
+		{names: []string{"--yes"}, dest: "yes",
+			help: "确认 wipe-profile:删除这个端口的 profile 和其中的登录状态"},
 		{names: []string{"--lines"}, dest: "lines", takesValue: true, metavar: "LINES",
 			help: "logs 打印的尾部行数(默认 40)"},
 		{names: []string{"--note"}, dest: "note", takesValue: true, metavar: "NOTE",
@@ -310,6 +324,11 @@ type Args struct {
 	Headful                bool
 	Headless               bool
 	FakeMedia              bool
+	Display                *string
+	Ephemeral              bool
+	ExpectPopup            bool
+	PopupTimeoutMs         *int
+	Raw                    bool
 	Params                 *string
 	Param                  []string
 	RetrySpur              bool
@@ -344,6 +363,10 @@ type Args struct {
 	Jar         *string
 	Engine      *string
 	KeepBrowser bool
+	WhenIdle    bool
+	IdleTimeout *float64
+	Force       bool
+	Yes         bool
 	Lines       *int
 	Note        *string
 }
@@ -791,6 +814,7 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.Jar = readString("jar")
 	args.Engine = readString("engine")
 	args.Note = readString("note")
+	args.Display = readString("display")
 
 	var err error
 	if args.Port, err = readInt("port"); err != nil {
@@ -809,6 +833,12 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 		return err
 	}
 	if args.Lines, err = readInt("lines"); err != nil {
+		return err
+	}
+	if args.PopupTimeoutMs, err = readInt("popup_timeout_ms"); err != nil {
+		return err
+	}
+	if args.IdleTimeout, err = readFloat("idle_timeout"); err != nil {
 		return err
 	}
 	if args.Poll, err = readFloat("poll"); err != nil {
@@ -848,6 +878,12 @@ func assignOptions(args *Args, values map[string]any, flags map[string]bool, rep
 	args.CloseBrowser = flags["close_browser"]
 	args.IncludeFrames = flags["include_frames"]
 	args.KeepBrowser = flags["keep_browser"]
+	args.WhenIdle = flags["when_idle"]
+	args.Force = flags["force"]
+	args.Yes = flags["yes"]
+	args.Ephemeral = flags["ephemeral"]
+	args.ExpectPopup = flags["expect_popup"]
+	args.Raw = flags["raw"]
 	return nil
 }
 

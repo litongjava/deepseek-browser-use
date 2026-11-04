@@ -33,7 +33,8 @@ public final class CredentialRedactor {
       "cookie" };
 
   /** A quoted JSON string pair; used when the text is not valid JSON (for example a truncated body). */
-  private static final Pattern QUOTED_PAIR = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"(\\s*:\\s*)\"((?:[^\"\\\\]|\\\\.)*)\"");
+  private static final Pattern QUOTED_PAIR = Pattern.compile(
+      "\"([^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+)\"(\\s*:\\s*)\"([^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+)\"");
 
   private CredentialRedactor() {
   }
@@ -192,6 +193,15 @@ public final class CredentialRedactor {
   }
 
   private static String redactQuotedPairs(String text, String mask) {
+    try {
+      return redactQuotedPairsUnchecked(text, mask);
+    } catch (StackOverflowError e) {
+      // Fail closed: an unscannable body may hold credentials, so it must never reach the trace log as is.
+      return mask;
+    }
+  }
+
+  private static String redactQuotedPairsUnchecked(String text, String mask) {
     Matcher matcher = QUOTED_PAIR.matcher(text);
     StringBuilder out = new StringBuilder(text.length());
     boolean changed = false;

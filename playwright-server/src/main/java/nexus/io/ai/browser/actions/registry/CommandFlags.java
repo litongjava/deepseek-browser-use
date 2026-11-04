@@ -154,6 +154,9 @@ public final class CommandFlags {
     flag(map, "scroll_to_text", Flag.PAGE_CHANGING);
     flag(map, "select_dropdown_option", Flag.PAGE_CHANGING);
     flag(map, "send_keys", Flag.PAGE_CHANGING);
+    flag(map, "keyboard_type", Flag.PAGE_CHANGING);
+    flag(map, "wait_for_new_tab", Flag.RETRY_SAFE, Flag.LONG_RUNNING);
+    flag(map, "get_page_diagnostics", Flag.RETRY_SAFE);
     flag(map, "press_key", Flag.PAGE_CHANGING);
     flag(map, "set_cookie", Flag.PAGE_CHANGING);
     flag(map, "set_credentials", Flag.PAGE_CHANGING);

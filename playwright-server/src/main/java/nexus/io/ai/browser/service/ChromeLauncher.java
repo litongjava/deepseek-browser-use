@@ -111,6 +111,11 @@ public final class ChromeLauncher {
    * @throws IllegalStateException 超时或 Chrome 提前退出,消息里带 Chrome 自己的输出
    */
   public static Launched launch(Path executable, Path userDataDir, List<String> args, long timeoutMs) {
+    return launch(executable, userDataDir, args, timeoutMs, null);
+  }
+
+  /** Same as above; {@code display} overrides the DISPLAY the browser process inherits from this service. */
+  public static Launched launch(Path executable, Path userDataDir, List<String> args, long timeoutMs, String display) {
     List<String> command = new ArrayList<>();
     command.add(executable.toString());
     command.add("--user-data-dir=" + userDataDir);
@@ -119,7 +124,11 @@ public final class ChromeLauncher {
 
     Process process;
     try {
-      process = new ProcessBuilder(command).redirectErrorStream(true).start();
+      ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+      if (display != null && !display.isBlank()) {
+        builder.environment().put("DISPLAY", display);
+      }
+      process = builder.start();
     } catch (IOException e) {
       throw new IllegalStateException("启动 Chrome 失败：" + e.getMessage());
     }

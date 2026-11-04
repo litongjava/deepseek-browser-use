@@ -50,6 +50,8 @@ public class CommandTableTest {
     cases.put("upload_file", "path");
     cases.put("drag_element_by_index", "index");
     cases.put("send_keys", "keys");
+    cases.put("keyboard_type", "text");
+    cases.put("delete_profile", "name");
     cases.put("press_key", "keys");
     cases.put("key_down", "keys");
     cases.put("key_up", "keys");
@@ -164,7 +166,7 @@ public class CommandTableTest {
     Set<String> uncovered = new TreeSet<>(CommandTable.names());
     uncovered.removeAll(MISSING_PARAM_CASES.keySet());
     // 这几个命令的参数全是可选的,没有「缺必填参数」这一说
-    uncovered.removeAll(Set.of("start", "close", "clone_profile", "list_profiles", "get_diagnostics", "go_back", "go_forward", "reload", "get_url", "get_title",
+    uncovered.removeAll(Set.of("get_page_diagnostics", "wait_for_new_tab", "start", "close", "clone_profile", "list_profiles", "get_diagnostics", "go_back", "go_forward", "reload", "get_url", "get_title",
         "get_browser_state", "get_tabs", "new_tab", "close_other_tabs", "bring_to_front", "clear_text",
         "hover_and_click", "wait_for_load", "mouse_down", "mouse_up", "screenshot", "get_element_screenshot",
         "pdf", "get_cookies", "set_cookie", "clear_cookies", "get_local_storage", "set_local_storage",

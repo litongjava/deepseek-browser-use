@@ -62,7 +62,7 @@ public class CommandTable {
     put("get_diagnostics", "", (svc, id, a) -> RespBodyVo.ok(CommandControl.diagnostics(id)));
     put("cancel_command", "commandId:string!", (svc, id, a) -> RespBodyVo.ok(CommandControl.cancel(id, reqStr(a, "commandId"))));
     // ---------- 实例生命周期 ----------
-    put("start", "headless:boolean browser:string networkRecording:boolean fakeMedia:boolean profile:string userDataDir:string profileDirectory:string", (svc, id, a) -> {
+    put("start", "headless:boolean browser:string networkRecording:boolean fakeMedia:boolean profile:string userDataDir:string profileDirectory:string display:string ephemeral:boolean", (svc, id, a) -> {
       // Show the browser window unless headless mode is explicitly requested.
       Boolean headless = a.getBoolean("headless");
       // 不传 browser 时按配置里的默认类型(browser.type / browser.engine)处理,行为与以前一致;
@@ -75,7 +75,8 @@ public class CommandTable {
       Boolean fakeMedia = a.getBoolean("fakeMedia");
       long newId = svc.start(id, Boolean.TRUE.equals(headless), requested, networkRecording,
           new ProfileSelection(a.getString("profile"), a.getString("userDataDir"),
-              a.getString("profileDirectory")), fakeMedia);
+              a.getString("profileDirectory")), fakeMedia, a.getString("display"),
+          Boolean.TRUE.equals(a.getBoolean("ephemeral")));
       Kv data = Kv.by("id", newId);
       data.set("networkRecording", networkRecording == null
           ? PlaywrightService.networkRecordMode() + "(按全局配置)"
@@ -107,6 +108,7 @@ public class CommandTable {
       return RespBodyVo.ok(data);
     });
     put("list_profiles", "", (svc, id, a) -> svc.listProfiles());
+    put("delete_profile", "name:string!", (svc, id, a) -> svc.deleteProfile(reqStr(a, "name")));
     put("clone_profile", "name:string sourceUserDataDir:string sourceProfileDirectory:string", (svc, id, a) -> svc.cloneProfile(new CloneProfileRequest(
         a.getString("name"), a.getString("sourceUserDataDir"), a.getString("sourceProfileDirectory"))));
     put("close", "closeBrowser:boolean", (svc, id, a) -> svc.close(id, Boolean.TRUE.equals(a.getBoolean("closeBrowser"))));
@@ -131,7 +133,7 @@ public class CommandTable {
 
     // ---------- 元素交互(按索引) ----------
     // mode:auto(默认,原生失败先改真实鼠标、再降级 JS 派发)/ native / mouse / js;timeoutMs 按次覆盖超时
-    put("click_element_by_index", "index:integer! mode:string timeoutMs:integer",
+    put("click_element_by_index", "index:integer! mode:string timeoutMs:integer expectPopup:boolean popupTimeoutMs:integer",
         (svc, id, a) -> svc.clickElementByIndex(id, reqInt(a, "index"), optStr(a, "mode"), a.getInteger("timeoutMs")));
     put("double_click_element_by_index", "index:integer! mode:string", (svc, id, a) -> svc.doubleClickElementByIndex(id, reqInt(a, "index"),
         optStr(a, "mode")));
@@ -169,6 +171,9 @@ public class CommandTable {
     put("drag_element_by_index", "index:integer! targetIndex:integer!",
         (svc, id, a) -> svc.dragElementByIndex(id, reqInt(a, "index"), reqInt(a, "targetIndex")));
     put("send_keys", "keys:string!", (svc, id, a) -> svc.sendKeys(id, reqStr(a, "keys")));
+    // Types literal text into whatever has focus; selector optionally focuses first, including hidden inputs.
+    put("keyboard_type", "text:string! selector:string frame:string delayMs:integer", (svc, id, a) -> svc.keyboardType(id, reqStr(a, "text"), optStr(a, "selector"),
+        optStr(a, "frame"), a.getInteger("delayMs")));
     put("press_key", "key:string keys:string", (svc, id, a) -> svc.sendKeys(id, a.containsKey("key") ? reqStr(a, "key") : reqStr(a, "keys")));
     put("key_down", "keys:string!", (svc, id, a) -> svc.keyDown(id, reqStr(a, "keys")));
     put("key_up", "keys:string!", (svc, id, a) -> svc.keyUp(id, reqStr(a, "keys")));
@@ -206,25 +211,28 @@ public class CommandTable {
     // ---------- 选择器与语义定位 ----------
     // frame:目标在跨域 iframe 里时必传(序号见 list_frames,或写 URL/name 子串);
     // 按索引的命令不需要它 —— 索引里已经带了 frame 信息,服务端自动路由
-    put("click_element_by_selector", "selector:string! mode:string timeoutMs:integer frame:string nth:integer",
+    put("click_element_by_selector", "selector:string! mode:string timeoutMs:integer frame:string nth:integer expectPopup:boolean popupTimeoutMs:integer",
         (svc, id, a) -> svc.clickElementBySelector(id, reqStr(a, "selector"), optStr(a, "mode"),
             a.getInteger("timeoutMs"), optStr(a, "frame"), a.getInteger("nth")));
     // nth:选择器命中多个时显式指定第几个(0 基)。不加它就只能靠服务端替我们挑,而实测分页上
     // 「页码 2」与「下一页」的 href 完全一样,回执只说 matched=2,调用方没法指定要哪个
     put("input_text_by_selector", "selector:string! text:string! mode:string frame:string nth:integer", (svc, id, a) -> svc.inputTextBySelector(id, reqStr(a, "selector"),
         reqStr(a, "text"), optStr(a, "mode"), optStr(a, "frame"), a.getInteger("nth")));
-    put("click_element_by_text", "text:string! mode:string", (svc, id, a) -> svc.clickElementByText(id, reqStr(a, "text"), optStr(a, "mode")));
-    put("click_element_by_role", "role:string! name:string mode:string scope:string frame:string nth:integer exact:boolean timeoutMs:integer",
+    put("click_element_by_text", "text:string! mode:string exact:boolean timeoutMs:integer expectPopup:boolean popupTimeoutMs:integer", (svc, id, a) -> svc.clickElementByText(id, reqStr(a, "text"), optStr(a, "mode"),
+        a.getBoolean("exact"), a.getInteger("timeoutMs")));
+    put("click_element_by_role", "role:string! name:string mode:string scope:string frame:string nth:integer exact:boolean timeoutMs:integer expectPopup:boolean popupTimeoutMs:integer",
         (svc, id, a) -> svc.clickElementByRole(id, reqStr(a, "role"), optStr(a, "name"), optStr(a, "mode"),
             optStr(a, "scope"), optStr(a, "frame"), a.getInteger("nth"), a.getBoolean("exact"), a.getInteger("timeoutMs")));
     put("input_text_by_label", "label:string! text:string! mode:string",
         (svc, id, a) -> svc.inputTextByLabel(id, reqStr(a, "label"), reqStr(a, "text"), optStr(a, "mode")));
     put("clear_text", "index:integer selector:string", (svc, id, a) -> svc.clearText(id, a.getInteger("index"), optStr(a, "selector")));
-    put("hover_and_click", "index:integer selector:string hoverDelayMs:integer mode:string", (svc, id, a) -> svc.hoverAndClick(id, a.getInteger("index"), optStr(a, "selector"),
+    put("hover_and_click", "index:integer selector:string hoverDelayMs:integer mode:string expectPopup:boolean popupTimeoutMs:integer", (svc, id, a) -> svc.hoverAndClick(id, a.getInteger("index"), optStr(a, "selector"),
         a.getInteger("hoverDelayMs"), optStr(a, "mode")));
 
     // ---------- 标签页 ----------
     put("get_tabs", "", (svc, id, a) -> svc.getTabs(id));
+    // Waits for a tab that opens late, for example window.open after an API call.
+    put("wait_for_new_tab", "baseline:integer timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForNewTab(id, a.getInteger("baseline"), waitSeconds(a)));
     put("new_tab", "url:string", (svc, id, a) -> svc.newTab(id, optStr(a, "url")));
     put("switch_tab", "pageIndex:integer!", (svc, id, a) -> svc.switchTab(id, reqInt(a, "pageIndex")));
     put("switch_tab_by_url", "url:string!", (svc, id, a) -> svc.switchTabByUrl(id, reqStr(a, "url")));
@@ -247,8 +255,8 @@ public class CommandTable {
         optStr(a, "selector"), optStr(a, "text")));
     // 等内容稳定:正文/表单值/表格内容连续 quietMs 毫秒不再变化。查/搜索结果是异步刷新的,
     // 点完「查询」立刻读会读到上一次的结果,先 wait_for_stable 再读就不会错位
-    put("wait_for_stable", "selector:string quietMs:integer timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForStable(id, optStr(a, "selector"), a.getInteger("quietMs"),
-        waitSeconds(a)));
+    put("wait_for_stable", "selector:string quietMs:integer timeoutMs:number timeoutSeconds:number requireContent:boolean contentGraceMs:integer", (svc, id, a) -> svc.waitForStable(id, optStr(a, "selector"), a.getInteger("quietMs"),
+        waitSeconds(a), Boolean.TRUE.equals(a.getBoolean("requireContent")), a.getInteger("contentGraceMs")));
     // 等选择器的命中数量达标:等弹窗全部消失用 max:0,等结果行出现用 min:1
     put("wait_for_count", "selector:string! min:integer max:integer equals:integer timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForCount(id, reqStr(a, "selector"), a.getInteger("min"),
         a.getInteger("max"), a.getInteger("equals"), waitSeconds(a)));
@@ -308,14 +316,16 @@ public class CommandTable {
     // 一律用真实鼠标点,并且点完校验弹窗数量是否真的减少
     put("close_modal", "which:string title:string button:string", (svc, id, a) -> svc.closeModal(id, optStr(a, "which"), optStr(a, "title"),
         optStr(a, "button")));
-    put("get_console_logs", "", (svc, id, a) -> svc.getConsoleLogs(id));
+    put("get_console_logs", "level:string limit:integer", (svc, id, a) -> svc.getConsoleLogs(id, optStr(a, "level"), a.getInteger("limit")));
+    // One call that answers "why did this page not render": failed requests, HTTP errors, console, CSP, blank content.
+    put("get_page_diagnostics", "limit:integer", (svc, id, a) -> svc.getPageDiagnostics(id, a.getInteger("limit")));
     put("clear_console_logs", "", (svc, id, a) -> svc.clearConsoleLogs(id));
 
     // ---------- 网络 ----------
     put("route", "urlPattern:string! action:string body:string status:integer contentType:string", (svc, id, a) -> svc.route(id, reqStr(a, "urlPattern"), optStr(a, "action"), optStr(a, "body"),
         a.getInteger("status"), optStr(a, "contentType")));
     put("unroute", "urlPattern:string", (svc, id, a) -> svc.unroute(id, optStr(a, "urlPattern")));
-    put("get_requests", "filter:string resourceType:string limit:integer since:integer", (svc, id, a) -> svc.getRequests(id, optStr(a, "filter"), optStr(a, "resourceType"),
+    put("get_requests", "filter:string resourceType:string limit:integer since:integer failedOnly:boolean", (svc, id, a) -> svc.getRequests(id, optStr(a, "filter"), Boolean.TRUE.equals(a.getBoolean("failedOnly")), optStr(a, "resourceType"),
         a.getInteger("limit"), a.getLong("since")));
     put("wait_for_response", "urlPattern:string! maxChars:integer lookBackSeconds:integer timeoutMs:number timeoutSeconds:number", (svc, id, a) -> svc.waitForResponse(id, reqStr(a, "urlPattern"),
         waitSeconds(a), a.getInteger("maxChars"), a.getInteger("lookBackSeconds")));

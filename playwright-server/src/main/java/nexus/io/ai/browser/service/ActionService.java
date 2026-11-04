@@ -277,6 +277,10 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
    * 服务端不替调用方猜:动作类命令**默认仍然一次都不重发**,这一点由
    * {@code SpuriousDispatchRetryTest} 钉着。
    */
+  /** Clicks that may open a tab; the service watches for it so callers never re-click a slow window.open. */
+  private static final java.util.Set<String> POPUP_WATCHED = java.util.Set.of("click_element_by_index",
+      "click_element_by_selector", "click_element_by_text", "click_element_by_role", "hover_and_click");
+
   static boolean retrySafeFor(String method, JSONObject params) {
     if (SPURIOUS_RETRY_SAFE.contains(method)) {
       return true;
@@ -362,7 +366,8 @@ static final Set<String> SPURIOUS_VERIFIABLE = CommandFlags.namesWith(CommandFla
       jobParams.remove("async");
       JobRegistry.Job job = JobRegistry.submit("commands", id, started ->
           started.result = executeBatchJob(id, jobParams, started.id));
-      return RespBodyVo.ok(Kv.by("jobId", job.id).set("status", job.status).set("browserId", id));
+      return RespBodyVo.ok(Kv.by("jobId", job.id).set("status", job.status).set("browserId", id)
+          .set("hint", "Read the result with get_job (dsb job " + job.id + " --wait)."));
     }
     if (CommandControl.current() != null) {
       return executeSerialized(id, method, params);
@@ -910,6 +915,10 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
     // 页签类命令的效果可以直接读回来(见 verifyTabsAfterSpurious):发命令前先记一份页签状态,
     // 万一撞上伪故障,就能把「到底生效没有」写成事实,而不是留给调用方猜。
     Kv tabsBefore = SPURIOUS_VERIFIABLE.contains(method) ? tabState(id) : null;
+    boolean watchesPopup = POPUP_WATCHED.contains(method);
+    boolean expectPopup = watchesPopup && Boolean.TRUE.equals(args.getBoolean("expectPopup"));
+    Integer popupTimeoutMs = watchesPopup ? args.getInteger("popupTimeoutMs") : null;
+    int tabCountBefore = watchesPopup ? svc.tabCount(id) : -1;
     try (RetryBudget commandBudget = RetryBudget.open(30000)) {
       RespBodyVo result = dispatchWithSpuriousRetry(method, args, () -> {
         CommandControl.dispatch();
@@ -926,6 +935,12 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
           observed.set("environmentIdentity", svc.externalObservation(attached));
         }
         CommandControl.actionCompleted();
+        if (watchesPopup && !svc.watchNewTab(id, tabCountBefore, observed, expectPopup, popupTimeoutMs)) {
+          observed.set("errorCode", ActionError.POPUP_NOT_OPENED).set("retryable", false)
+              .set("note", "The click already happened; repeating it may submit twice. Read get_tabs or use wait_for_new_tab.");
+          result = RespBodyVo.fail("[" + ActionError.POPUP_NOT_OPENED
+              + "] Click completed, but no new tab appeared in time; do not repeat the click");
+        }
         if (expectation != null) {
           Kv checked = checkExpectation(id, expectation);
           observed.set("expectResult", checked).set("actionSucceeded", true)
@@ -973,6 +988,13 @@ static final Set<String> LONG_RUNNING = CommandFlags.namesWith(CommandFlags.Flag
       invalid.setData(Kv.by("errorCode", ActionError.INVALID_ARGUMENT).set("retryable", false)
           .set("invalidArgument", true).set("started", false));
       return invalid;
+    } catch (CommandRefusedException e) {
+      // Refused before any side effect: reporting "unknown" here would make callers observe a page that never changed.
+      CommandControl.notStarted();
+      RespBodyVo refused = RespBodyVo.fail("[" + e.code() + "] " + method + " 失败：" + e.getMessage());
+      refused.setData(Kv.by("errorCode", e.code()).set("retryable", false).set("actionExecuted", false)
+          .set("actionStatus", "not-started").set("hint", e.hint()));
+      return refused;
     } catch (IllegalArgumentException e) {
       // 参数校验错(CommandTable 的 reqInt/reqStr 等):命令**根本没发出去**,不存在「可能已生效」的问题。
       //
