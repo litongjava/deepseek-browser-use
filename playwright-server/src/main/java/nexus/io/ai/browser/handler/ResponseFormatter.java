@@ -103,6 +103,7 @@ public final class ResponseFormatter {
       result.remove("capture_degraded");
     }
     if (original.get("capture") instanceof Map<?, ?> capture
+        && !"screenshot".equals(method) && !"get_element_screenshot".equals(method)
         && "complete".equals(capture.get("stage")) && !capture.containsKey("errorCode")
         && !Boolean.TRUE.equals(original.get("fallbackUsed"))
         && !Boolean.TRUE.equals(original.get("capture_degraded"))

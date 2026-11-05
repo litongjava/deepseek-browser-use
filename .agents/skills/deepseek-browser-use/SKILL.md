@@ -41,6 +41,7 @@ dsb batch commands.json --async --wait --out result.json --summary
 - 常规动作使用 `--summary`；只读回目标字段，避免反复打印整页。单行 JSON 配置不能用 `head`/`Get-Content -TotalCount` 控制大小，应解析后投影白名单字段。完整配置、规则正文、凭据不得进入对话或提交。
 - `--select data.result --raw` 直接打印字符串原文（换行就是换行），读长文本不用再反转义。结构化响应用 `--out result.json` 保存（不是图片）；截图文件位置读 `data.path`。PowerShell 读取时加 `-Encoding UTF8`。`--select` 保持单路径；多字段用可重复的 `--fields 别名=路径`，详细规则见 [客户端](references/client.md)。
 - 退出码：0 成功、1 传输错误、2 业务失败、3 用法错误。输出筛选失败不等于动作未执行，先查对应留档，不能为了修输出重发动作。
+- `--select` / `--fields` 的业务错误摘要保留在 stderr；新建临时 profile 不代表已有登录态。显式截图保留实际视口观测及图片尺寸，桌面调整尺寸后核对它们，见 [测试与证据](references/testing-evidence.md)。
 
 ## 读取与交互
 

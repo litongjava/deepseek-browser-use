@@ -27,6 +27,8 @@ dsb run click_element_by_selector -p selector=#refresh -p mode=mouse --precondit
 
 ## 交互与离线报告
 
+窗口调整完成后，核对显式截图的 `data.capture.observation.viewport` 与目标 CSS 尺寸、`devicePixelRatio`、`visibilityState`、观测时间及 `capture.image` 像素尺寸。读取不可用时记录未验证；CDP 的可见状态不能确认原生窗口最大化或最小化。窗口最小化时页面可能仍报告旧视口，必要时由宿主恢复窗口后重新观测，不能用旧截图通过尺寸验收。
+
 `mode:mouse` / `mode:native` 不自动降级为 JS。auto 可降级；读取 `requestedMode`、`actualMode`（兼容 mode）、fallbackReason 和命中信息。JS 业务成功不能报告为鼠标路径成功。未知动作先回读，不重放补证据。
 
 ```powershell

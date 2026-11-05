@@ -127,6 +127,9 @@ func TestSelectFailureRecordsResponseAndLastDoesNotResend(t *testing.T) {
 			if !strings.Contains(stderr, "Do not repeat") {
 				t.Fatalf("missing replay warning: %s", stderr)
 			}
+			if businessFailure && !strings.Contains(stderr, "test failure") {
+				t.Fatalf("projection hid the business error: %s", stderr)
+			}
 			recordPath := filepath.Join(client.RecordDir, "001.res.json")
 			before, err := os.ReadFile(recordPath)
 			if err != nil {

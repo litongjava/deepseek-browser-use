@@ -8,6 +8,19 @@ import com.jfinal.kit.Kv;
 import nexus.io.model.body.RespBodyVo;
 
 public class ResponseFormatterTest {
+  @Test public void explicitScreenshotKeepsCaptureEvidenceInCompactResponses() {
+    Kv capture = Kv.by("stage", "complete").set("retries", 0)
+        .set("image", Kv.by("width", 1200).set("height", 800))
+        .set("observation", Kv.by("available", false));
+    Kv data = Kv.by("capture", capture);
+    for (String method : List.of("screenshot", "get_element_screenshot")) {
+      Map<?, ?> result = (Map<?, ?>) ResponseFormatter.project(method, data, false);
+      assertSame(capture, result.get("capture"));
+    }
+    assertFalse(((Map<?, ?>) ResponseFormatter.project("get_browser_state", data, false)).containsKey("capture"));
+    assertSame(capture, ((Map<?, ?>) ResponseFormatter.project("get_browser_state", data, true)).get("capture"));
+  }
+
   @Test public void defaultResponseIsUntouchedAndCompactKeepsEnvelope() {
     Kv data = Kv.by("url", "https://example.test/").set("title", "title")
         .set("tabs", List.of(Kv.by("index", 0).set("current", true)))

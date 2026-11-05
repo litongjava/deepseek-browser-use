@@ -1,6 +1,12 @@
 package nexus.io.ai.browser.service;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.Iterator;
 import java.util.function.BiFunction;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 import com.jfinal.kit.Kv;
 import com.microsoft.playwright.PlaywrightException;
 
@@ -67,6 +73,7 @@ final class CapturePolicy {
           inst.captureCooldownUntil = 0; inst.captureFailureReason = null;
           diagnostic.set("stage", "complete").set("elapsedMs", budget.elapsedMs()).set("retries", budget.retries());
           Kv data = Kv.by("capture", diagnostic).set("capture_degraded", false);
+          describeImage(bytes, diagnostic);
           if (!actual.equals(mode)) data.set("fullPageCaptured", false).set("fallbackUsed", true)
               .set("warning", "全页截图失败，仅取得视口截图；不可用作完整页面证据。").set("fallbackReason", firstFailure);
           else if (mode.equals("fullPage")) data.set("fullPageCaptured", true);
@@ -107,6 +114,25 @@ final class CapturePolicy {
           return new Result(null, data);
         }
       }
+    }
+  }
+
+  // Read encoded dimensions without decoding a potentially large full-page bitmap.
+  static void describeImage(byte[] bytes, Kv diagnostic) {
+    try (MemoryCacheImageInputStream input = new MemoryCacheImageInputStream(new ByteArrayInputStream(bytes))) {
+      Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+      if (!readers.hasNext()) {
+        return;
+      }
+      ImageReader reader = readers.next();
+      try {
+        reader.setInput(input);
+        diagnostic.set("image", Kv.by("width", reader.getWidth(0)).set("height", reader.getHeight(0)));
+      } finally {
+        reader.dispose();
+      }
+    } catch (IOException | RuntimeException ignored) {
+      // Missing dimension metadata must not invalidate otherwise captured bytes.
     }
   }
 }

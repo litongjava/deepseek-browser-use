@@ -202,6 +202,9 @@ func compactTargets(data Value) string {
 
 // JSON 打印一个值:`--compact` 压成一行,否则缩进 2。
 func (p *Printer) JSON(value Value) {
+	if p.Select != nil || len(p.Fields) > 0 {
+		p.warnBusinessFailure(value)
+	}
 	if len(p.Fields) > 0 {
 		p.warnUnreliable(value)
 		result := NewObj()
@@ -255,6 +258,29 @@ func (p *Printer) JSON(value Value) {
 	} else {
 		p.printLine(EncodeJSON(value, encIndent2))
 	}
+}
+
+// Keep business errors visible without changing projected stdout or replaying a request.
+func (p *Printer) warnBusinessFailure(value Value) {
+	if ok, present := objGet(value, "ok").(bool); !present || ok {
+		return
+	}
+	data := objGet(value, "data")
+	detail := "Command failed"
+	for _, field := range []struct {
+		name  string
+		text  string
+		limit int
+	}{
+		{"errorCode", objStr(data, "errorCode"), 80},
+		{"msg", objStr(value, "msg"), 400},
+		{"hint", objStr(data, "hint"), 240},
+	} {
+		if field.text != "" {
+			detail += " " + field.name + "=" + compactText(redactBodyText(field.text), field.limit)
+		}
+	}
+	p.Warn(detail)
 }
 
 // warnUnreliable:快照不可靠 / 动作结果未知时在 stderr 提一句(成功与失败两条路都要提)。

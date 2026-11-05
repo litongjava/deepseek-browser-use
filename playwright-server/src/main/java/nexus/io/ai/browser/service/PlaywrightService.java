@@ -59,6 +59,7 @@ import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.BrowserType.LaunchPersistentContextOptions;
 import com.microsoft.playwright.Frame;
 import com.microsoft.playwright.Keyboard;
+import com.microsoft.playwright.JSHandle;
 import com.microsoft.playwright.FileChooser;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Mouse;
@@ -615,15 +616,32 @@ public class PlaywrightService {
   }
 
   /** Deletes a throwaway profile; failures are logged because the login data must not be silently kept. */
-  private static void deleteEphemeral(Path root) {
+  static boolean deleteEphemeral(Path root) {
     if (root == null) {
-      return;
+      return true;
     }
-    try {
-      BrowserProfileService.deleteTree(root);
-    } catch (RuntimeException e) {
-      log.warn("Ephemeral profile was not fully deleted, remove it manually: {}", root, e);
+    // Windows child processes can briefly retain file handles after Chrome exits.
+    for (int attempt = 0; attempt < 21; attempt++) {
+      if (Files.notExists(root)) {
+        return true;
+      }
+      try {
+        BrowserProfileService.deleteTree(root);
+        return Files.notExists(root);
+      } catch (RuntimeException e) {
+        if (attempt == 20 || Thread.currentThread().isInterrupted()) {
+          log.warn("Ephemeral profile was not fully deleted, remove it manually: {}", root, e);
+          return false;
+        }
+        try {
+          Thread.sleep(100);
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          return false;
+        }
+      }
     }
+    return false;
   }
 
   private long startSelected(Long id, boolean headless, String browser, Boolean networkRecording, BrowserProfile profile,
@@ -643,7 +661,7 @@ public class PlaywrightService {
     long startedAt = System.currentTimeMillis();
     // 「这份 profile 之前用过吗」必须在启动**之前**判断:启动之后目录一定存在,再问就永远是「用过」
     java.util.Set<String> existedBefore = profileDirsExistingBeforeLaunch(requested);
-    if (profile != null) {
+    if (profile != null && !EPHEMERAL_SOURCE.equals(profile.source())) {
       existedBefore.add(Path.of(profile.userDataDir()).toAbsolutePath().normalize().toString());
     }
     if (Boolean.TRUE.equals(fakeMedia) && BrowserChoice.resolve(requested).isFirefox()) {
@@ -809,8 +827,13 @@ public class PlaywrightService {
    * <p>用户自己的 Chrome profile 不写标记(那是人家的目录,不该塞私有文件);这种情况靠
    * {@code userProfile=true} 本身就能说明「登录态是用户日常那份」。
    */
-  private static void applyProfileHistory(SharedBrowser shared, java.util.Set<String> existedBefore) {
-    if (shared == null || shared.profileDir == null) {
+  static void applyProfileHistory(SharedBrowser shared, java.util.Set<String> existedBefore) {
+    if (shared == null || shared.profileDir == null || shared.profileSeenBefore != null) {
+      return;
+    }
+    // This is launch provenance, not login state; task reuse must not rewrite it.
+    if (shared.ephemeralDir != null) {
+      shared.profileSeenBefore = false;
       return;
     }
     Path marker = shared.profileDir.resolve(PROFILE_MARKER);
@@ -862,18 +885,19 @@ public class PlaywrightService {
       return null;
     }
     StringBuilder note = new StringBuilder();
-    if (browser.userProfile) {
-      note.append("用的是用户自己的 Chrome profile(userProfile=true):登录态就是用户日常那份,通常不需要重新登录。");
+    if (browser.ephemeralDir != null) {
+      note.append("本次浏览器使用新建的临时 profile；运行期间可共享登录状态，最后一个任务关闭后删除。是否已登录以目标网站为准。");
+    } else if (browser.userProfile) {
+      note.append("用的是用户自己的 Chrome profile(userProfile=true)；是否已登录以目标网站为准。");
     } else if (Boolean.FALSE.equals(browser.profileSeenBefore)) {
-      note.append("该 profile 目录本次是**首次创建**,里面没有任何登录态:任何需要登录的站点都要重新登录一次")
-          .append("(登录之后会留在这份 profile 里,后续任务不用再登)。");
+      note.append("启动前未发现该 profile 的既有内容；本次运行中的登录状态可供后续任务复用，是否已登录以目标网站为准。");
     } else if (browser.previousProfileEngine != null && !browser.previousProfileEngine.equals(browser.engine.id())) {
       note.append("引擎从 ").append(browser.previousProfileEngine).append(" 切到 ").append(browser.engine.id())
           .append(":两种引擎的 profile 格式不通用,**登录态不通用**,需要重新登录。");
     } else if (Boolean.TRUE.equals(browser.profileSeenBefore)) {
       note.append("这份 profile 之前用过(上次是 browser=")
           .append(browser.previousProfileBrowser == null ? "未知" : browser.previousProfileBrowser)
-          .append("):里面已有的登录态应该还在。");
+          .append(")；目录历史不代表网站已登录，请核对目标网站状态。");
     }
     if (browser.profileNote != null && !browser.profileNote.isEmpty()) {
       if (note.length() > 0) {
@@ -3536,7 +3560,7 @@ public class PlaywrightService {
     data.set(result.data());
     // Automatic evidence failure must not replace the parent action's business error code.
     data.remove("errorCode");
-    describeCapture(inst, data);
+    describeCapture(inst, data, result.ok());
     // Retain the historical distinction: an open circuit is skipped, not a new screenshot error.
     if (!result.ok()) {
       if ("circuit-open".equals(((Kv) data.get("capture")).get("stage"))) data.remove("screenshot_error");
@@ -3554,15 +3578,44 @@ public class PlaywrightService {
     return data;
   }
 
-  private static void describeCapture(BrowserInstance inst, Kv data) {
+  static void describeCapture(BrowserInstance inst, Kv data, boolean captured) {
     Kv capture = (Kv) data.get("capture");
-    if (capture == null) return;
+    if (capture == null) {
+      return;
+    }
     try {
       capture.set("pageClosed", inst.page.isClosed());
-      var viewport = inst.page.viewportSize();
-      if (viewport != null) capture.set("viewport", Kv.by("width", viewport.width).set("height", viewport.height));
-      if (inst.context != null && inst.context.browser() != null) capture.set("browserConnected", inst.context.browser().isConnected());
-    } catch (RuntimeException ignored) { capture.set("connectionState", "unknown"); }
+      ViewportSize viewport = inst.page.viewportSize();
+      if (viewport != null) {
+        capture.set("viewport", Kv.by("width", viewport.width).set("height", viewport.height));
+      }
+      if (inst.context != null && inst.context.browser() != null) {
+        capture.set("browserConnected", inst.context.browser().isConnected());
+      }
+    } catch (RuntimeException ignored) {
+      capture.set("connectionState", "unknown");
+    }
+    // Do not probe a failed capture or extend its circuit/timeout path.
+    if (!captured) {
+      return;
+    }
+    capture.set("observation", Kv.by("available", false));
+    try {
+      JSHandle handle = inst.page.waitForFunction("""
+          () => ({available:true, observedAt:new Date().toISOString(),
+            viewport:{width:innerWidth,height:innerHeight}, devicePixelRatio,
+            visibilityState:document.visibilityState,
+            visualViewport:window.visualViewport ? {width:visualViewport.width,
+              height:visualViewport.height,scale:visualViewport.scale} : null})
+          """, null, new Page.WaitForFunctionOptions().setPollingInterval(50).setTimeout(250));
+      try {
+        capture.set("observation", handle.jsonValue());
+      } finally {
+        handle.dispose();
+      }
+    } catch (RuntimeException ignored) {
+      // A screenshot remains usable when a best-effort viewport observation is unavailable.
+    }
   }
 
   private static RespBodyVo captureFailure(Kv data) {
@@ -9340,7 +9393,7 @@ public class PlaywrightService {
             if (clip) options.setClip(clipX, clipY, clipWidth, clipHeight);
             return withHighlightHidden(inst, () -> inst.page.screenshot(options));
           });
-      Kv data = shot.data(); describeCapture(inst, data);
+      Kv data = shot.data(); describeCapture(inst, data, shot.ok());
       if (!shot.ok()) return captureFailure(data);
       data.set("size", shot.bytes().length);
       try {
@@ -9432,7 +9485,7 @@ public class PlaywrightService {
     if (!force && inst.captureCooldownUntil > System.currentTimeMillis()) {
       Kv data = CapturePolicy.blocked(inst).set("capture", Kv.by("requestedMode", "element")
           .set("actualMode", "element").set("stage", "circuit-open").set("attempts", 0).set("elapsedMs", 0L));
-      describeCapture(inst, data);
+      describeCapture(inst, data, false);
       return captureFailure(data);
     }
     Locator locator;
@@ -9469,7 +9522,7 @@ public class PlaywrightService {
       // 元素截图是高亮层污染的重灾区:二维码/验证码正好是「必须看图」的元素,被彩色框压住就废了
       CapturePolicy.Result shot = CapturePolicy.run(inst, "element", force, false, timeoutMs,
           (mode, timeout) -> withHighlightHidden(inst, () -> locator.screenshot(new Locator.ScreenshotOptions().setTimeout(timeout))));
-      Kv data = shot.data(); describeCapture(inst, data);
+      Kv data = shot.data(); describeCapture(inst, data, shot.ok());
       if (!shot.ok()) return captureFailure(data);
       byte[] bytes = shot.bytes();
       data.set("size", bytes.length).set("target", target);
@@ -11785,9 +11838,14 @@ public class PlaywrightService {
       SharedBrowser retained = sharedBrowser;
       boolean ephemeralIdle = retained != null && retained.ephemeralDir != null && INSTANCES.isEmpty();
       if ((closeBrowser || ephemeralIdle) && result.isOk()) {
-        closeSharedBrowser();
-        result.setData(Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0)
-            .set("ephemeralProfileDeleted", ephemeralIdle));
+        boolean deleted = closeSharedBrowser();
+        Kv closed = Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0)
+            .set("ephemeralProfileDeleted", ephemeralIdle && deleted);
+        if (ephemeralIdle && !deleted) {
+          closed.set("warning", "Temporary profile cleanup is incomplete; remove it after all browser processes exit.")
+              .set("ephemeralProfilePath", retained.ephemeralDir.toString());
+        }
+        result.setData(closed);
       }
       return result;
     }
@@ -11842,7 +11900,7 @@ public class PlaywrightService {
    * 「Chrome 未正常关闭」;{@code browser.close()} 会通过 CDP 让 Chrome 自己优雅退出,
    * {@link ChromeLauncher#stop(Process)} 只是兜底。
    */
-  private static void closeSharedBrowser() {
+  private static boolean closeSharedBrowser() {
     SharedBrowser browser;
     synchronized (PlaywrightService.class) {
       browser = sharedBrowser;
@@ -11850,7 +11908,7 @@ public class PlaywrightService {
       sharedBrowser = null;
     }
     if (browser == null || (browser.context == null && browser.process == null)) {
-      return;
+      return browser == null || deleteEphemeral(browser.ephemeralDir);
     }
     try {
       if (browser.browser != null) {
@@ -11863,8 +11921,8 @@ public class PlaywrightService {
       log.warn("关闭共享浏览器失败:{}", e.getMessage());
     } finally {
       ChromeLauncher.stop(browser.process);
-      deleteEphemeral(browser.ephemeralDir);
     }
+    return deleteEphemeral(browser.ephemeralDir);
   }
 
   /**

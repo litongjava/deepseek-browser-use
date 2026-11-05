@@ -40,6 +40,7 @@ dsb --port 10050 server wipe-profile --yes
 - `display` 和 `headless` 一样在启动时固定。`dsb tasks` 的 `data.browser.display` 显示当前值。
 - 强杀服务（`server stop --keep-browser` 或 `kill -9`）来不及删除临时 profile，它会留在系统临时目录的 `dsb-ephemeral-*` 下，需要手动清理。
 - `--ephemeral` 只支持 Chrome，不能与 `--profile`、`--user-data-dir` 同用。
+- 最后一个任务关闭后检查 `ephemeralProfileDeleted`。Windows 文件句柄释放采用最多约两秒的重试等待；仍无法删除时返回 false、`warning` 和 `ephemeralProfilePath`，不能把关闭任务成功当成清理成功。
 
 ## profile 列表与选择规则
 
@@ -104,10 +105,11 @@ dsb --port 10050 server wipe-profile --yes
 - `close` 在还有其他任务时只关本任务页签；最后一个任务结束时保留浏览器与页面，并移除任务监听和路由。新任务另开页签，不接管保留页或用户页。只有显式 `close --close-browser`、`shutdown` 或停止服务才释放浏览器及 profile。
 - 实例本身只在内存里，服务重启后 id 失效（登录态在 profile 里，仍在）。
 - `start` 的返回里有 `data.browser`：`type`（这次实际用的浏览器：`chrome`／`edge`／`chromium`／`firefox`）、`chrome`（是否用上了本机 Chrome）、`userProfile`（是否用上了用户自己的 profile）、`engine`、`mode`（`managed` = Playwright 的托管 profile，`cdp` = 服务自己拉进程再接上：用户自己的 Chrome profile 与 `edge` 都是这条）、`executable`、`profileDir`、`profileDirectory`、`headless`，以及服务替你做了退让时的 `note`。**`userProfile=false` 不代表未登录**：命名副本也会返回 false；以目标网站的实际登录状态为准，必要时请用户完成登录；**看到 `type` 不是你要的那个，先看 `note`**（见上节「用哪个浏览器」）。
-- **`data.profileSeenBefore` 与 `data.profileNote` 回答的是另一件事**：`engineHonored:true` 只说明「浏览器参数被采纳了」，**不说明「这份 profile 里有登录态」**。这两个字段直接说清：
-  - `profileSeenBefore:false` → 「该 profile 目录本次是**首次创建**，里面没有任何登录态：任何需要登录的站点都要重新登录一次」；
+- **`data.browser.profileSeenBefore` 与 `data.browser.profileNote` 描述本次浏览器启动时的目录来源**，不会因后续任务复用而改写，也不代表当前网站的登录状态：
+  - `profileSeenBefore:false` → 启动前未发现既有内容；新建临时 profile 也返回 false。运行中完成登录后，后续任务可以复用登录状态；
   - `profileNote` 里出现「引擎从 X 切到 Y，登录态不通用」→ 换过引擎（Chromium ↔ Firefox 的 profile 格式不通用），需要重新登录；
-  - `profileNote` 里出现「这份 profile 之前用过（上次是 browser=…）」→ 已有登录态应该还在。
+  - `profileSeenBefore:true` → 发现既有目录或历史标记，是否已登录仍须核对网站；
+  - `ephemeral:true` → 本次浏览器使用临时 profile，最后一个任务关闭时删除，不承诺跨浏览器启动保留登录态。
 
   实测踩过：服务端默认引擎被配成 `firefox`，而企业微信 / DNSPod / 腾讯云的登录态都在 **Chromium profile** 里，不知情直接 `start`（不传 `browser`）会起 Firefox，然后「所有站点都退登录了」。看这两个字段就不用事后回想。
 - 服务没有鉴权，默认只监听本机；对外暴露前必须自行加访问控制。

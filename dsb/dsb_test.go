@@ -351,8 +351,12 @@ func TestSelectionDoesNotHideFailures(t *testing.T) {
 		}))
 	stepPath := "data.results.1.command"
 	buffer = &strings.Builder{}
-	printer = &Printer{Mode: "json", Out: buffer, ErrOut: buffer, Select: &stepPath}
+	diagnostics := &strings.Builder{}
+	printer = &Printer{Mode: "json", Out: buffer, ErrOut: diagnostics, Select: &stepPath}
 	printer.JSON(failed)
+	if !strings.Contains(diagnostics.String(), "第 0 条命令失败") {
+		t.Errorf("business failure must remain visible on stderr: %s", diagnostics)
+	}
 	if got := strings.TrimSpace(buffer.String()); got != `"get_title"` {
 		t.Errorf("失败响应上路径存在时应照常投影,得到 %s", got)
 	}

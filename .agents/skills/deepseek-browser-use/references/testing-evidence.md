@@ -45,6 +45,10 @@ dsb --id 1001 run screenshot -p force=true -p timeoutMs=3000 --out probe.json
 
 ``data.retryBudget`` 描述命令与嵌套截图的共享重试统计。事件泵伪故障共用最多两次额外重试，不再由各层分别重置次数；``attempts``为初次加共享重试数，``commandAttempts``为外层命令实际调用次数。明确请求的视口回退不属于事件泵重试，其截图调用数以 ``data.capture.attempts`` 为准。动作默认仍不重试；不要因为截图缺失而重复点击或提交。
 
+显式 `screenshot` / `get_element_screenshot` 在精简响应中也保留 `data.capture`。`capture.image` 是图片像素尺寸；成功截图后的 `capture.observation` 记录 `observedAt`、DOM 视口的 CSS 像素尺寸、`devicePixelRatio`、`visualViewport` 和 `visibilityState`。它是截图后的独立观测，不是与像素原子同步的快照；读取失败返回 `available:false`，不改变截图成功结果。观测使用 250ms 的额外尽力预算，失败或熔断路径不探测页面。
+
+`capture.viewport` 仍表示可获取的配置视口；真实窗口模式下可能没有该字段。调整窗口后将目标尺寸与 `capture.observation.viewport` 比较，不以截图成功代替尺寸核验。`visibilityState` 不证明原生窗口是否最小化、被遮挡或已最大化。Windows 图片色差须结合 CSS 和实际显示器判断，不能仅凭截图断言颜色错误。
+
 ## 重启后的截图文件
 
 默认 `shot-N.png` 文件名会跳过当前任务目录中已有的文件，避免服务重启后覆盖既有证据。截图失败时不要根据预计编号读取文件；仅使用成功响应中的 `data.path`，并核对实际图片内容。
