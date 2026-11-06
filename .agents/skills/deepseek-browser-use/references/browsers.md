@@ -41,7 +41,7 @@ dsb --port 10050 server wipe-profile --yes
 ```
 
 - `display` 和 `headless` 一样在启动时固定。`dsb tasks` 的 `data.browser` 是主浏览器，`data.sideBrowsers` 列出按显示方式另起的浏览器（`key` 形如 `display::1` 或 `headless`），每个任务的 `headless`、`display` 也在任务行里。
-- 另起的浏览器用主 profile 旁边的单独目录，例如 `profile-display-1`，登录状态不和主 profile 共享，需要登录的站点在里面登录一次后会保留。
+- 另起的浏览器用主 profile 旁边的单独目录，例如 `profile-display-1`，登录状态不和主 profile 共享，需要登录的站点在里面登录一次后会保留。`server wipe-profile` 会一并删除这些目录。
 - 这个浏览器上的最后一个任务关闭后，浏览器和页面照样保留；`close --close-browser` 只关闭这个任务所在的浏览器，不影响另一个浏览器上的任务。
 - 强杀服务（`server stop --keep-browser` 或 `kill -9`）来不及删除临时 profile，它会留在系统临时目录的 `dsb-ephemeral-*` 下，需要手动清理。
 - `--ephemeral` 只支持 Chrome，不能与 `--profile`、`--user-data-dir` 同用。

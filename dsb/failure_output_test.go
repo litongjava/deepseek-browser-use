@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -87,5 +89,19 @@ func TestFailureSummaryLeadsWithTheMessage(t *testing.T) {
 	}
 	if !strings.Contains(line[:msg+120], "suggestions=[set_viewport]") {
 		t.Fatalf("a truncated line must still show the suggestion: %q", line)
+	}
+}
+
+func TestSideProfileDirsMatchOnlyThisPort(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"profile", "profile-display-1", "profile-headless", "profile-10050", "profile-10050-display-1"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := sideProfileDirs(filepath.Join(root, "profile"))
+	want := []string{filepath.Join(root, "profile-display-1"), filepath.Join(root, "profile-headless")}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
