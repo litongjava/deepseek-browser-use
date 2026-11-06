@@ -101,6 +101,25 @@ public final class ActionError {
    */
   public static final String ELEMENT_NOT_FOUND = "ELEMENT_NOT_FOUND";
 
+  /** Starts the list of similar elements that a not-found selector failure carries. */
+  public static final String CANDIDATES_MARK = "。页面上";
+
+  /**
+   * The similar-elements part of a raw failure message, or an empty string. {@link #describe}
+   * replaces the raw text with a fixed reason, so callers append this to keep the list.
+   */
+  public static String candidates(String message) {
+    if (message == null) {
+      return "";
+    }
+    int start = message.indexOf(CANDIDATES_MARK);
+    if (start < 0) {
+      return "";
+    }
+    int end = message.indexOf('\n', start);
+    return end < 0 ? message.substring(start) : message.substring(start, end);
+  }
+
   /**
    * 页面正在导航 / 重载,DOM 这一刻拿不到(主 frame 为 null)
    *

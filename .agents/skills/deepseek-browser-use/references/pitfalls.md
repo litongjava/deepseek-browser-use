@@ -217,7 +217,7 @@
     （查监听器、查遮挡），方向全错。实测把一个 input 的**兄弟关系写成了父子关系**
     （`.tag-pre-wrp input.input-val`，而那个 input 其实是 `.tag-pre-wrp` 的兄弟），白花了两轮。
 
-    - 看到 `ELEMENT_NOT_FOUND`：**去改选择器**，先 `get_element_count` 复核数量，再检查父子/兄弟关系；
+    - 看到 `ELEMENT_NOT_FOUND`：**去改选择器**，先 `get_element_count` 复核数量，再检查父子/兄弟关系。选择器以标签开头时（如 `textarea[name=content]`），报错末尾会列出页面上前 5 个同类元素（如 `textarea[name="target"]`），属性写错时照着改即可；
     - 匹配到**多个**同名控件时，动作类命令会**优先挑可见的那个**，并把解析结果写进回执
       （`matched` / `chosenIndex` / `scanned` / `selectorNote`）。站点的同名控件常有两份，
       另一份在隐藏的弹窗里且是 0×0 —— 这时 `get_element_count` 说「有 2 个」而 `locator.first()` 挑到的

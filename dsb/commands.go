@@ -723,6 +723,12 @@ func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 // 而是**顺序会慢慢漂移**:实测有的命令先 --out 再 --select,有的反过来 —— 同一组参数
 // 在不同子命令上行为不同,是这类重复最典型的后果。
 func prepare(response *Response, args *Args, out *Printer) (Value, bool, error) {
+	if !response.Ok() {
+		out.Failure = response.Msg()
+		if out.Failure == "" {
+			out.Failure = "the server reported ok=false without a message"
+		}
+	}
 	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
 	if err != nil {
 		return nil, false, err

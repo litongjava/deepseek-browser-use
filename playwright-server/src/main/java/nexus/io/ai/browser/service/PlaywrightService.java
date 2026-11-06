@@ -4309,7 +4309,7 @@ public class PlaywrightService {
 
   /** 元素操作失败时的提示:超时只表示未满足可操作条件，完整调用日志用于区分具体原因 */
   private static String actionFailure(String action, PlaywrightException e) {
-    return ActionError.describe(action, e.getMessage());
+    return ActionError.describe(action, e.getMessage()) + ActionError.candidates(e.getMessage());
   }
 
   /** 等待类接口失败时的提示:等待超时和元素失效不是一回事 */
@@ -4329,7 +4329,7 @@ public class PlaywrightService {
    * 被隐藏,fill 会等满 5 秒后失败)。
    */
   private static String locateFailure(String action, String target, PlaywrightException e) {
-    return ActionError.describe(action, e.getMessage()) + ": " + target;
+    return ActionError.describe(action, e.getMessage()) + ": " + target + ActionError.candidates(e.getMessage());
   }
 
   /** 按索引做一次点击类操作(dblclick/hover/focus/check/uncheck 共用),带索引失效重试 */
@@ -4503,6 +4503,33 @@ public class PlaywrightService {
    * @param action   命令名,只用于错误信息
    * @throws PlaywrightException 匹配 0 个({@link ActionError#ELEMENT_NOT_FOUND})
    */
+  /** Leading tag of a selector such as {@code textarea[name=x]}. */
+  private static final Pattern SELECTOR_TAG = Pattern.compile("^\\s*([A-Za-z][\\w-]*)");
+
+  /**
+   * Elements with the selector's tag, written as selectors, so a wrong attribute shows its fix.
+   * Empty when the selector has no leading tag or the page cannot be read.
+   */
+  static String similarElements(Frame root, String selector) {
+    java.util.regex.Matcher tag = SELECTOR_TAG.matcher(selector);
+    if (!tag.find()) {
+      return "";
+    }
+    try {
+      Object found = root.evaluate("tag => [...document.querySelectorAll(tag)].slice(0, 5).map(e => {"
+          + " const attr = ['id', 'name', 'aria-label', 'placeholder', 'type'].find(a => e.getAttribute(a));"
+          + " return attr === 'id' ? tag + '#' + e.id : attr ? tag + '[' + attr + '=\"' + e.getAttribute(attr) + '\"]' : tag; })",
+          tag.group(1));
+      if (found instanceof List<?> list && !list.isEmpty()) {
+        return ActionError.CANDIDATES_MARK + "的 " + tag.group(1) + "：" + list.stream().map(String::valueOf)
+            .collect(java.util.stream.Collectors.joining(", "));
+      }
+      return ActionError.CANDIDATES_MARK + "没有 " + tag.group(1) + " 元素";
+    } catch (RuntimeException e) {
+      return "";
+    }
+  }
+
   static ActionTarget resolveActionTarget(Frame root, String selector, String action) {
     return resolveActionTarget(root, selector, action, null);
   }
@@ -4524,7 +4551,8 @@ public class PlaywrightService {
     if (matched == 0) {
       throw new PlaywrightException(ActionError.ELEMENT_NOT_FOUND + " " + action + " 的选择器 " + selector
           + " 在页面里匹配到 0 个元素:这不是超时也不是被遮挡 —— "
-          + "先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系(input 未必在它所属的面板元素里面)");
+          + "先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系(input 未必在它所属的面板元素里面)"
+          + similarElements(root, selector));
     }
     if (nth != null) {
       if (nth < 0 || nth >= matched) {
@@ -6792,7 +6820,8 @@ public class PlaywrightService {
     int matched = all.count();
     if (matched == 0) {
       throw new IllegalArgumentException(action + " 的选择器 " + selector + " 在页面里匹配到 0 个元素:"
-          + "这不是超时也不是被遮挡 —— 先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系");
+          + "这不是超时也不是被遮挡 —— 先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系"
+          + similarElements(root, selector));
     }
     if (nth == null) {
       return all.first();
@@ -7431,6 +7460,9 @@ public class PlaywrightService {
         }
         // 「到底等没等 Promise」以前只能靠猜,于是有人退回同步 XHR 来规避。这里如实回报
         data.set("awaited", true);
+        if (result == null && !RETURN_STATEMENT.matcher(raw).find()) {
+          data.set("hint", "The script produced no value (null). To read one, use return or end with an expression.");
+        }
         // 生效的时间预算一并报出来:排查「为什么这次 60 秒就断了」时不用再去翻配置
         data.set("evalTimeoutMs", evalBudget);
         return RespBodyVo.ok(data);
@@ -7452,6 +7484,10 @@ public class PlaywrightService {
         RespBodyVo failure = RespBodyVo.fail("执行 JavaScript 失败：" + message);
         Kv detail = Kv.by("error", scriptError(e)).set("scriptPreview", scriptPreview)
             .set("scriptLength", script.length());
+        // A syntax error is raised while parsing, before any of the script runs.
+        if (message.startsWith("SyntaxError")) {
+          detail.set("errorCode", "SCRIPT_SYNTAX_ERROR").set("actionExecuted", false).set("actionStatus", "not-started");
+        }
         // 「脚本被截断」是 Windows 上最常见的一类假故障:多行脚本经 cmd/PowerShell 传参时被吃掉,
         // 到服务端的只剩第一行,报错却是语法级的 "Unexpected end of input" —— 只说语法,人根本想不到
         // 是传输层把脚本切了。这里直接说破,并给出传文件的写法
@@ -7595,11 +7631,91 @@ public class PlaywrightService {
     if (FUNCTION_LIKE.matcher(script).find()) {
       return script;
     }
+    String arrow = AWAIT_KEYWORD.matcher(script).find() ? "async () => " : "() => ";
     if (RETURN_STATEMENT.matcher(script).find()) {
-      return "() => {" + script + "}";
+      return arrow + "{" + script + "}";
     }
-    String expression = script.endsWith(";") ? script.substring(0, script.length() - 1).trim() : script;
-    return "() => (" + expression + ")";
+    String expression = script;
+    while (expression.endsWith(";")) {
+      expression = expression.substring(0, expression.length() - 1).trim();
+    }
+    // Several statements without a return: the value is the last one's, as in a console.
+    // Wrapping them as one expression is a syntax error, which used to come back as a bare null.
+    int last = lastTopLevelStatement(expression);
+    if (last > 0) {
+      String tail = expression.substring(last).trim();
+      String head = expression.substring(0, last);
+      if (STATEMENT_KEYWORD.matcher(tail).find()) {
+        return arrow + "{" + expression + "}";
+      }
+      return arrow + "{" + head + " return (" + tail + ");}";
+    }
+    if (STATEMENT_KEYWORD.matcher(expression).find()) {
+      return arrow + "{" + expression + "}";
+    }
+    return arrow + "(" + expression + ")";
+  }
+
+  /** A top-level statement that cannot be returned as a value. */
+  private static final Pattern STATEMENT_KEYWORD = Pattern.compile(
+      "^(const|let|var|if|for|while|do|switch|try|throw|function|class|import|export|break|continue)\\b|^\\{");
+
+  /** Top-level await needs an async wrapper. */
+  private static final Pattern AWAIT_KEYWORD = Pattern.compile("(^|[^\\w$.])await\\b");
+
+  /**
+   * Start index of the last statement after a top-level semicolon, or -1 when the script is a
+   * single statement. Strings, template literals, comments and brackets are skipped; a regular
+   * expression literal holding a semicolon is not recognized and leaves the script as one statement
+   * at worst, which reports a syntax error as before.
+   */
+  static int lastTopLevelStatement(String script) {
+    int depth = 0;
+    int last = -1;
+    // Whether code, not just whitespace or comments, follows the last top-level semicolon.
+    boolean codeAfter = false;
+    for (int i = 0; i < script.length(); i++) {
+      char c = script.charAt(i);
+      if (c == '/' && i + 1 < script.length() && script.charAt(i + 1) == '/') {
+        int end = script.indexOf('\n', i);
+        i = end < 0 ? script.length() : end;
+        continue;
+      }
+      if (c == '/' && i + 1 < script.length() && script.charAt(i + 1) == '*') {
+        int end = script.indexOf("*/", i + 2);
+        i = end < 0 ? script.length() : end + 1;
+        continue;
+      }
+      if (Character.isWhitespace(c)) {
+        continue;
+      }
+      if (c == ';' && depth == 0) {
+        last = i + 1;
+        codeAfter = false;
+        continue;
+      }
+      codeAfter = true;
+      if (c == '\'' || c == '"' || c == '`') {
+        i = skipQuoted(script, i, c);
+      } else if (c == '(' || c == '[' || c == '{') {
+        depth++;
+      } else if (c == ')' || c == ']' || c == '}') {
+        depth = Math.max(0, depth - 1);
+      }
+    }
+    return last > 0 && codeAfter ? last : -1;
+  }
+
+  private static int skipQuoted(String script, int start, char quote) {
+    for (int i = start + 1; i < script.length(); i++) {
+      char c = script.charAt(i);
+      if (c == '\\') {
+        i++;
+      } else if (c == quote) {
+        return i;
+      }
+    }
+    return script.length();
   }
 
   /**
