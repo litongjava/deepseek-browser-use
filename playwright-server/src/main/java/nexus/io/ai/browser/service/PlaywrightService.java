@@ -836,6 +836,7 @@ public class PlaywrightService {
       }
       try {
         Files.createDirectories(dir.resolve("Default"));
+        clearStaleLocks(dir);
       } catch (java.io.IOException e) {
         throw new IllegalStateException("Could not create the profile for " + key + ": " + e.getMessage());
       }
@@ -863,6 +864,20 @@ public class PlaywrightService {
     }
     SharedBrowser owner = browserOf(instance);
     return owner != null && owner.headless;
+  }
+
+  /**
+   * Removes the singleton markers a killed Chrome leaves in a side browser's own profile, such as
+   * after a forced service restart. Only when no live process holds the directory; a profile that is
+   * really in use is left alone and the launch reports it.
+   */
+  static void clearStaleLocks(Path dir) throws java.io.IOException {
+    if (ChromeBrowser.profileInUse(dir)) {
+      return;
+    }
+    for (String lock : List.of("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile")) {
+      Files.deleteIfExists(dir.resolve(lock));
+    }
   }
 
   /** The browser whose context a task uses: the shared one or a side browser. */

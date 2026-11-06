@@ -71,6 +71,25 @@ public class SideBrowserTest {
   }
 
   @Test
+  public void staleLocksOfADeadBrowserAreCleared() throws Exception {
+    Path dir = Files.createTempDirectory("browser-use-side-lock");
+    try {
+      // A lock naming a process that no longer exists, as a killed Chrome leaves it.
+      Files.createSymbolicLink(dir.resolve("SingletonLock"), Path.of("dsb-test-host-999999999"));
+      Files.createSymbolicLink(dir.resolve("SingletonCookie"), Path.of("1"));
+      PlaywrightService.clearStaleLocks(dir);
+      assertFalse(Files.exists(dir.resolve("SingletonLock"), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+      assertFalse(Files.exists(dir.resolve("SingletonCookie"), java.nio.file.LinkOption.NOFOLLOW_LINKS));
+    } finally {
+      try (java.util.stream.Stream<Path> paths = Files.walk(dir)) {
+        for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+          Files.deleteIfExists(path);
+        }
+      }
+    }
+  }
+
+  @Test
   public void headedTaskOnADisplayRunsBesideAHeadlessOne() {
     assumeTrue("needs the X display " + DISPLAY, Files.exists(Path.of("/tmp/.X11-unix/X1")));
     assumeTrue("needs the local Chrome", ChromeBrowser.executablePath() != null);
