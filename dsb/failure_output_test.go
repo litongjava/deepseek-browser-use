@@ -12,6 +12,18 @@ const syntaxFailEnvelope = `{"ok":false,"code":0,"msg":"执行 JavaScript 失败
 
 const unknownMethodEnvelope = `{"ok":false,"code":400,"msg":"[INVALID_PARAMS] set_viewport_size: unsupported method; suggestions=[set_viewport]","data":{"actionStatus":"not-started","retrySafe":true,"stage":"validation"}}`
 
+const nullResultEnvelope = `{"ok":true,"code":0,"msg":"","data":{"awaited":true,"hint":"The script produced no value (null). To read one, use return or end with an expression."}}`
+
+func TestSelectingANullScriptResultSucceeds(t *testing.T) {
+	code, stdout, stderr := runWithStreams(t, nullResultEnvelope, "js", "const x = 1;", "--select", "data.result", "--raw")
+	if code != ExitOK || strings.TrimSpace(stdout) != "null" {
+		t.Fatalf("exit=%d stdout=%q", code, stdout)
+	}
+	if !strings.Contains(stderr, "produced no value") || strings.Contains(stderr, "may have completed") {
+		t.Fatalf("stderr must carry the hint only: %q", stderr)
+	}
+}
+
 func runWithStreams(t *testing.T, envelope string, tail ...string) (int, string, string) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

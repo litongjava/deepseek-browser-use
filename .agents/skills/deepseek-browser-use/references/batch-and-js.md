@@ -142,7 +142,7 @@ dsb 不执行 Node/Playwright 脚本，按下表逐步改写成 `commands`：
 
 - 返回值必须是 JSON 可序列化的；DOM 元素不报错，但只会得到 `ref: <Node>`，请先转成 `textContent`、`outerHTML`、`value`。
 - 结果为 `null` 而脚本里没有 `return` 时，回执的 `data.hint` 会说明脚本没有产生值。语法错误的 `errorCode` 是 `SCRIPT_SYNTAX_ERROR`，`actionStatus` 为 `not-started`：解析失败时脚本一行都没有执行，改好后可以直接重发。
-- 用 `--select data.result` 读值时，命令失败会在 stderr 打出 `Command failed ...` 和失败原因，stdout 仍是 `null`、退出码为 2。看到 `null` 先看 stderr，不要当成页面没有数据。
+- 用 `--select data.result` 读值时，命令失败会在 stderr 打出 `Command failed ...` 和失败原因，stdout 仍是 `null`、退出码为 2。看到 `null` 先看 stderr，不要当成页面没有数据。脚本成功但没有值时，stdout 同样是 `null`，退出码为 0，stderr 打出 `hint`。
 - 脚本报错时返回 `code:0`，`msg` 形如 `execute_js 失败：执行 JavaScript 失败：TypeError: Cannot read properties of null (reading 'click')`（只有异常首行，没有堆栈）。
 - **脚本重发无害时传 `retryOnSpurious: true`**：这个站点/这个页面上 `execute_js` 报 `Object doesn't exist: response@…`（对象与脚本毫不相干）时，服务端会替你重发（最多 3 次），成功后在 `data.spuriousRetry` 里说明。**只给读页面/取值的脚本传**；会点按钮、提交表单的脚本不要传 —— 那种脚本重发等于再执行一次。机制见 `pitfalls.md` 第 47 条。
 - `body` 长度上限 100000 字符；脚本**没有超时**。

@@ -635,6 +635,16 @@ func cmdJS(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if handled {
 		return verdict(response), nil
 	}
+	// A script that produced no value succeeds with data.result left out of the envelope (null
+	// fields are not serialized). That is a null result, not a missed selection.
+	if out.Select != nil && *out.Select == "data.result" && len(out.Fields) == 0 && response.Ok() &&
+		objGet(response.Data(), "result") == nil {
+		if hint := objStr(response.Data(), "hint"); hint != "" {
+			out.Warn(hint)
+		}
+		out.printLine("null")
+		return ExitOK, nil
+	}
 	if out.Mode == "json" || out.Select != nil {
 		out.JSON(value)
 	} else {
