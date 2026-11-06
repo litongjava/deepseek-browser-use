@@ -68,7 +68,7 @@ dsb --id 1001 state --screenshot
 dsb --id 1001 close
 ```
 
-`start` 默认显示窗口；需要无头模式时加 `--headless`。`state` 默认不截图，`--screenshot` 才生成图片。
+`start` 默认显示窗口；需要无头模式时加 `--headless`。没有显示器的 Linux 主机上用 `--display :1` 显示到 VNC。有头和无头任务可以在同一个服务里同时运行：显示方式不同的任务各用一个 Chrome，有头的那个用单独的 profile。`state` 默认不截图，`--screenshot` 才生成图片。
 
 `close` 结束当前任务。最后一个托管任务结束时，浏览器和页面保留；需要显式关闭浏览器时使用 `close --close-browser`，存在其他任务时会拒绝关闭。
 

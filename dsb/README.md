@@ -133,10 +133,12 @@ dsb --session checkout --record-dir './logs/agent/checkout' --id 1001 last --sel
 ```bash
 dsb --host 10.0.0.5 --port 10049 health          # 直接给主机与端口
 dsb --base-url http://10.0.0.5:10049 health      # 等价,写全了更直观(IPv6 用这个)
-dsb --port 10050 start --headful                 # 本机第二个实例
+dsb --port 10050 start --headful                 # 本机第二个实例(独立 profile 与登录态)
 
 dsb --use lab health                             # 用登记过的具名目标(见下)
 ```
+
+只是要一个有头窗口（例如显示到 VNC 的 `--display :1`）时不必开第二个实例：同一个服务会按显示方式另起一个 Chrome，与已有的无头浏览器并存。
 
 地址的决定顺序(`--base-url` > `--use` > `--host/--port` > 环境变量 > 配置文件 > 默认 `localhost:10049`)。
 `dsb server status` 会把最终用的是哪个地址、以及这个地址是从哪来的(`来源:命令行 --port` / `具名目标 lab` …)一并打出来,

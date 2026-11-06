@@ -18,7 +18,7 @@ description: 使用 dsb 在 Cloudflare 配置域名 HTTP/HTTPS 跳转，检查 D
 
 ## 浏览器操作
 
-1. 按主技能检查服务、启动任务、打开 Cloudflare；需要人工登录或验证码时保留现场交接。
+1. 按主技能检查服务、启动任务、打开 Cloudflare；需要人工登录或验证码时保留现场交接。Cloudflare 控制台会把无头浏览器拦在“Just a moment...”验证页，所以直接用有头浏览器：没有显示器的机器用新任务 ID 执行 `dsb --id <新ID> start --display :1`，用户在 VNC 里能看到窗口。默认端口已有无头浏览器时，服务会在同一端口另起一个显示在 `:1` 上的 Chrome，它用单独的 profile，第一次需要用户在里面登录，之后登录状态会保留。如果 `go_to_url` 或 `get_browser_state` 的回执带 `data.challenge`（`BOT_CHALLENGE`），说明仍停在验证页：用 `request_human_input` 请用户通过验证，不要反复点击验证框或循环刷新。
 2. Domains → 来源域名 → DNS Records，记录本次涉及的 A/AAAA/CNAME、内容与代理状态。先检查已有 Rules、Page Rules 或 Workers，避免与现有跳转冲突。DNS 页可能弹出新版介绍，先关闭 Got it 引导。
 3. Rules → Overview → Redirect to a different domain 模板。若页面布局变了，读当前页面定位 Redirect Rules。填写可识别的规则名，切换 Edit expression，并将模板中的示例域名全部替换。
 
@@ -44,6 +44,7 @@ description: 使用 dsb 在 Cloudflare 配置域名 HTTP/HTTPS 跳转，检查 D
 - 实测 Deploy 返回 ``SPURIOUS_DISPATCH``，规则却已创建。不能重复点击部署；先读规则列表或相关响应。新回执的 ``actionStatus:unknown`` 也应如此处理。
 - ``snapshotConsistent:false`` 或 ``indicesUsable:false`` 表示本次索引不可用。等目标内容后重新取快照。即使 ``snapshotConsistent:true``，也只说明读取期间没有检测到变化，不证明异步业务已完成。
 - 新版 DNS 编辑区域使用具名按钮、Proxy status 开关、Save。优先按真实的 aria-label 定位所需记录，避免点错多个 Edit 中的一个。
+- 新版 Add record 表单里，CNAME 的目标输入框是 `textarea[name="target"]`，不是 `content`；Proxy status 开关是 `button[aria-label="Proxy status"]`，用 `aria-checked` 回读状态。填完后 Save 按钮从禁用变为可用才算填进了表单模型；保存后在记录列表回读名称、目标和代理状态。
 
 ## 验证与结论
 

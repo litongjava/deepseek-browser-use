@@ -8,7 +8,9 @@
 >
 > Chrome 136 起不允许在默认用户数据目录上开启远程调试。`RemoteDebuggingAllowed` 允许远程调试不等于解除默认目录限制；不要通过降级浏览器或修改策略尝试绕过。需要独立 profile 时，先用 `dsb profile clone` 离线复制，再用 `dsb start --profile <名称>` 选择副本。复制不保证 Cookie、保存密码或网站登录态可用，必要时由用户重新登录。
 
-默认 `dsb start` 显示窗口；`--headful` 保留兼容，`--headless` 显式无头，两个开关不能同用。协议 `headless` 默认 `false`，批量命令相同。已有任务时不能切换显示模式；先结束自己的任务，确认共享浏览器无其他任务后再切换。
+默认 `dsb start` 显示窗口；`--headful` 保留兼容，`--headless` 显式无头，两个开关不能同用。协议 `headless` 默认 `false`，批量命令相同。
+
+**有头和无头可以同时运行。** 显示方式在浏览器启动时固定，所以同一个 Chrome 不能中途切换。服务里已有浏览器、而新任务要的显示方式不同（例如已有无头浏览器，新任务要 `--display :1`）时，服务会在同一端口另起一个 Chrome 给它，按显示方式区分：之后同样显示方式的任务都加入这个 Chrome。条件是两边都用本机 Chrome，且没有指定 `--profile`、`--user-data-dir`、`--ephemeral` 或 `--fake-media`；不满足时仍返回 `BROWSER_CONFIG_CONFLICT`，按 `hint` 处理。
 
 测语音/视频通话用 `--fake-media`（假麦克风/摄像头，仅 Chromium 系）；它与显示模式一样在浏览器启动时固定。
 
@@ -26,9 +28,10 @@ dsb --id 1002 start --headful --user-data-dir "<独立 User Data>" --profile-dir
 ## 显示到 VNC、临时 profile 与清理登录状态
 
 ```shell
-# 显示到 VNC 的 :1；用独立端口时不影响其他任务，也有独立的 profile
-dsb --port 10050 start --display :1
-# 敏感登录：临时 profile，最后一个任务 close 时连同登录状态一起删除
+# 显示到 VNC 的 :1；默认端口已有无头浏览器时，会在同一端口另起一个显示在 :1 上的 Chrome
+dsb --id 2001 start --display :1
+# 敏感登录：临时 profile，最后一个任务 close 时连同登录状态一起删除。
+# 它不能和别的浏览器并存，默认端口有其他任务时用独立端口
 dsb --port 10050 start --display :1 --ephemeral
 # 删除命名 profile
 dsb profile delete --name litongjava
@@ -37,7 +40,9 @@ dsb --port 10050 server stop
 dsb --port 10050 server wipe-profile --yes
 ```
 
-- `display` 和 `headless` 一样在启动时固定。`dsb tasks` 的 `data.browser.display` 显示当前值。
+- `display` 和 `headless` 一样在启动时固定。`dsb tasks` 的 `data.browser` 是主浏览器，`data.sideBrowsers` 列出按显示方式另起的浏览器（`key` 形如 `display::1` 或 `headless`），每个任务的 `headless`、`display` 也在任务行里。
+- 另起的浏览器用主 profile 旁边的单独目录，例如 `profile-display-1`，登录状态不和主 profile 共享，需要登录的站点在里面登录一次后会保留。
+- 这个浏览器上的最后一个任务关闭后，浏览器和页面照样保留；`close --close-browser` 只关闭这个任务所在的浏览器，不影响另一个浏览器上的任务。
 - 强杀服务（`server stop --keep-browser` 或 `kill -9`）来不及删除临时 profile，它会留在系统临时目录的 `dsb-ephemeral-*` 下，需要手动清理。
 - `--ephemeral` 只支持 Chrome，不能与 `--profile`、`--user-data-dir` 同用。
 - 最后一个任务关闭后检查 `ephemeralProfileDeleted`。Windows 文件句柄释放采用最多约两秒的重试等待；仍无法删除时返回 false、`warning` 和 `ephemeralProfilePath`，不能把关闭任务成功当成清理成功。

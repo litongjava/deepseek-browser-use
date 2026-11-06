@@ -101,6 +101,9 @@ public final class ActionError {
    */
   public static final String ELEMENT_NOT_FOUND = "ELEMENT_NOT_FOUND";
 
+  /** The page shows a bot check (such as Cloudflare's interstitial) instead of the site. */
+  public static final String BOT_CHALLENGE = "BOT_CHALLENGE";
+
   /** Starts the list of similar elements that a not-found selector failure carries. */
   public static final String CANDIDATES_MARK = "。页面上";
 

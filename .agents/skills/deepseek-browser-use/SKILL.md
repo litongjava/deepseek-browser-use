@@ -35,7 +35,7 @@ dsb batch commands.json --async --wait --out result.json --summary
 ~~~
 
 - `list_methods` / `methods` 查询当前服务的能力，不按文档中的固定方法数量判断。开发后更新本机后端用 `dsb server build`、`dsb server restart --when-idle`：有活动任务时普通 `restart`/`stop` 会拒绝执行，`--when-idle` 等任务结束，`--force` 才会中断它们。`dsb server status` 显示运行中的 jar 和是否需要重启。
-- `start` 默认显示窗口；需要无头模式时才用 `--headless`。回读 `data.browser.headless` 和实际浏览器字段确认。报 `BROWSER_CONFIG_CONFLICT` 或 `DISPLAY_UNAVAILABLE` 时什么都没启动：按回执的 `hint` 处理，不要关闭别人的浏览器。要让用户在 VNC 里看到窗口，用独立端口：`dsb --port 10050 start --display :1`。
+- `start` 默认显示窗口；需要无头模式时才用 `--headless`。回读 `data.browser.headless` 和实际浏览器字段确认。报 `BROWSER_CONFIG_CONFLICT` 或 `DISPLAY_UNAVAILABLE` 时什么都没启动：按回执的 `hint` 处理，不要关闭别人的浏览器。要让用户在 VNC 里看到窗口，换一个任务 ID 后 `start --display :1` 即可，不用换端口：服务里已有无头浏览器时，会在同一端口另起一个显示在 `:1` 上的 Chrome，两边任务互不影响。这个 Chrome 用单独的 profile，登录状态和主 profile 不共享。
 - PowerShell 文件参数写成 `'@query.js'`、`--params '@params.json'`。多行 JS / 嵌套 JSON 放文件；协议示例 `{id,method,params}` 可存入参数文件交给 `dsb run`。
 - CLI 默认请求精简响应；需要完整诊断时用 `--diagnostics` 或 `--response-mode full`。不能重放动作补诊断。
 - 常规动作使用 `--summary`；只读回目标字段，避免反复打印整页。单行 JSON 配置不能用 `head`/`Get-Content -TotalCount` 控制大小，应解析后投影白名单字段。完整配置、规则正文、凭据不得进入对话或提交。
@@ -93,7 +93,7 @@ dsb batch commands.json --async --wait --out result.json --summary
 
 ## 人工协助与任务收尾
 
-需要登录、扫码、验证码或人工支付时，保留有头浏览器，用 `request_human_input` 记录请求并通过对话通知用户。root、管理员等敏感账号用 `--ephemeral` 启动：临时 profile 随浏览器关闭一起删除；否则登录状态会留在 profile 里，收尾时要明确告诉用户。不能仅凭接口成功就认为用户收到通知；等待期间不刷新或继续点击验证控件。用户完成后回读页面再继续，`pending` / 超时不表示已通过。参数见 [人机协同](references/human-in-loop.md)。
+回执带 `data.challenge`（`BOT_CHALLENGE`）说明页面停在 Cloudflare 人机验证页，不是站点内容：无头浏览器常被拦在这里，换一个任务 ID 用 `start --display :1` 开有头浏览器，再请用户通过验证，不要反复点击或循环刷新。需要登录、扫码、验证码或人工支付时，保留有头浏览器，用 `request_human_input` 记录请求并通过对话通知用户。root、管理员等敏感账号用 `--ephemeral` 启动：临时 profile 随浏览器关闭一起删除；否则登录状态会留在 profile 里，收尾时要明确告诉用户。不能仅凭接口成功就认为用户收到通知；等待期间不刷新或继续点击验证控件。用户完成后回读页面再继续，`pending` / 超时不表示已通过。参数见 [人机协同](references/human-in-loop.md)。
 
 默认所有任务共用浏览器和持久化 profile，通过页签隔离；每个任务只有一个所有者。切换浏览器或 profile 可能需要重新登录，不关闭其他任务排障。
 
