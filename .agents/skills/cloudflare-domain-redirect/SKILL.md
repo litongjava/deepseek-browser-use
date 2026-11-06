@@ -18,7 +18,7 @@ description: 使用 dsb 在 Cloudflare 配置域名 HTTP/HTTPS 跳转，检查 D
 
 ## 浏览器操作
 
-1. 按主技能检查服务、启动任务、打开 Cloudflare；需要人工登录或验证码时保留现场交接。Cloudflare 控制台会把无头浏览器拦在“Just a moment...”验证页，所以直接用有头浏览器：没有显示器的机器用新任务 ID 执行 `dsb --id <新ID> start --display :1`，用户在 VNC 里能看到窗口。默认端口已有无头浏览器时，服务会在同一端口另起一个显示在 `:1` 上的 Chrome，它用单独的 profile，第一次需要用户在里面登录，之后登录状态会保留。如果 `go_to_url` 或 `get_browser_state` 的回执带 `data.challenge`（`BOT_CHALLENGE`），说明仍停在验证页：用 `request_human_input` 请用户通过验证，不要反复点击验证框或循环刷新。
+1. 按主技能检查服务、启动任务、打开 Cloudflare；需要人工登录或验证码时保留现场交接。Cloudflare 控制台会把无头浏览器拦在“Just a moment...”验证页，所以直接用有头浏览器：没有显示器的机器用新任务 ID 执行 `dsb --id <新ID> start --display :1`，用户在 VNC 里能看到窗口。默认端口已有无头浏览器时，服务会在同一端口另起一个显示在 `:1` 上的 Chrome，它用单独的 profile，第一次需要用户在里面登录，之后登录状态会保留。如果 `go_to_url` 或 `get_browser_state` 的回执带 `data.challenge`（`BOT_CHALLENGE`），说明仍停在验证页：有头浏览器先用 `wait_for_function` 等标题不再是“Just a moment...”（实测几秒内自动通过并进入登录页），仍未通过再用 `request_human_input` 请用户通过验证，不要反复点击验证框或循环刷新。
 2. Domains → 来源域名 → DNS Records，记录本次涉及的 A/AAAA/CNAME、内容与代理状态。先检查已有 Rules、Page Rules 或 Workers，避免与现有跳转冲突。DNS 页可能弹出新版介绍，先关闭 Got it 引导。
 3. Rules → Overview → Redirect to a different domain 模板。若页面布局变了，读当前页面定位 Redirect Rules。填写可识别的规则名，切换 Edit expression，并将模板中的示例域名全部替换。
 

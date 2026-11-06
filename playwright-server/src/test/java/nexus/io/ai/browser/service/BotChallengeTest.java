@@ -62,6 +62,7 @@ public class BotChallengeTest {
     assertEquals(ActionError.BOT_CHALLENGE, challenge.getStr("errorCode"));
     assertEquals("cloudflare", challenge.getStr("vendor"));
     assertTrue(data.getStr("warning"), data.getStr("warning").contains("start --display"));
+    assertEquals(Boolean.TRUE, challenge.get("headless"));
 
     RespBodyVo state = actions.execute(id, "get_browser_state", new JSONObject());
     assertTrue(state.getMsg(), state.isOk());

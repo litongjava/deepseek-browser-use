@@ -856,6 +856,15 @@ public class PlaywrightService {
     }
   }
 
+  /** Whether the task's browser runs headless; external hosts and unknown browsers count as headed. */
+  static boolean isHeadless(BrowserInstance instance) {
+    if (instance == null || instance.externalBrowser != null) {
+      return false;
+    }
+    SharedBrowser owner = browserOf(instance);
+    return owner != null && owner.headless;
+  }
+
   /** The browser whose context a task uses: the shared one or a side browser. */
   static SharedBrowser browserOf(BrowserInstance instance) {
     SharedBrowser main = sharedBrowser;
@@ -3033,7 +3042,7 @@ public class PlaywrightService {
       if (media != null) {
         kv.set(media);
       }
-      Kv challenge = detectBotChallenge(inst.page);
+      Kv challenge = detectBotChallenge(inst.page, isHeadless(inst));
       if (challenge != null) {
         kv.set("challenge", challenge);
       }
@@ -5691,7 +5700,7 @@ public class PlaywrightService {
         Response rsp = inst.page.navigate(url, options);
         Kv landed = Kv.by("status", rsp == null ? 0 : rsp.status())
             .set("url", inst.page.url()).set("waitUntil", stage.name().toLowerCase(java.util.Locale.ROOT));
-        Kv challenge = detectBotChallenge(inst.page);
+        Kv challenge = detectBotChallenge(inst.page, isHeadless(inst));
         if (challenge != null) {
           landed.set("challenge", challenge).set("warning", challenge.getStr("message"));
         }
@@ -5740,7 +5749,7 @@ public class PlaywrightService {
    * The bot check the page shows instead of its content, or null. Read-only; anything unreadable
    * counts as no challenge, since this only adds advice to a receipt.
    */
-  static Kv detectBotChallenge(Page page) {
+  static Kv detectBotChallenge(Page page, boolean headless) {
     if (page == null) {
       return null;
     }
@@ -5751,10 +5760,14 @@ public class PlaywrightService {
       }
       return Kv.by("errorCode", ActionError.BOT_CHALLENGE).set("vendor", found.get("vendor"))
           .set("title", found.get("title")).set("marker", found.get("marker"))
-          .set("message", "[" + ActionError.BOT_CHALLENGE + "] The page is a Cloudflare bot check, not the site's content."
-              + " Headless browsers are often held here. Start a headed browser (start --display :1 on a machine"
-              + " without a monitor) and ask the user to pass the check with request_human_input; do not click the"
-              + " check repeatedly or reload in a loop.");
+          .set("headless", headless)
+          .set("message", "[" + ActionError.BOT_CHALLENGE + "] The page is a Cloudflare bot check, not the site's content. "
+              + (headless
+                  ? "Headless browsers are usually held here: start a headed browser with a new task id (start --display :1"
+                      + " on a machine without a monitor) and open the page there."
+                  : "A headed browser usually passes it within seconds: wait for the title to change with"
+                      + " wait_for_function, and if it stays, ask the user to pass it with request_human_input.")
+              + " Do not click the check repeatedly or reload in a loop.");
     } catch (PlaywrightException e) {
       return null;
     }
