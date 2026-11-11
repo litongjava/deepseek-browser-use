@@ -1,49 +1,44 @@
-# 写站点技能（skill）的约定
+# 写技能与站点案例的约定
 
-## 技能放在哪
+## 只有一个技能
 
-技能文档都放在仓库的 **`.agents/skills/`** 下 —— 这是 DSH 的**项目级技能根**（DSH 按
-`<项目根>/.dsh/skills` → `<项目根>/.agents/skills` → `customSkillDirs` → `~/.dsh/skills` →
-`~/.agents/skills` 的顺序扫描），而仓库根有 `.git`，所以**在仓库里启动 dsh 会话就能直接发现这些技能**，
-不用再往 `.dsh/skills` 复制一份。发现规则只有两条：
+仓库只提供一个技能：`.agents/skills/deepseek-browser-use/`。站点经验不再单独做成技能，而是作为案例放在它的 `references/cases/` 下，由模型按需读取。这样宿主的技能列表里只有一条描述，入口提示词也只讲怎么用 dsb 操作浏览器。
 
-- 只认 `<根>/<技能名>/SKILL.md`（或 `<根>/<技能名>.md`）这一层，**不递归**；
-- frontmatter 必须有 `name` 与 `description`，且 `name` 是 kebab-case 且与目录名一致。
+```
+.agents/skills/deepseek-browser-use/
+  SKILL.md                 入口：dsb 使用规则、核心循环、常见情况、按需读取索引
+  references/
+    setup.md               环境配置：开源地址、安装 dsb、构建启动后端、更新
+    *.md                   通用参考（命令、参数、读页面、可靠性、批量与 JS…）
+    web-data.md            取数规范
+    cases/<站点>.md        站点案例
+    cases/<站点>/...       案例附带的脚本与复盘
+```
 
-换了装法（`git clone` 到别处用、装到用户级目录）不影响构建：`SkillDocConsistencyTest` 依次在
-`.agents/skills/`、`.dsh/skills/`、老的 `skills/` 与仓库根找主技能文档，能找到哪个就用哪个。
+DSH 按 `<项目根>/.dsh/skills` → `<项目根>/.agents/skills` → `customSkillDirs` → `~/.dsh/skills` → `~/.agents/skills` 扫描，只认 `<根>/<技能名>/SKILL.md` 这一层；在仓库里启动会话即可发现本技能。frontmatter 必须有 `name` 与 `description`，`name` 与目录名一致。
 
-`.agents/skills/` 下有两类文档：
-
-| 文档 | 作用 | 谁维护 |
+| 文件 | 作用 | 谁维护 |
 | --- | --- | --- |
-| `.agents/skills/deepseek-browser-use/SKILL.md` | **主技能**：服务端能力的唯一权威清单（命令表覆盖、端点、frontmatter、协议） | 跟着服务端一起改 |
-| `.agents/skills/<站点名>/SKILL.md` | **站点操作手册**：某个站点上「必须这么点」的经验（例如 `wecom-mail-domain`） | 跑完一次真实任务后补 |
+| `SKILL.md` | 入口提示词，每次触发都整体进上下文，**只放必读内容** | 跟着服务端一起改 |
+| `references/*.md` | 通用参考，按需读取 | 跟着服务端一起改 |
+| `references/cases/<站点>.md` | 某个站点「必须这么点」的经验，不写 frontmatter，以 `# 标题` 开头 | 跑完一次真实任务后补 |
 
-构建时会跑 `SkillDocConsistencyTest`（`playwright-server/src/test/java/nexus/io/ai/browser/docs/`）校验两者与服务端的一致性。
+新增案例时同时在 `SKILL.md` 的「站点案例」表里加一行，否则模型不知道它存在。案例引用通用参考写 `../xxx.md`，引用其他案例写 `<站点>.md`；附带脚本放在 `cases/<站点>/` 下，文中写明按技能目录解析绝对路径，不假定当前工作目录。
 
-### Claude Code 技能命名
+构建时 `SkillDocConsistencyTest`（`playwright-server/src/test/java/nexus/io/ai/browser/docs/`）校验入口和全部案例与服务端命令表的一致性。
 
-Claude Code 通过 `dsb-skills` 插件加载所有技能，调用名统一为 `dsb-skills:{name}`，例如 `dsb-skills:deepseek-browser-use`。
-插件清单位于 `.agents/.claude-plugin/plugin.json`；技能目录和 frontmatter 的 `name` 保留不带前缀的 kebab-case，避免影响 DSH、Codex 和跨技能相对链接。
+### 安装与同步
 
-使用 `node scripts/sync-skills.mjs claude` 同步到用户级插件目录。
-旧扁平技能只迁移同步清单管理的条目，并备份到技能扫描目录之外，不删除本地差异、不触碰无关技能。
-本地 `references/` 与 `scripts/` 资源按技能文件所在目录定位，不假定调用者的工作目录是仓库根目录。
+`node scripts/sync-skills.mjs` 按宿主改写 frontmatter 后安装：`dsh`（`~/.dsh/skills`）、`deepseek-code`（`~/.deepseek-code/skills`）、`claude`（`~/.claude/skills/dsb-skills`，调用名 `dsb-skills:deepseek-browser-use`）、`codex`（`~/.codex/skills`）。插件清单位于 `.agents/.claude-plugin/plugin.json`。
 
-### 主技能是「一个入口 + 若干分册」
+- 同步前先读源与已安装文件并检查差异，保留双方已有改动；不要用 `--force` 覆盖非本脚本安装的同名技能。
+- 清单记录的技能在仓库删除后，同步时移到目标旁的 `skill-backups/`，不会和新技能重复加载。
+- 同步后用 `--status` 比较，确认新增的参考文件也已安装。
 
-主技能文档装不下全部细节时，拆成 `SKILL.md` 入口加同目录 `references/*.md` 分册 —— 入口每次触发技能都会整体进上下文，所以**只放必读内容**，细节按需再读：
+### 入口与参考的分工
 
-| 文件 | 放什么 |
-| --- | --- |
-| `SKILL.md` | 省 token 铁律、症状 → 命令索引表、读页面、全部命令的一行速查、交互循环、最常踩的坑 |
-| `references/*.md` | 按主题分册（协议、命令全表、批量与 JS、人机协同、读页面、浏览器、坑、客户端），用 read 工具按需读 |
-
-两条维护要求：
-
-1. **只查 `SKILL.md` 的那几条测试，决定了新方法必须写进 `SKILL.md`**：`everyCommandIsDocumented` 只读主技能，新加一个方法时名字要出现在 `SKILL.md` 里（加在「命令速查」那一节最省事），光写进分册不算数。
-2. **分册里的命令名不会被检查**（`allSkillDocs()` 只找名为 `SKILL.md` 的文件），所以分册写错命令名不会有人报错 —— 要自己照着 `CommandTable` 核对。
+1. **入口和参数表一起覆盖全部命令**：`everyCommandIsDocumented` 读 `SKILL.md` 加自动生成的 `references/parameters.md`，新方法由参数表覆盖；常用方法写进入口的核心循环或「常见情况」表。
+2. **入口和案例里的单反引号命令名会被检查**；其余参考文件不检查，要自己对照 `CommandTable` 核对。
 
 ## 最重要的一条：单反引号 vs 双反引号
 
@@ -54,7 +49,7 @@ Claude Code 通过 `dsb-skills` 插件加载所有技能，调用名统一为 `d
 这是页面里的名字 → ``no_such_command``  ← 不会被检查
 ```
 
-为什么要这样分：站点操作手册**必然**会大量提到 snake_case 的**非命令标识符**，而检查只能靠词形猜。没有这条约定时，每写一个站点 skill 都要把二十多处标识符改成「加点号 / 加 `#` / 加对象前缀」的写法——**让文档迁就测试**，而且这条规则没有任何地方写明，下一个人还会踩。
+为什么要这样分：站点案例**必然**会大量提到 snake_case 的**非命令标识符**，而检查只能靠词形猜。没有这条约定时，每写一个站点案例都要把二十多处标识符改成「加点号 / 加 `#` / 加对象前缀」的写法——**让文档迁就测试**，而且这条规则没有任何地方写明，下一个人还会踩。
 
 | 类别 | 例子 | 写法 |
 | --- | --- | --- |
@@ -68,28 +63,19 @@ Claude Code 通过 `dsb-skills` 插件加载所有技能，调用名统一为 `d
 
 > 反例那一类最容易被误判：文档里明确写「这个方法不存在」时，测试反而会因为「它不在命令表里」而报错，等于**把「记录一个已知缺失的能力」判成了错误**。用双反引号就对了。
 
-一份文档里要声明很多个时，也可以用 frontmatter 一次列出来（测试会把它并入白名单）：
-
-```yaml
----
-name: some-site
-description: 某个站点的操作手册，讲清楚必须怎么点、哪些坑绕不开
-nonCommands: [subject_name, dsh_up_0, has_cname_record]
----
-```
-
-两种写法等效，**推荐双反引号**：零配置、词法可判、不需要维护列表，视觉上也分得清「这是命令」与「这是页面里的名字」。
+站点案例没有 frontmatter，非命令标识符统一用双反引号：零配置、词法可判，视觉上也分得清「这是命令」与「这是页面里的名字」。
 
 ## 其余约定
 
-1. **命令名必须真实存在**：`.agents/skills/` 下每一份 SKILL.md 里的单反引号 snake_case 名字都会对着命令表查一遍。写错一个（例如把 `get_tabs` 写成 ``list_tabs``），模型照着发请求就会拿到「不支持的方法」。不知道有哪些命令时先 `list_methods`。
+1. **命令名必须真实存在**：入口 `SKILL.md` 和 `references/cases/*.md` 里的单反引号 snake_case 名字都会对着命令表查一遍。写错一个（例如把 `get_tabs` 写成 ``list_tabs``），模型照着发请求就会拿到「不支持的方法」。不知道有哪些命令时先 `list_methods`。
 2. **`recipes/*.json` 里的命令名同样会被检查**：配方写错命令名要到 `run_recipe` 运行时才报错，所以构建阶段就过一遍。
-3. **主技能必须覆盖全部命令**：命令表里的每个方法都要在 `.agents/skills/deepseek-browser-use/SKILL.md` 里出现（`everyCommandIsDocumented`）。
+3. **主技能必须覆盖全部命令**：命令表里的每个方法都要出现在 `SKILL.md` 或自动生成的 `references/parameters.md` 里（`everyCommandIsDocumented`）。
 4. **不写本机绝对路径**：`E:\` / `D:\` 这类路径会让文档换台机器就失效。
 5. **不写旧名字**：``get_dom_text``、`/api/v1/playwright`、``PlaywrightController``、``com.litongjava``、``project-nexus`` 都已被拉黑。
-6. **症状导向**：写新坑的时候，尽量在主技能开头的「症状 → 命令」索引表里也加一行——那张表就是为了把「翻 1000 行找答案」变成「查一行表」。
+6. **症状导向**：常见症状写进入口的「常见情况」表，长尾问题写进 `references/pitfalls.md`。
+7. **文档检查不需要打开真实站点**：CLI 示例通过 `--help` 核对；只有真的运行过的检查才能写「通过」。
 
-## 站点 skill 建议的结构
+## 站点案例建议的结构
 
 按「能不能一次跑通」组织，而不是按命令顺序罗列：
 

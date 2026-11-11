@@ -5,6 +5,7 @@
  * 三个工具对 frontmatter 的要求不一样，脚本按目标改写，源文件始终只有一份：
  *
  *   dsh    → ~/.dsh/skills/      认 whenToUse（驼峰），未知键忽略
+ *   deepseek-code → ~/.deepseek-code/skills/  DeepSeek Code（dcl / Desktop），与 DSH 同格式
  *   claude → ~/.claude/skills/dsb-skills/   插件调用名 dsb-skills:<name>
  *   codex  → ~/.codex/skills/    严格白名单：只允许 name/description/license/
  *                                allowed-tools/metadata，多一个键就整份拒绝加载；
@@ -21,6 +22,7 @@
  *   node scripts/sync-skills.mjs --all --force      覆盖目标里非本脚本安装的同名技能
  *
  * 每个目标根目录下有一份 .sync-skills.json 清单，记着哪些技能是本脚本装的；
+ * 清单里有、仓库已删除的技能在同步时移到目标旁的 skill-backups/ 目录。
  * DSH/Codex 跳过非清单技能；Claude 以插件安装并备份迁移旧技能，遇到非清单旧技能会停止。
  */
 
@@ -62,6 +64,12 @@ const TARGETS = {
     label: 'DSH (DeepSeek Harness)',
     dir: path.join(HOME, '.dsh', 'skills'),
     // DSH 读驼峰键；源文件本来就是驼峰，原样复制。
+    rewrite: (text) => ({ text, notes: [] }),
+  },
+  'deepseek-code': {
+    label: 'DeepSeek Code',
+    dir: path.join(HOME, '.deepseek-code', 'skills'),
+    // DeepSeek Code 读 name/description/whenToUse，原样复制。
     rewrite: (text) => ({ text, notes: [] }),
   },
   claude: {
@@ -397,6 +405,19 @@ async function main() {
       if (!exists) { console.log(`  新增   ${skill.name}  (${total} 个文件)${noteText}`); tally.new++; }
       else { console.log(`  更新   ${skill.name}  (${changed}/${total} 个文件有差异)`); tally.update++; }
       if (opts.verbose && noteText) console.log(`         ${noteText}`);
+    }
+
+    for (const name of [...owned].filter((n) => !skills.some((s) => s.name === n))) {
+      const stale = path.join(target.dir, name);
+      if (fs.existsSync(stale)) {
+        const backup = path.join(path.dirname(target.dir), 'skill-backups', `sync-skills-removed-${Date.now()}`, name);
+        if (!opts.dryRun) {
+          fs.mkdirSync(path.dirname(backup), { recursive: true });
+          fs.renameSync(stale, backup);
+        }
+        console.log(`  ${opts.dryRun ? '将移除' : '已移除'} ${name}（仓库已删除${opts.dryRun ? '' : `，备份到 ${backup}`}）`);
+      }
+      owned.delete(name);
     }
 
     if (!opts.dryRun) {

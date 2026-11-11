@@ -30,7 +30,7 @@ import nexus.io.model.body.RespBodyVo;
  *
  * <p>
  * 三个坑都是 2026-09-25 在 DeepSeek 平台「充值 ¥10 + 开 ¥280 发票」时真踩到的,经过记在
- * {@code .agents/skills/deepseek-platform-topup-invoice/SKILL.md} 里:
+ * {@code .agents/skills/deepseek-browser-use/references/cases/deepseek-platform-topup-invoice.md} 里:
  *
  * <ul>
  * <li><b>按文本点击点错了元素</b>:{@code click_element_by_text text=Submit} 命中的是开票页「Invoice Rules」
