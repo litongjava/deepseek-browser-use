@@ -115,6 +115,15 @@ public class PlaywrightService {
   private static volatile SharedBrowser sharedBrowser;
 
   /**
+   * Browsers beside {@link #sharedBrowser} that differ only in how they are shown, keyed by
+   * {@link #browserKey}: a headed window on an X display while a headless browser serves other
+   * tasks, or the reverse. Headless mode and the display are fixed at launch, so such a request
+   * used to be refused and needed a second service port. Each one has its own profile directory,
+   * because two browser processes cannot share one.
+   */
+  static final Map<String, SharedBrowser> SIDE_BROWSERS = new ConcurrentHashMap<>();
+
+  /**
    * 「正在启动共享浏览器」的现场,启动结束(成功或失败)后清空
    *
    * <p>
@@ -141,6 +150,9 @@ public class PlaywrightService {
       SharedBrowser browser = sharedBrowser;
       if (browser != null) {
         ChromeLauncher.stop(browser.process);
+      }
+      for (SharedBrowser side : SIDE_BROWSERS.values()) {
+        ChromeLauncher.stop(side.process);
       }
       Playwright current = sharedPlaywright;
       if (current != null) {
@@ -668,39 +680,45 @@ public class PlaywrightService {
       throw new IllegalArgumentException("fakeMedia only supports Chromium-family browsers (chrome/chromium/edge)");
     }
     SharedBrowser current = sharedBrowser;
-    if (fakeMedia != null && current != null && current.fakeMedia != fakeMedia) {
-      throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT, "fakeMedia=" + fakeMedia
-          + " differs from the retained browser (" + current.describe() + "). Media flags are fixed at launch",
-          "Omit fakeMedia to reuse the current browser; close it with closeBrowser=true once idle; or use another --port.");
-    }
     String wantedDisplay = display == null || display.isBlank() ? null : display.trim();
-    if (wantedDisplay != null && current != null && !wantedDisplay.equals(current.display)) {
-      throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT, "display=" + wantedDisplay
-          + " differs from the retained browser (" + current.describe() + "). The display is fixed at launch",
-          "Omit --display to reuse the current browser, or use another --port to get a separate browser on that display.");
-    }
-    if (current == null) {
-      requireUsableDisplay(headless, wantedDisplay);
-    }
+    SharedBrowser side = sideBrowser(headless, wantedDisplay, requested, profile, fakeMedia, current, existedBefore);
     SharedBrowser shared;
-    pendingFakeMedia.set(Boolean.TRUE.equals(fakeMedia));
-    pendingDisplay.set(wantedDisplay);
-    try {
-      shared = sharedBrowser(headless, requested, profile);
-    } catch (RuntimeException | Error failure) {
-      if (current == null && profile != null && EPHEMERAL_SOURCE.equals(profile.source())) {
-        deleteEphemeral(Path.of(profile.userDataDir()));
+    if (side != null) {
+      shared = side;
+    } else {
+      if (fakeMedia != null && current != null && current.fakeMedia != fakeMedia) {
+        throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT, "fakeMedia=" + fakeMedia
+            + " differs from the retained browser (" + current.describe() + "). Media flags are fixed at launch",
+            "Omit fakeMedia to reuse the current browser; close it with closeBrowser=true once idle; or use another --port.");
       }
-      throw failure;
-    } finally {
-      pendingFakeMedia.remove();
-      pendingDisplay.remove();
-    }
-    if (shared != current) {
-      shared.fakeMedia = Boolean.TRUE.equals(fakeMedia);
-      shared.display = wantedDisplay != null ? wantedDisplay : (headless ? null : System.getenv("DISPLAY"));
-      if (profile != null && EPHEMERAL_SOURCE.equals(profile.source())) {
-        shared.ephemeralDir = Path.of(profile.userDataDir());
+      if (wantedDisplay != null && current != null && !wantedDisplay.equals(current.display)) {
+        throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT, "display=" + wantedDisplay
+            + " differs from the retained browser (" + current.describe() + "). The display is fixed at launch",
+            "Omit --display to reuse the current browser. A second browser on another display starts on this port"
+                + " for the local Chrome without a selected or ephemeral profile and without fakeMedia; otherwise use another --port.");
+      }
+      if (current == null) {
+        requireUsableDisplay(headless, wantedDisplay);
+      }
+      pendingFakeMedia.set(Boolean.TRUE.equals(fakeMedia));
+      pendingDisplay.set(wantedDisplay);
+      try {
+        shared = sharedBrowser(headless, requested, profile);
+      } catch (RuntimeException | Error failure) {
+        if (current == null && profile != null && EPHEMERAL_SOURCE.equals(profile.source())) {
+          deleteEphemeral(Path.of(profile.userDataDir()));
+        }
+        throw failure;
+      } finally {
+        pendingFakeMedia.remove();
+        pendingDisplay.remove();
+      }
+      if (shared != current) {
+        shared.fakeMedia = Boolean.TRUE.equals(fakeMedia);
+        shared.display = wantedDisplay != null ? wantedDisplay : (headless ? null : System.getenv("DISPLAY"));
+        if (profile != null && EPHEMERAL_SOURCE.equals(profile.source())) {
+          shared.ephemeralDir = Path.of(profile.userDataDir());
+        }
       }
     }
     applyProfileHistory(shared, existedBefore);
@@ -765,6 +783,125 @@ public class PlaywrightService {
       throw new CommandRefusedException(ActionError.DISPLAY_UNAVAILABLE, "This service has no DISPLAY, so a headed browser cannot open",
           "Pass --display :1 for an existing X/VNC session, or --headless when no one needs to see the window.");
     }
+  }
+
+  /** Identifies how a browser is shown: {@code headless}, or {@code display:<X display>}. */
+  static String browserKey(boolean headless, String display) {
+    if (headless) {
+      return "headless";
+    }
+    String shown = display != null ? display : System.getenv("DISPLAY");
+    return "display:" + (shown == null || shown.isBlank() ? "default" : shown.trim());
+  }
+
+  /** Profile directory of a side browser, next to the managed Chrome profile. */
+  static Path sideProfileDir(String key) {
+    Path managed = ChromeBrowser.cdpManagedProfileDir();
+    String suffix = key.replace("display:", "display-").replaceAll("[^A-Za-z0-9-]", "");
+    return managed.resolveSibling(managed.getFileName() + "-" + suffix);
+  }
+
+  /**
+   * The browser for a start that differs from the retained one only in headless mode or display.
+   *
+   * <p>Returns null when the request fits the retained browser, or differs in something a side
+   * browser cannot provide (browser type, a selected or ephemeral profile, media flags); the normal
+   * path then reuses the retained browser or explains the conflict. Side browsers always run the
+   * local Chrome over CDP with their own managed profile, so logins made in the main profile are
+   * not visible there.
+   */
+  private static SharedBrowser sideBrowser(boolean headless, String display, BrowserChoice requested,
+      BrowserProfile profile, Boolean fakeMedia, SharedBrowser current, java.util.Set<String> existedBefore) {
+    if (profile != null || Boolean.TRUE.equals(fakeMedia) || BrowserChoice.resolve(requested) != BrowserChoice.CHROME) {
+      return null;
+    }
+    String key = browserKey(headless, display);
+    SharedBrowser existing = SIDE_BROWSERS.get(key);
+    if (existing != null) {
+      return existing;
+    }
+    if (current == null || current.selectedProfile != null || current.ephemeralDir != null
+        || current.resolvedType != BrowserChoice.CHROME || key.equals(browserKey(current.headless, current.display))) {
+      return null;
+    }
+    synchronized (PlaywrightService.class) {
+      existing = SIDE_BROWSERS.get(key);
+      if (existing != null) {
+        return existing;
+      }
+      requireUsableDisplay(headless, display);
+      Path dir = sideProfileDir(key).toAbsolutePath().normalize();
+      if (Files.exists(dir)) {
+        existedBefore.add(dir.toString());
+      }
+      try {
+        Files.createDirectories(dir.resolve("Default"));
+        clearStaleLocks(dir);
+      } catch (java.io.IOException e) {
+        throw new IllegalStateException("Could not create the profile for " + key + ": " + e.getMessage());
+      }
+      BrowserProfile selection = new BrowserProfile(null, dir.toString(), "Default", "side", true, null, key);
+      pendingFakeMedia.set(false);
+      pendingDisplay.set(display);
+      SharedBrowser launched;
+      try {
+        launched = launchSelectedProfile(headless, selection);
+      } finally {
+        pendingFakeMedia.remove();
+        pendingDisplay.remove();
+      }
+      launched.display = headless ? null : (display != null ? display : System.getenv("DISPLAY"));
+      SIDE_BROWSERS.put(key, launched);
+      log.info("Side browser {} started beside {} (profile {})", key, current.describe(), dir);
+      return launched;
+    }
+  }
+
+  /** Whether the task's browser runs headless; external hosts and unknown browsers count as headed. */
+  static boolean isHeadless(BrowserInstance instance) {
+    if (instance == null || instance.externalBrowser != null) {
+      return false;
+    }
+    SharedBrowser owner = browserOf(instance);
+    return owner != null && owner.headless;
+  }
+
+  /**
+   * Removes the singleton markers a killed Chrome leaves in a side browser's own profile, such as
+   * after a forced service restart. Only when no live process holds the directory; a profile that is
+   * really in use is left alone and the launch reports it.
+   */
+  static void clearStaleLocks(Path dir) throws java.io.IOException {
+    if (ChromeBrowser.profileInUse(dir)) {
+      return;
+    }
+    for (String lock : List.of("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile")) {
+      Files.deleteIfExists(dir.resolve(lock));
+    }
+  }
+
+  /** The browser whose context a task uses: the shared one or a side browser. */
+  static SharedBrowser browserOf(BrowserInstance instance) {
+    SharedBrowser main = sharedBrowser;
+    if (instance == null || instance.context == null) {
+      return main;
+    }
+    if (main != null && main.context == instance.context) {
+      return main;
+    }
+    for (SharedBrowser side : SIDE_BROWSERS.values()) {
+      if (side.context == instance.context) {
+        return side;
+      }
+    }
+    return main;
+  }
+
+  private static Kv describeBrowser(SharedBrowser browser) {
+    return Kv.by("type", browser.resolvedType.id()).set("engine", browser.engine.id())
+        .set("profileDir", browser.profileDir.toAbsolutePath().toString()).set("headless", browser.headless)
+        .set("display", browser.display).set("ephemeral", browser.ephemeralDir != null)
+        .set("mode", browser.browser != null ? "cdp" : "managed");
   }
 
   private static final ThreadLocal<String> pendingDisplay = new ThreadLocal<>();
@@ -1082,7 +1219,8 @@ public class PlaywrightService {
         return current;
       }
       String reuse = current.headless != headless
-          ? "Retry with " + (current.headless ? "--headless" : "--headful") + " to share it; "
+          ? "Retry with " + (current.headless ? "--headless" : "--headful") + " to share it; a headless/headed pair of the"
+              + " local Chrome can run side by side on this port when neither selects a profile or fakeMedia; "
           : "";
       throw new CommandRefusedException(ActionError.BROWSER_CONFIG_CONFLICT,
           "Browser configuration differs from the retained browser (" + current.describe() + ")",
@@ -1472,6 +1610,7 @@ public class PlaywrightService {
     if (sharedBrowser == browser) {
       sharedBrowser = null;
     }
+    SIDE_BROWSERS.values().remove(browser);
     for (BrowserInstance instance : INSTANCES.values()) {
       if (instance.context == browser.context) {
         instance.detached = true;
@@ -1579,7 +1718,7 @@ public class PlaywrightService {
 
   public Kv browserInfo(Long taskId) {
     BrowserInstance instance = INSTANCES.get(taskId);
-    SharedBrowser browser = sharedBrowser;
+    SharedBrowser browser = browserOf(instance);
     if (instance != null && instance.externalIdentity != null) { return externalObservation(instance); }
     if (instance == null || browser == null) {
       return null;
@@ -1662,14 +1801,11 @@ public class PlaywrightService {
     }
     Kv data = Kv.by("count", tasks.size()).set("tasks", tasks);
     SharedBrowser browser = sharedBrowser;
-    if (browser != null) {
-      data.set("browser", Kv.by("type", browser.resolvedType.id()).set("engine", browser.engine.id())
-          .set("profileDir", browser.profileDir.toAbsolutePath().toString()).set("headless", browser.headless)
-          .set("display", browser.display).set("ephemeral", browser.ephemeralDir != null)
-          .set("mode", browser.browser != null ? "cdp" : "managed"));
-    } else {
-      data.set("browser", null);
-    }
+    data.set("browser", browser == null ? null : describeBrowser(browser));
+    // Side browsers, such as a headed window on a VNC display beside a headless browser.
+    List<Kv> sides = new ArrayList<>();
+    SIDE_BROWSERS.forEach((key, side) -> sides.add(describeBrowser(side).set("key", key)));
+    data.set("sideBrowsers", sides);
     Kv launching = launchState;
     if (launching != null) {
       Long started = launching.getLong("startedAt");
@@ -1690,6 +1826,10 @@ public class PlaywrightService {
         .set("profileDir", inst.profileDir == null ? null : inst.profileDir.toAbsolutePath().toString())
         .set("tabCount", pagesOf(inst).size()).set("captureSeq", inst.captureSeq.get())
         .set("inflight", inst.inflight.get()).set("recorderAttachedAt", inst.recorderAttachedAt);
+    SharedBrowser owner = inst.externalBrowser == null ? browserOf(inst) : null;
+    if (owner != null) {
+      info.set("headless", owner.headless).set("display", owner.display);
+    }
     try {
       info.set("url", inst.page.url()).set("title", safeTitle(inst.page));
     } catch (PlaywrightException e) {
@@ -1820,6 +1960,9 @@ public class PlaywrightService {
       }
     }
     closeSharedBrowser();
+    for (SharedBrowser side : new ArrayList<>(SIDE_BROWSERS.values())) {
+      closeBrowser(side);
+    }
     return RespBodyVo.ok(Kv.by("closedTasks", closed).set("remainingTasks", INSTANCES.size()));
   }
 
@@ -2913,6 +3056,10 @@ public class PlaywrightService {
       Kv media = mediaHint(inst.page);
       if (media != null) {
         kv.set(media);
+      }
+      Kv challenge = detectBotChallenge(inst.page, isHeadless(inst));
+      if (challenge != null) {
+        kv.set("challenge", challenge);
       }
 
       // 索引清单:text 是给人读的树,index 才是按索引命令要用的东西,直接内联免得再跑一趟。
@@ -4309,7 +4456,7 @@ public class PlaywrightService {
 
   /** 元素操作失败时的提示:超时只表示未满足可操作条件，完整调用日志用于区分具体原因 */
   private static String actionFailure(String action, PlaywrightException e) {
-    return ActionError.describe(action, e.getMessage());
+    return ActionError.describe(action, e.getMessage()) + ActionError.candidates(e.getMessage());
   }
 
   /** 等待类接口失败时的提示:等待超时和元素失效不是一回事 */
@@ -4329,7 +4476,7 @@ public class PlaywrightService {
    * 被隐藏,fill 会等满 5 秒后失败)。
    */
   private static String locateFailure(String action, String target, PlaywrightException e) {
-    return ActionError.describe(action, e.getMessage()) + ": " + target;
+    return ActionError.describe(action, e.getMessage()) + ": " + target + ActionError.candidates(e.getMessage());
   }
 
   /** 按索引做一次点击类操作(dblclick/hover/focus/check/uncheck 共用),带索引失效重试 */
@@ -4503,6 +4650,33 @@ public class PlaywrightService {
    * @param action   命令名,只用于错误信息
    * @throws PlaywrightException 匹配 0 个({@link ActionError#ELEMENT_NOT_FOUND})
    */
+  /** Leading tag of a selector such as {@code textarea[name=x]}. */
+  private static final Pattern SELECTOR_TAG = Pattern.compile("^\\s*([A-Za-z][\\w-]*)");
+
+  /**
+   * Elements with the selector's tag, written as selectors, so a wrong attribute shows its fix.
+   * Empty when the selector has no leading tag or the page cannot be read.
+   */
+  static String similarElements(Frame root, String selector) {
+    java.util.regex.Matcher tag = SELECTOR_TAG.matcher(selector);
+    if (!tag.find()) {
+      return "";
+    }
+    try {
+      Object found = root.evaluate("tag => [...document.querySelectorAll(tag)].slice(0, 5).map(e => {"
+          + " const attr = ['id', 'name', 'aria-label', 'placeholder', 'type'].find(a => e.getAttribute(a));"
+          + " return attr === 'id' ? tag + '#' + e.id : attr ? tag + '[' + attr + '=\"' + e.getAttribute(attr) + '\"]' : tag; })",
+          tag.group(1));
+      if (found instanceof List<?> list && !list.isEmpty()) {
+        return ActionError.CANDIDATES_MARK + "的 " + tag.group(1) + "：" + list.stream().map(String::valueOf)
+            .collect(java.util.stream.Collectors.joining(", "));
+      }
+      return ActionError.CANDIDATES_MARK + "没有 " + tag.group(1) + " 元素";
+    } catch (RuntimeException e) {
+      return "";
+    }
+  }
+
   static ActionTarget resolveActionTarget(Frame root, String selector, String action) {
     return resolveActionTarget(root, selector, action, null);
   }
@@ -4524,7 +4698,8 @@ public class PlaywrightService {
     if (matched == 0) {
       throw new PlaywrightException(ActionError.ELEMENT_NOT_FOUND + " " + action + " 的选择器 " + selector
           + " 在页面里匹配到 0 个元素:这不是超时也不是被遮挡 —— "
-          + "先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系(input 未必在它所属的面板元素里面)");
+          + "先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系(input 未必在它所属的面板元素里面)"
+          + similarElements(root, selector));
     }
     if (nth != null) {
       if (nth < 0 || nth >= matched) {
@@ -5538,8 +5713,13 @@ public class PlaywrightService {
           options.setTimeout(timeoutMs);
         }
         Response rsp = inst.page.navigate(url, options);
-        return RespBodyVo.ok(Kv.by("status", rsp == null ? 0 : rsp.status())
-            .set("url", inst.page.url()).set("waitUntil", stage.name().toLowerCase(java.util.Locale.ROOT)));
+        Kv landed = Kv.by("status", rsp == null ? 0 : rsp.status())
+            .set("url", inst.page.url()).set("waitUntil", stage.name().toLowerCase(java.util.Locale.ROOT));
+        Kv challenge = detectBotChallenge(inst.page, isHeadless(inst));
+        if (challenge != null) {
+          landed.set("challenge", challenge).set("warning", challenge.getStr("message"));
+        }
+        return RespBodyVo.ok(landed);
       } catch (PlaywrightException e) {
         // 伪故障兜底:这条异常可能只是事件泵投递过来的(见 ActionError#SPURIOUS_DISPATCH),
         // 而导航**其实已经成功**。实测 go_to_url 连试 3 次都报 Object doesn't exist: response@…,
@@ -5560,6 +5740,52 @@ public class PlaywrightService {
         return RespBodyVo.fail("go_to_url 失败：" + briefMessage(e.getMessage()));
       }
     });
+  }
+
+  /**
+   * Signs of a bot check that stands in front of the real page, such as Cloudflare's "Just a
+   * moment..." interstitial. Matches the interstitial's own markers, not a site that merely embeds
+   * a Turnstile widget in a form, so a login page with a captcha field is not reported.
+   */
+  private static final String BOT_CHALLENGE_PROBE_JS = """
+      () => {
+        const title = (document.title || '').trim();
+        const body = (document.body && document.body.innerText || '').slice(0, 2000);
+        const marker = document.querySelector('#challenge-form, #challenge-running, #challenge-stage, '
+          + '#cf-challenge-running, .cf-browser-verification, script[src*="/cdn-cgi/challenge-platform/"]');
+        const titled = /^just a moment/i.test(title) || /attention required! \\| cloudflare/i.test(title);
+        const worded = /performing security verification|verify you are human|checking your browser before accessing/i.test(body);
+        if (!marker && !titled && !worded) return null;
+        return { vendor: 'cloudflare', title: title, marker: marker ? (marker.id || marker.tagName.toLowerCase()) : null };
+      }
+      """;
+
+  /**
+   * The bot check the page shows instead of its content, or null. Read-only; anything unreadable
+   * counts as no challenge, since this only adds advice to a receipt.
+   */
+  static Kv detectBotChallenge(Page page, boolean headless) {
+    if (page == null) {
+      return null;
+    }
+    try {
+      Object raw = page.evaluate(BOT_CHALLENGE_PROBE_JS);
+      if (!(raw instanceof Map<?, ?> found)) {
+        return null;
+      }
+      return Kv.by("errorCode", ActionError.BOT_CHALLENGE).set("vendor", found.get("vendor"))
+          .set("title", found.get("title")).set("marker", found.get("marker"))
+          .set("headless", headless)
+          .set("message", "[" + ActionError.BOT_CHALLENGE + "] The page is a Cloudflare bot check, not the site's content. "
+              + (headless
+                  ? "Headless browsers are usually held here: start a headed browser with a new task id (start --display :1"
+                      + " on a machine without a monitor) and open the page there."
+                  : "A headed browser usually passes it within seconds: wait for the title to change with"
+                      + " wait_for_function, and if it stays, ask the user to pass it with request_human_input.")
+              + " Do not click the check repeatedly or reload in a loop.");
+    } catch (PlaywrightException e) {
+      return null;
+    }
   }
 
   /** Chrome 自己的网络错误页用的地址前缀(页面内容就是那几行「无法访问此网站」) */
@@ -6792,7 +7018,8 @@ public class PlaywrightService {
     int matched = all.count();
     if (matched == 0) {
       throw new IllegalArgumentException(action + " 的选择器 " + selector + " 在页面里匹配到 0 个元素:"
-          + "这不是超时也不是被遮挡 —— 先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系");
+          + "这不是超时也不是被遮挡 —— 先 get_element_count 复核数量,再检查选择器里的父子/兄弟关系"
+          + similarElements(root, selector));
     }
     if (nth == null) {
       return all.first();
@@ -7431,6 +7658,9 @@ public class PlaywrightService {
         }
         // 「到底等没等 Promise」以前只能靠猜,于是有人退回同步 XHR 来规避。这里如实回报
         data.set("awaited", true);
+        if (result == null && !RETURN_STATEMENT.matcher(raw).find()) {
+          data.set("hint", "The script produced no value (null). To read one, use return or end with an expression.");
+        }
         // 生效的时间预算一并报出来:排查「为什么这次 60 秒就断了」时不用再去翻配置
         data.set("evalTimeoutMs", evalBudget);
         return RespBodyVo.ok(data);
@@ -7452,6 +7682,10 @@ public class PlaywrightService {
         RespBodyVo failure = RespBodyVo.fail("执行 JavaScript 失败：" + message);
         Kv detail = Kv.by("error", scriptError(e)).set("scriptPreview", scriptPreview)
             .set("scriptLength", script.length());
+        // A syntax error is raised while parsing, before any of the script runs.
+        if (message.startsWith("SyntaxError")) {
+          detail.set("errorCode", "SCRIPT_SYNTAX_ERROR").set("actionExecuted", false).set("actionStatus", "not-started");
+        }
         // 「脚本被截断」是 Windows 上最常见的一类假故障:多行脚本经 cmd/PowerShell 传参时被吃掉,
         // 到服务端的只剩第一行,报错却是语法级的 "Unexpected end of input" —— 只说语法,人根本想不到
         // 是传输层把脚本切了。这里直接说破,并给出传文件的写法
@@ -7595,11 +7829,91 @@ public class PlaywrightService {
     if (FUNCTION_LIKE.matcher(script).find()) {
       return script;
     }
+    String arrow = AWAIT_KEYWORD.matcher(script).find() ? "async () => " : "() => ";
     if (RETURN_STATEMENT.matcher(script).find()) {
-      return "() => {" + script + "}";
+      return arrow + "{" + script + "}";
     }
-    String expression = script.endsWith(";") ? script.substring(0, script.length() - 1).trim() : script;
-    return "() => (" + expression + ")";
+    String expression = script;
+    while (expression.endsWith(";")) {
+      expression = expression.substring(0, expression.length() - 1).trim();
+    }
+    // Several statements without a return: the value is the last one's, as in a console.
+    // Wrapping them as one expression is a syntax error, which used to come back as a bare null.
+    int last = lastTopLevelStatement(expression);
+    if (last > 0) {
+      String tail = expression.substring(last).trim();
+      String head = expression.substring(0, last);
+      if (STATEMENT_KEYWORD.matcher(tail).find()) {
+        return arrow + "{" + expression + "}";
+      }
+      return arrow + "{" + head + " return (" + tail + ");}";
+    }
+    if (STATEMENT_KEYWORD.matcher(expression).find()) {
+      return arrow + "{" + expression + "}";
+    }
+    return arrow + "(" + expression + ")";
+  }
+
+  /** A top-level statement that cannot be returned as a value. */
+  private static final Pattern STATEMENT_KEYWORD = Pattern.compile(
+      "^(const|let|var|if|for|while|do|switch|try|throw|function|class|import|export|break|continue)\\b|^\\{");
+
+  /** Top-level await needs an async wrapper. */
+  private static final Pattern AWAIT_KEYWORD = Pattern.compile("(^|[^\\w$.])await\\b");
+
+  /**
+   * Start index of the last statement after a top-level semicolon, or -1 when the script is a
+   * single statement. Strings, template literals, comments and brackets are skipped; a regular
+   * expression literal holding a semicolon is not recognized and leaves the script as one statement
+   * at worst, which reports a syntax error as before.
+   */
+  static int lastTopLevelStatement(String script) {
+    int depth = 0;
+    int last = -1;
+    // Whether code, not just whitespace or comments, follows the last top-level semicolon.
+    boolean codeAfter = false;
+    for (int i = 0; i < script.length(); i++) {
+      char c = script.charAt(i);
+      if (c == '/' && i + 1 < script.length() && script.charAt(i + 1) == '/') {
+        int end = script.indexOf('\n', i);
+        i = end < 0 ? script.length() : end;
+        continue;
+      }
+      if (c == '/' && i + 1 < script.length() && script.charAt(i + 1) == '*') {
+        int end = script.indexOf("*/", i + 2);
+        i = end < 0 ? script.length() : end + 1;
+        continue;
+      }
+      if (Character.isWhitespace(c)) {
+        continue;
+      }
+      if (c == ';' && depth == 0) {
+        last = i + 1;
+        codeAfter = false;
+        continue;
+      }
+      codeAfter = true;
+      if (c == '\'' || c == '"' || c == '`') {
+        i = skipQuoted(script, i, c);
+      } else if (c == '(' || c == '[' || c == '{') {
+        depth++;
+      } else if (c == ')' || c == ']' || c == '}') {
+        depth = Math.max(0, depth - 1);
+      }
+    }
+    return last > 0 && codeAfter ? last : -1;
+  }
+
+  private static int skipQuoted(String script, int start, char quote) {
+    for (int i = start + 1; i < script.length(); i++) {
+      char c = script.charAt(i);
+      if (c == '\\') {
+        i++;
+      } else if (c == quote) {
+        return i;
+      }
+    }
+    return script.length();
   }
 
   /**
@@ -9552,7 +9866,7 @@ public class PlaywrightService {
 
   public RespBodyVo pdf(Long browserId, String path) {
     return withInstance(browserId, inst -> {
-      SharedBrowser browser = sharedBrowser;
+      SharedBrowser browser = browserOf(inst);
       if (browser != null && browser.engine.isFirefox()) {
         // 与其让 Playwright 抛一句英文的「only supported in Chromium」,不如直接说清怎么改
         return RespBodyVo.fail("pdf 失败：PDF 导出只有 Chromium 支持，当前引擎是 firefox"
@@ -9682,7 +9996,7 @@ public class PlaywrightService {
         return RespBodyVo.fail("grant_permissions failed: the current page has no http(s) origin (" + inst.page.url()
             + "); navigate to the target site first or pass origin explicitly");
       }
-      SharedBrowser shared = sharedBrowser;
+      SharedBrowser shared = browserOf(inst);
       boolean firefox = inst.externalBrowser == null && shared != null && shared.resolvedType.isFirefox();
       Set<String> granted = new LinkedHashSet<>(permissions);
       granted.addAll(firefox ? BrowserEngine.firefoxPermissions() : List.of("clipboard-read", "clipboard-write",
@@ -9752,7 +10066,7 @@ public class PlaywrightService {
         // opts 为空 = 这次浏览器是「自己拉进程 + CDP 接上」起来的。本机 Chrome 与 Edge **都**走这条
         // (Chrome 走 CDP 是默认行为,不再只在「用户自己的 profile」时才走),所以原因不能再说成
         // 「用用户自己的 Chrome profile」——那样会把 browser=chrome 的调用方引到一个不存在的开关上。
-        SharedBrowser shared = sharedBrowser;
+        SharedBrowser shared = browserOf(inst);
         String which = shared == null ? "本机 Chrome / Edge" : "browser=" + shared.resolvedType.id();
         return RespBodyVo.fail("set_credentials 失败：当前浏览器走的是「自己拉进程 + CDP 接入」这条启动路径（"
             + which + "），HTTP 认证凭据只能在 Playwright 创建上下文时设置，这条路径上没法重建上下文；"
@@ -11826,20 +12140,29 @@ public class PlaywrightService {
     synchronized (PlaywrightService.class) {
       BrowserInstance attached = INSTANCES.get(browserId);
       if (attached != null && attached.externalBrowser != null) { return closeTask(browserId); }
-      if (closeBrowser && INSTANCES.keySet().stream().anyMatch(id -> !id.equals(browserId))) {
+      SharedBrowser retained = attached == null ? null : browserOf(attached);
+      if (closeBrowser && attached != null && INSTANCES.values().stream()
+          .anyMatch(other -> other != attached && other.context == attached.context)) {
         return RespBodyVo.fail("Other tasks are active; closeBrowser cannot close their browser");
       }
-      // A completed task may explicitly release its retained idle browser later.
-      if (closeBrowser && INSTANCES.isEmpty()) {
-        closeSharedBrowser();
-        return RespBodyVo.ok(Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0));
+      // A completed task may explicitly release retained idle browsers later.
+      if (closeBrowser && attached == null) {
+        List<SharedBrowser> idle = idleBrowsers();
+        if (idle.isEmpty() && !INSTANCES.isEmpty()) {
+          return RespBodyVo.fail("Other tasks are active; closeBrowser cannot close their browser");
+        }
+        for (SharedBrowser browser : idle) {
+          closeBrowser(browser);
+        }
+        return RespBodyVo.ok(Kv.by("browserRetained", sharedBrowser != null || !SIDE_BROWSERS.isEmpty())
+            .set("pagesRetained", false).set("remainingTasks", INSTANCES.size()));
       }
       RespBodyVo result = closeTask(browserId);
-      SharedBrowser retained = sharedBrowser;
-      boolean ephemeralIdle = retained != null && retained.ephemeralDir != null && INSTANCES.isEmpty();
+      boolean ephemeralIdle = retained != null && retained.ephemeralDir != null
+          && INSTANCES.values().stream().noneMatch(other -> other.context == retained.context);
       if ((closeBrowser || ephemeralIdle) && result.isOk()) {
-        boolean deleted = closeSharedBrowser();
-        Kv closed = Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", 0)
+        boolean deleted = closeBrowser(retained);
+        Kv closed = Kv.by("browserRetained", false).set("pagesRetained", false).set("remainingTasks", INSTANCES.size())
             .set("ephemeralProfileDeleted", ephemeralIdle && deleted);
         if (ephemeralIdle && !deleted) {
           closed.set("warning", "Temporary profile cleanup is incomplete; remove it after all browser processes exit.")
@@ -11868,11 +12191,12 @@ public class PlaywrightService {
           .set("pagesRetained", true).set("remainingTasks", INSTANCES.size()));
     }
     List<Page> taskPages = pagesOf(inst);
-    boolean keepPages = INSTANCES.isEmpty() && sharedBrowser != null;
+    SharedBrowser owner = browserOf(inst);
+    boolean keepPages = owner != null && INSTANCES.values().stream().noneMatch(other -> other.context == inst.context);
     if (keepPages) {
       // Hand completed pages to the user; future tasks must not claim them.
-      sharedBrowser.foreignPages.removeIf(Page::isClosed);
-      sharedBrowser.foreignPages.addAll(taskPages);
+      owner.foreignPages.removeIf(Page::isClosed);
+      owner.foreignPages.addAll(taskPages);
     }
     for (Page page : taskPages) {
       try {
@@ -11888,7 +12212,7 @@ public class PlaywrightService {
     inst.pages.clear();
     // 注意:这里**不关** Playwright。它是全进程共享的 driver,关掉会把其它任务的浏览器一起搞死;
     // 它由 JVM 退出时的 shutdown hook 负责收尾。
-    return RespBodyVo.ok(Kv.by("browserRetained", sharedBrowser != null).set("pagesRetained", keepPages)
+    return RespBodyVo.ok(Kv.by("browserRetained", owner != null).set("pagesRetained", keepPages)
         .set("remainingTasks", INSTANCES.size()));
   }
 
@@ -11901,11 +12225,31 @@ public class PlaywrightService {
    * {@link ChromeLauncher#stop(Process)} 只是兜底。
    */
   private static boolean closeSharedBrowser() {
-    SharedBrowser browser;
+    return closeBrowser(sharedBrowser);
+  }
+
+  /** Browsers no task uses, shared or side. */
+  private static List<SharedBrowser> idleBrowsers() {
+    List<SharedBrowser> idle = new ArrayList<>();
+    SharedBrowser main = sharedBrowser;
+    if (main != null) {
+      idle.add(main);
+    }
+    idle.addAll(SIDE_BROWSERS.values());
+    idle.removeIf(browser -> INSTANCES.values().stream().anyMatch(task -> task.context == browser.context));
+    return idle;
+  }
+
+  /** Closes one browser, the shared one or a side browser, and forgets it. */
+  private static boolean closeBrowser(SharedBrowser browser) {
     synchronized (PlaywrightService.class) {
-      browser = sharedBrowser;
       // 先置空再 close:onClose 回调里也会置空,但它不抢锁,顺序反了也没关系
-      sharedBrowser = null;
+      if (browser != null && sharedBrowser == browser) {
+        sharedBrowser = null;
+      }
+      if (browser != null) {
+        SIDE_BROWSERS.values().remove(browser);
+      }
     }
     if (browser == null || (browser.context == null && browser.process == null)) {
       return browser == null || deleteEphemeral(browser.ephemeralDir);
@@ -11937,6 +12281,9 @@ public class PlaywrightService {
     SharedBrowser browser = sharedBrowser;
     if (browser == null) {
       return instance;
+    }
+    if (browserOf(instance) != browser) {
+      throw new IllegalStateException("Only the main browser can be rebuilt; this task runs in a side browser");
     }
     if (browser.context.pages().stream().anyMatch(page -> !page.isClosed() && !instance.pages.contains(page)
         && (browser.foreignPages.contains(page) || !"about:blank".equals(page.url())))) {

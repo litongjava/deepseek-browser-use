@@ -15,7 +15,7 @@
 - **过程留档**：保存页面文本、显式请求的截图及调用记录，支持精简响应和字段筛选。
 - **桌面 WebView 接入**：可连接已开放 CDP 的浏览器页面或 WebView2 应用；结束外部连接任务时仅断开连接，保留宿主。
 
-适用于后台操作、信息查询、表单处理和网页测试。仓库还提供铁路查询、企业微信、视频上传等[专题技能](.agents/skills)，以及可显式执行的[站点配方](recipes/README.md)。
+适用于后台操作、信息查询、表单处理和网页测试。技能内附铁路查询、企业微信、视频上传等[站点案例](.agents/skills/deepseek-browser-use/references/cases)，以及可显式执行的[站点配方](recipes/README.md)。
 
 ## 快速开始
 
@@ -68,7 +68,7 @@ dsb --id 1001 state --screenshot
 dsb --id 1001 close
 ```
 
-`start` 默认显示窗口；需要无头模式时加 `--headless`。`state` 默认不截图，`--screenshot` 才生成图片。
+`start` 默认显示窗口；需要无头模式时加 `--headless`。没有显示器的 Linux 主机上用 `--display :1` 显示到 VNC。有头和无头任务可以在同一个服务里同时运行：显示方式不同的任务各用一个 Chrome，有头的那个用单独的 profile。`state` 默认不截图，`--screenshot` 才生成图片。
 
 `close` 结束当前任务。最后一个托管任务结束时，浏览器和页面保留；需要显式关闭浏览器时使用 `close --close-browser`，存在其他任务时会拒绝关闭。
 
@@ -94,20 +94,20 @@ java -jar deepseek-browser-use-1.0.0-windows-x64.jar
 
 ### Skill + CLI
 
-适用于 DSH、Claude Code、Codex、DeepSeek Code 等能执行命令行的智能体。技能源统一位于 [`.agents/skills/`](.agents/skills)，可使用同步脚本安装到对应工具：
+适用于 DSH、DeepSeek Code、Claude Code、Codex 等能执行命令行的智能体。仓库只提供一个技能 [`deepseek-browser-use`](.agents/skills/deepseek-browser-use/SKILL.md)：入口只保留 dsb 操作规则，环境配置、命令参考和站点案例放在 `references/` 中由模型按需读取；环境缺失时模型可按 [环境配置](.agents/skills/deepseek-browser-use/references/setup.md) 自行安装。使用同步脚本安装到对应工具：
 
 ```bash
 # 预览安装内容
 node scripts/sync-skills.mjs --all --dry-run
 
 # 选择需要的工具，也可只写其中一个
-node scripts/sync-skills.mjs dsh claude codex deepseek
+node scripts/sync-skills.mjs dsh deepseek-code claude codex
 
 # 检查安装状态
 node scripts/sync-skills.mjs --status
 ```
 
-DSH 与 Codex 保留技能原名；Claude Code 使用 `dsb-skills` 插件命名空间，例如 `/dsb-skills:deepseek-browser-use`。DeepSeek Code 安装到 `~/.deepseek-code/skills`（桌面端读取），其独立 CLI 通过 `~/.claude/skills` 发现同一批技能。同步时遇到未受脚本管理的同名技能，应先检查差异。
+DSH、DeepSeek Code（`~/.deepseek-code/skills`）与 Codex 保留技能原名；Claude Code 使用 `dsb-skills` 插件命名空间，例如 `/dsb-skills:deepseek-browser-use`。同步时遇到未受脚本管理的同名技能，应先检查差异。
 
 可直接使用以下提示词：
 
@@ -118,7 +118,7 @@ DSH 与 Codex 保留技能原名；Claude Code 使用 `dsb-skills` 插件命名�
 任务：打开 https://example.com，读取页面标题与正文。
 ```
 
-CLI 参数、输出筛选和后端管理见 [dsb 文档](dsb/README.md)；站点任务按需加载对应专题技能。
+CLI 参数、输出筛选和后端管理见 [dsb 文档](dsb/README.md)；站点任务由技能按需读取对应案例。
 
 ## 工作方式与常用配置
 
@@ -266,4 +266,4 @@ node scripts/package/build-release.mjs --platform=all
 
 Tong Li（李通） · [GitHub @litongjava](https://github.com/litongjava) · [litongjava@qq.com](mailto:litongjava@qq.com) · 微信 `jdk131219`
 
-采用 [MIT License](LICENSE)。欢迎通过 [Issues](https://github.com/litongjava/deepseek-browser-use/issues)反馈问题或补充站点技能。
+采用 [MIT License](LICENSE)。欢迎通过 [Issues](https://github.com/litongjava/deepseek-browser-use/issues)反馈问题或补充站点案例。

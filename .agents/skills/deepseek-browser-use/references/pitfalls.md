@@ -217,7 +217,7 @@
     （查监听器、查遮挡），方向全错。实测把一个 input 的**兄弟关系写成了父子关系**
     （`.tag-pre-wrp input.input-val`，而那个 input 其实是 `.tag-pre-wrp` 的兄弟），白花了两轮。
 
-    - 看到 `ELEMENT_NOT_FOUND`：**去改选择器**，先 `get_element_count` 复核数量，再检查父子/兄弟关系；
+    - 看到 `ELEMENT_NOT_FOUND`：**去改选择器**，先 `get_element_count` 复核数量，再检查父子/兄弟关系。选择器以标签开头时（如 `textarea[name=content]`），报错末尾会列出页面上前 5 个同类元素（如 `textarea[name="target"]`），属性写错时照着改即可；
     - 匹配到**多个**同名控件时，动作类命令会**优先挑可见的那个**，并把解析结果写进回执
       （`matched` / `chosenIndex` / `scanned` / `selectorNote`）。站点的同名控件常有两份，
       另一份在隐藏的弹窗里且是 0×0 —— 这时 `get_element_count` 说「有 2 个」而 `locator.first()` 挑到的
@@ -713,3 +713,4 @@
 - **`click_element_by_text` 默认是子串匹配**：短文本可能命中包含它的其他元素。需要精确匹配时传 `exact:true`，它以前不是这个命令的参数，传了会被忽略。
 - **部分 AWS 控制台页面渲染不出内容**：Compute Optimizer、EC2 在 dsb 的 Chrome 中主内容为空，Billing、Cost Management 正常，原因未查明。用 `get_page_diagnostics` 排查；CloudShell 可作为替代，输入用 `keyboard_type`。
 - **CloudShell 输出按终端宽度折行，且夹带 NBSP**：读取时先把 `\u00a0` 换成空格，再按行匹配结束标记。
+- **无头浏览器打开 Cloudflare 控制台会停在“Just a moment...”**：页面标题和正文显示 `Performing security verification`，以前回执照常成功，只能从正文发现。现在 `go_to_url` 和 `get_browser_state` 会带 `data.challenge`（`errorCode:BOT_CHALLENGE`）。处理方法：换一个任务 ID，用 `start --display :1` 开有头浏览器（默认端口已有无头浏览器时，服务会在同一端口另起一个），在里面打开同一地址，请用户通过验证或登录；不要在无头浏览器里反复点击验证框或循环刷新。有头浏览器打开时也会先短暂停在验证页，通常几秒内自动通过，`challenge.headless` 为 `false` 时先用 `wait_for_function` 等标题变化，仍未通过再请用户处理。表单里只嵌了 Turnstile 小组件的普通登录页不会报。

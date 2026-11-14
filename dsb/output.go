@@ -71,6 +71,9 @@ type Printer struct {
 	Raw bool
 	// SelectMissed 记录「这次 --select 打偏了」,由 report() 翻成退出码 3。
 	SelectMissed bool
+	// Failure holds the message of a failed command, so a missing --select path is
+	// reported as that failure rather than as a lost output of a completed action.
+	Failure string
 }
 
 // NewPrinter 按命令行开关造一个 Printer(对应 Python 的 printer_for)。
@@ -125,7 +128,9 @@ func (p *Printer) Response(response *Response, label string, hasIndex bool, inde
 			if p.Mode == "compact" {
 				message = compactText(message, 400)
 			}
-			detail += " msg=" + message
+			// The message leads: it names the fix (a suggested method or parameter), and a
+			// caller that truncates the line must still see it.
+			detail = " msg=" + message + detail
 		}
 		if p.Mode == "compact" {
 			for _, key := range []string{"result", "expectResult", "readback", "newTab", "hint", "warning", "popupNote", "execution"} {
@@ -213,7 +218,11 @@ func (p *Printer) JSON(value Value) {
 			picked, err := selectField(value, path)
 			if err != nil {
 				p.SelectMissed = true
-				p.Warn("Missing output field " + path + "; action may have completed. Read recorded response; do not replay.")
+				if p.Failure != "" {
+					p.Warn("Command failed, so field " + path + " is absent" + p.failureDetail(value))
+				} else {
+					p.Warn("Missing output field " + path + "; action may have completed. Read recorded response; do not replay.")
+				}
 				picked = nil
 			}
 			result.Set(alias, picked)
@@ -230,6 +239,13 @@ func (p *Printer) JSON(value Value) {
 		// 结果每次都被上千行整封回执淹掉)。只有路径确实不存在(例如单条命令没有 data.results)
 		// 才退回整封,并在 stderr 说明是退回去了,免得调用方以为投影生效了。
 		picked, err := selectField(value, *p.Select)
+		if err != nil && p.Failure != "" {
+			// The command itself failed: say why, instead of a null that reads like an empty result.
+			p.Warn(fmt.Sprintf("Command failed, so --select %s is absent%s", *p.Select, p.failureDetail(value)))
+			p.SelectMissed = true
+			p.printLine("null")
+			return
+		}
 		if err != nil {
 			p.Warn("Output selection failed after the response was available. The action may have completed. Do not repeat the action to fix output. If recorded, inspect it with dsb last without --select using the same session and record directory. This reads a local response, not the original command. With --no-record, last may show an older response.")
 			if p.SelectLenient {
@@ -258,6 +274,15 @@ func (p *Printer) JSON(value Value) {
 	} else {
 		p.printLine(EncodeJSON(value, encIndent2))
 	}
+}
+
+// failureDetail repeats the failure message only when warnBusinessFailure could not show it,
+// which happens when the printed value is a payload rather than the whole envelope.
+func (p *Printer) failureDetail(value Value) string {
+	if _, present := objGet(value, "ok").(bool); present {
+		return "."
+	}
+	return ": " + compactText(redactBodyText(p.Failure), 400)
 }
 
 // Keep business errors visible without changing projected stdout or replaying a request.

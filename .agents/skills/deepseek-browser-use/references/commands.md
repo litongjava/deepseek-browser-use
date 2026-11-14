@@ -10,9 +10,9 @@
 
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
-| `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选), `fakeMedia`(bool，可选), `display`(可选，如 `:1`，启动后不能更改), `ephemeral`(bool，可选，临时 profile，浏览器关闭时删除；仅 Chrome) | 开始一个任务；配置与已保留的浏览器冲突时报 `BROWSER_CONFIG_CONFLICT`，Linux 无显示器又要显示窗口时报 `DISPLAY_UNAVAILABLE`，两者都未启动任何东西；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法。`fakeMedia: true` = 假麦克风/摄像头（语音/视频通话测试），启动时固定，回读 `data.browser.fakeMedia` |
+| `start` | `id`(可选), `headless`(bool，默认 `false`，显示窗口), `browser`(可选，见下), `networkRecording`(bool，可选), `fakeMedia`(bool，可选), `display`(可选，如 `:1`，启动后不能更改), `ephemeral`(bool，可选，临时 profile，浏览器关闭时删除；仅 Chrome) | 开始一个任务；只有 `headless` 或 `display` 与已保留的浏览器不同时，在同一端口另起一个本机 Chrome（单独的 profile），之后同样显示方式的任务加入它；其他配置冲突时报 `BROWSER_CONFIG_CONFLICT`，Linux 无显示器又要显示窗口时报 `DISPLAY_UNAVAILABLE`，两者都未启动任何东西；返回 `data.id`，以及 `data.browser`（这次用的浏览器与 profile，见 `browsers.md`）。传 `id` 就把它当任务 ID。第一个任务会把共享的浏览器拉起来，之后的任务只是各领自己的页签。`networkRecording: false` = 这个任务**不记录请求/响应**（等价于把 `browser.network.record` 设成 `off`）：代价是 `get_requests` / `get_response_body` / `wait_for_response` 拿不到数据（回执会明说「没在记」），换来的是**彻底没有**那一族 `response@`/`request@` 伪故障 —— 踩到噪声风暴又不需要网络数据时，这是最干净的解法。`fakeMedia: true` = 假麦克风/摄像头（语音/视频通话测试），启动时固定，回读 `data.browser.fakeMedia` |
 | `delete_profile` | `name` | 删除 `browser.profiles.dir` 下的命名 profile 及其中的登录状态；使用中的 profile 会被拒绝，用户自己的 Chrome 目录不能用它删除 |
-| `close` | `id`, `closeBrowser`(bool，默认 false) | 结束任务；最后一个任务保留浏览器和页面（`ephemeral` 例外：浏览器随最后一个任务关闭，临时 profile 被删除）。显式 `closeBrowser:true` 才关闭浏览器，有其他任务时拒绝；任务已结束后仍可显式关闭闲置浏览器 |
+| `close` | `id`, `closeBrowser`(bool，默认 false) | 结束任务；最后一个任务保留浏览器和页面（`ephemeral` 例外：浏览器随最后一个任务关闭，临时 profile 被删除）。显式 `closeBrowser:true` 才关闭浏览器，只关这个任务所在的浏览器，同一浏览器上有其他任务时拒绝；任务已结束后仍可显式关闭所有闲置浏览器 |
 | `targets` | `endpoint` | 列出外部 CDP 端点上的页面，返回 `data.targets`（`targetId`、`url`、`type`、`title`）；只读，不建任务。`endpoint` 是浏览器/WebView2 的调试地址，不是 dsb 服务端口 |
 | `attach` | `id`(可选), `endpoint`, `targetId` 或 `url`(精确匹配，二选一) | 把一个外部 CDP 页面接成任务，之后照常用页面命令。必须恰好匹配一个目标：零个报 `EXTERNAL_TARGET_NOT_FOUND`，多个报 `EXTERNAL_TARGET_AMBIGUOUS`，附候选 `targets` 与 `matched`，未执行（`not-started`），修正后可重试。外部任务固定在该页面：不认领弹窗、不能切换/新开/关闭页签；`close` 只断开连接，不关外部浏览器。目标断线后需重新 `attach`。详见 [桌面接入](desktop-testing.md) |
 
@@ -21,7 +21,7 @@
 | 方法 | 参数 | 说明 |
 | --- | --- | --- |
 | `navigate` | `id`, `url`, `waitUntil`(默认 domcontentloaded), `timeoutMs`(1—120000) | 导航；等待阶段可选 commit/domcontentloaded/load/networkidle，返回实际 URL、status 和 waitUntil。CLI：`run navigate --wait-until load -p url=...` |
-| `go_to_url` | `id`, `url`, `waitUntil`, `timeoutMs` | 与 `navigate` 等价。**打不开的地址会报 `errorCode:NETWORK_ERROR`**，并带上 `data.netError`（Chrome 的错误码，如 `ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED`）与可重试建议 —— 这时页面是 **Chrome 自己的网络错误页**，上面没有任何内容可读，别去查选择器，先看本机代理 / VPN（见 `pitfalls.md` 第 74 条） |
+| `go_to_url` | `id`, `url`, `waitUntil`, `timeoutMs` | 与 `navigate` 等价。**打不开的地址会报 `errorCode:NETWORK_ERROR`**，并带上 `data.netError`（Chrome 的错误码，如 `ERR_NETWORK_CHANGED` / `ERR_CONNECTION_REFUSED`）与可重试建议 —— 这时页面是 **Chrome 自己的网络错误页**，上面没有任何内容可读，别去查选择器，先看本机代理 / VPN（见 `pitfalls.md` 第 74 条）。**落到 Cloudflare 人机验证页时**仍返回成功，但带 `data.challenge`（`errorCode:BOT_CHALLENGE`、`vendor`、`title`、`headless`）和 `data.warning`；有头浏览器通常几秒内自动通过；`get_browser_state` 同样带 `data.challenge` |
 | `get_browser_state` | `id`, `highlight`(默认 false), `screenshot`(默认 false), `viewportExpansion`, `includeElements`, `maxElements`, `includeFrames`, `strictSnapshot` | 见 `reading-pages.md`。`strictSnapshot`(bool，默认 false) 决定「这份索引什么时候作废」：默认只作废**结构变更**（读取期间增删了元素）与逐元素重校验失败的快照，实时行情这类只有文字/属性在变的页面索引仍然可用；传 `true` 恢复旧的「读取期间任何 DOM 变更即作废」判据 |
 | `list_frames` | `id`, `refresh`(bool，默认 true) | 列出页面上的**全部 frame**（含跨域 iframe）：`data.frames[]`（`index`/`url`/`name`/`isMain`/`parentIndex`/`depth`/`elementCount`/`indexRange`；读不出来的 frame 另有 `readError`）。`index 0` 固定是主 frame，其余按 frame 树深度优先编号。**顶层读不到元素时先看它**，见 `reading-pages.md`「跨域 iframe」 |
 | `get_page_snapshot` | `id`, `includeConsole`(bool), `includeRequests`(bool), `requestFilter` | 一次拿到页面状态：`data.url`、`data.title`、`data.tabs`、`data.dialog`、`data.loading`；`includeConsole=true` 再带 `data.logs`/`data.errors`，`includeRequests=true` 再带 `data.requests`（可用 `requestFilter` 按 URL 子串过滤）。替代六次单独调用，**不含 DOM 快照文本** |
@@ -448,7 +448,7 @@ dsb --port 10049 --id 1001 batch api.json
 | --- | --- | --- |
 | `list_methods` | `filter`(可选) | 返回 `data.methods`（全部方法名）与 `data.count`。**方法名拿不准就先查**，别靠猜——猜错只会拿到一句「不支持的方法」 |
 | `get_config` | `id`(可选) | 服务端**生效**配置：`engine`/`configuredType`、`profileDir`（解析后的真实目录）、`action`（超时与两个降级开关）、`jsDir`、`trace`、`upload`、`tasks`、`commands`。传 `id` 时另给该任务的 `browser`。**「为什么这次不是我要的浏览器」「脚本放哪」这类问题先看它** |
-| `list_tasks` | 无 | 当前活着的任务：`data.tasks[]`（`id`/`url`/`title`/`tabCount`/`captureSeq`/`inflight`/`profileDir`）与 `data.browser`（类型、profile 目录、是否走 CDP） |
+| `list_tasks` | 无 | 当前活着的任务：`data.tasks[]`（`id`/`url`/`title`/`tabCount`/`captureSeq`/`inflight`/`profileDir`/`headless`/`display`）、`data.browser`（主浏览器的类型、profile 目录、是否走 CDP）与 `data.sideBrowsers`（按显示方式另起的浏览器，`key` 如 `display::1`） |
 | `list_recipes` | 无 | 服务端有哪些站点配方，返回 `data.recipes[]`（`name`/`description`/`params`/`stepCount`）与 `data.dir` |
 | `run_recipe` | `id`, `name`, `vars`(可选), `stopOnError`(可选) | 跑一个站点配方，见本文下面的「站点配方」 |
 | `get_job` | `jobId`, `includeResult`(可选，默认 true) | 查异步批次的结果：`data.status`（`running`/`done`/`failed`/`cancelled`）、`data.steps`、`data.data` |

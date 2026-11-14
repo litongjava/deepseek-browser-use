@@ -667,16 +667,34 @@ func cmdServerWipeProfile(args *Args, out *Printer, endpoint Endpoint) (int, err
 	}
 	layout := ServerLayout{RepoDir: repoDir, Port: endpoint.Port}
 	target := layout.profileDir()
+	targets := append([]string{target}, sideProfileDirs(target)...)
 	if !args.Yes {
-		return 0, usageErrorf("这会删除 %s 和其中的所有登录状态。确认后加 --yes", target)
+		return 0, usageErrorf("这会删除 %s 和其中的所有登录状态。确认后加 --yes", strings.Join(targets, "、"))
 	}
-	if _, statErr := os.Lstat(target); os.IsNotExist(statErr) {
+	removed := 0
+	for _, dir := range targets {
+		if _, statErr := os.Lstat(dir); os.IsNotExist(statErr) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return 0, transportErrorf("删除 %s 失败:%v", dir, err)
+		}
+		out.Line("已删除 profile:" + dir)
+		removed++
+	}
+	if removed == 0 {
 		out.Line("没有需要清理的 profile:" + target)
-		return ExitOK, nil
 	}
-	if err := os.RemoveAll(target); err != nil {
-		return 0, transportErrorf("删除 %s 失败:%v", target, err)
-	}
-	out.Line("已删除 profile:" + target)
 	return ExitOK, nil
+}
+
+// sideProfileDirs lists the profiles of browsers the service starts beside its main one, such as
+// a headed window on display :1 next to a headless browser. They sit next to the main profile as
+// <profile>-display-<n> and <profile>-headless and hold their own logins.
+func sideProfileDirs(main string) []string {
+	dirs, _ := filepath.Glob(main + "-display-*")
+	if _, err := os.Lstat(main + "-headless"); err == nil {
+		dirs = append(dirs, main+"-headless")
+	}
+	return dirs
 }

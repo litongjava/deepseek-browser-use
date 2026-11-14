@@ -28,11 +28,11 @@ import nexus.io.ai.browser.actions.registry.CommandTable;
  * 回到仓库根。其它装法({@code .dsh/skills/<技能名>/SKILL.md}、老的 {@code skills/...}、仓库根的
  * {@code SKILL.md})也认,免得换一次目录这个守卫就静默失效。
  *
- * <p><b>命令表只由主技能文档负责覆盖</b>:{@code .agents/skills/} 下还有别的技能(例如某个具体站点的操作手册),
+ * <p><b>命令表只由主技能文档负责覆盖</b>:主技能的 {@code references/cases/} 下还有站点案例(某个具体站点的操作手册),
  * 它们讲的是「怎么把命令组合起来用」,不该被迫把 90 多个方法都列一遍。所以:
  * <ul>
  * <li>命令清单覆盖、端点、frontmatter、旧接口名 → 只查主技能({@code SKILL_NAME});</li>
- * <li>「文档里当作命令写的名字必须真实存在」→ 查**每一个**技能文档,免得某份操作手册里写了一个
+ * <li>「文档里当作命令写的名字必须真实存在」→ 查主技能和**每一个**站点案例,免得某份操作手册里写了一个
  * 不存在的命令名,模型照着发请求才发现。</li>
  * </ul>
  *
@@ -138,16 +138,17 @@ public class SkillDocConsistencyTest {
     doc = new String(Files.readAllBytes(found), StandardCharsets.UTF_8);
   }
 
-  /** 技能根下的全部技能文档(主技能 + 各站点操作手册) */
+  /** 技能根下的全部技能文档(主技能 + references/cases/ 下的站点案例) */
   private static List<Path> allSkillDocs() throws IOException {
     List<Path> docs = new ArrayList<>();
     for (Path root : SKILL_ROOTS) {
       if (!Files.isDirectory(root)) {
         continue;
       }
-      try (java.util.stream.Stream<Path> stream = Files.walk(root, 3)) {
-        stream.filter(path -> path.getFileName().toString().equals("SKILL.md")).filter(Files::isRegularFile)
-            .forEach(docs::add);
+      try (java.util.stream.Stream<Path> stream = Files.walk(root, 4)) {
+        stream.filter(Files::isRegularFile).filter(path -> path.getFileName().toString().equals("SKILL.md")
+            || (path.toString().endsWith(".md") && path.getParent().getFileName().toString().equals("cases")))
+            .sorted().forEach(docs::add);
       }
       if (!docs.isEmpty()) {
         break;

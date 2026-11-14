@@ -69,6 +69,26 @@ public class PlaywrightServiceTest {
     assertEquals("() => {const a = 1; return a;}", PlaywrightService.normalizeToFunction("const a = 1; return a;"));
   }
 
+  /** Several statements without a return yield the last one's value instead of a syntax error. */
+  @Test
+  public void statementsWithoutReturnYieldTheLastValue() {
+    assertEquals("() => {document.title='x'; return ('clicked');}",
+        PlaywrightService.normalizeToFunction("document.title='x'; 'clicked'"));
+    assertEquals("() => {const a=2; return (a*3);}", PlaywrightService.normalizeToFunction("const a=2; a*3;"));
+    // A semicolon inside a string, template, comment or block is not a statement end.
+    assertEquals("() => ('a;b')", PlaywrightService.normalizeToFunction("'a;b'"));
+    assertEquals("() => (`x;${1}`)", PlaywrightService.normalizeToFunction("`x;${1}`"));
+    assertEquals("() => {[1].forEach(x => { x; }); return (2);}",
+        PlaywrightService.normalizeToFunction("[1].forEach(x => { x; }); 2"));
+    // A declaration or control statement has no value to return.
+    assertEquals("() => {const a = 1}", PlaywrightService.normalizeToFunction("const a = 1;"));
+    assertEquals("() => {x(); if (a) { b() }}", PlaywrightService.normalizeToFunction("x(); if (a) { b() }"));
+    // Top-level await gets an async wrapper.
+    assertEquals("async () => {const r = await fetch('/'); return (r.status);}",
+        PlaywrightService.normalizeToFunction("const r = await fetch('/'); r.status"));
+    assertEquals(-1, PlaywrightService.lastTopLevelStatement("a; // b; c"));
+  }
+
   /** 超时兜底:必须带上哨兵、预算,并且**不限制**时原样返回(0 = 关掉这一层) */
   @Test
   public void evalTimeoutWrapperCarriesSentinelAndBudget() {

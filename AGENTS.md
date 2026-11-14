@@ -3,13 +3,10 @@
 ## Read and scope
 
 - Read all applicable skills in full before acting.
-- For browser work, read [deepseek-browser-use](.agents/skills/deepseek-browser-use/SKILL.md).
-- For numeric data, also read [web-data-as-text](.agents/skills/web-data-as-text/SKILL.md).
-- For railway queries, also read [railway-12306-ticket](.agents/skills/railway-12306-ticket/SKILL.md).
-- Follow [reliable execution and the concise prompt template](.agents/skills/deepseek-browser-use/references/reliable-execution.md).
+- For browser work, read [deepseek-browser-use](.agents/skills/deepseek-browser-use/SKILL.md). It is the only skill; load its `references/` (including `references/cases/` for sites and `references/web-data.md` for numeric data) on demand.
 - Read each file before editing. Inspect the current diff. Preserve unrelated changes.
-- Skill sources are in .agents/skills. Inspect scripts/sync-skills.mjs before synchronization. Compare source files with installed files.
-- Do not force-sync unrelated skills.
+- The skill source is .agents/skills/deepseek-browser-use. Inspect scripts/sync-skills.mjs before synchronization (targets: dsh, deepseek-code, claude, codex). Compare source files with installed files.
+- Do not force-sync over unmanaged skills.
 
 ## Execute and coordinate
 

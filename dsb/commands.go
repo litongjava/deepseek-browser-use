@@ -635,6 +635,16 @@ func cmdJS(client CommandAPI, args *Args, out *Printer) (int, error) {
 	if handled {
 		return verdict(response), nil
 	}
+	// A script that produced no value succeeds with data.result left out of the envelope (null
+	// fields are not serialized). That is a null result, not a missed selection.
+	if out.Select != nil && *out.Select == "data.result" && len(out.Fields) == 0 && response.Ok() &&
+		objGet(response.Data(), "result") == nil {
+		if hint := objStr(response.Data(), "hint"); hint != "" {
+			out.Warn(hint)
+		}
+		out.printLine("null")
+		return ExitOK, nil
+	}
 	if out.Mode == "json" || out.Select != nil {
 		out.JSON(value)
 	} else {
@@ -723,6 +733,12 @@ func cmdLast(client *Client, args *Args, out *Printer) (int, error) {
 // 而是**顺序会慢慢漂移**:实测有的命令先 --out 再 --select,有的反过来 —— 同一组参数
 // 在不同子命令上行为不同,是这类重复最典型的后果。
 func prepare(response *Response, args *Args, out *Printer) (Value, bool, error) {
+	if !response.Ok() {
+		out.Failure = response.Msg()
+		if out.Failure == "" {
+			out.Failure = "the server reported ok=false without a message"
+		}
+	}
 	value, err := pickIndex(response.Envelope, indexValue(args), args.Index != nil)
 	if err != nil {
 		return nil, false, err
