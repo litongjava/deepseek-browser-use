@@ -94,20 +94,20 @@ java -jar deepseek-browser-use-1.0.0-windows-x64.jar
 
 ### Skill + CLI
 
-适用于 DSH、Claude Code、Codex 等能执行命令行的智能体。技能源统一位于 [`.agents/skills/`](.agents/skills)，可使用同步脚本安装到对应工具：
+适用于 DSH、Claude Code、Codex、DeepSeek Code 等能执行命令行的智能体。技能源统一位于 [`.agents/skills/`](.agents/skills)，可使用同步脚本安装到对应工具：
 
 ```bash
 # 预览安装内容
 node scripts/sync-skills.mjs --all --dry-run
 
 # 选择需要的工具，也可只写其中一个
-node scripts/sync-skills.mjs dsh claude codex
+node scripts/sync-skills.mjs dsh claude codex deepseek
 
 # 检查安装状态
 node scripts/sync-skills.mjs --status
 ```
 
-DSH 与 Codex 保留技能原名；Claude Code 使用 `dsb-skills` 插件命名空间，例如 `/dsb-skills:deepseek-browser-use`。同步时遇到未受脚本管理的同名技能，应先检查差异。
+DSH 与 Codex 保留技能原名；Claude Code 使用 `dsb-skills` 插件命名空间，例如 `/dsb-skills:deepseek-browser-use`。DeepSeek Code 安装到 `~/.deepseek-code/skills`（桌面端读取），其独立 CLI 通过 `~/.claude/skills` 发现同一批技能。同步时遇到未受脚本管理的同名技能，应先检查差异。
 
 可直接使用以下提示词：
 

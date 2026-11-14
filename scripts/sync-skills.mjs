@@ -11,11 +11,15 @@
  *                                description 不能含尖括号、不能超过 1024 字符。
  *                                所以 whenToUse 会被并进 description（不留丢路由信息），
  *                                尖括号换成全角、超长截断。
+ *   deepseek → ~/.deepseek-code/skills/   DeepSeek Code 桌面端技能目录；
+ *                                whenToUse 驼峰与下划线都认，原样复制。
+ *                                独立 CLI（dcl）另外读取 ~/.claude/skills，
+ *                                所以 claude 目标同时覆盖 dcl 的命令行技能发现。
  *
  * 用法：
  *   node scripts/sync-skills.mjs                    交互式选择目标
  *   node scripts/sync-skills.mjs --all              装到全部工具
- *   node scripts/sync-skills.mjs dsh claude         装到指定工具
+ *   node scripts/sync-skills.mjs dsh claude codex deepseek   装到指定工具
  *   node scripts/sync-skills.mjs --all --dry-run    只看会写什么，不动文件
  *   node scripts/sync-skills.mjs --status           看各目标与仓库是否已经一致
  *   node scripts/sync-skills.mjs --all --force      覆盖目标里非本脚本安装的同名技能
@@ -69,6 +73,13 @@ const TARGETS = {
     dir: path.join(HOME, '.claude', 'skills'),
     // Claude Code 读下划线键，驼峰会被静默忽略，所以改键名。
     rewrite: (text) => ({ text: text.replace(/^whenToUse:/m, 'when_to_use:'), notes: [] }),
+  },
+  deepseek: {
+    label: 'DeepSeek Code',
+    // Desktop/bridge reads $DEEPSEEK_CODE_DATA_DIR/skills; standalone dcl
+    // discovers ~/.claude/skills, which the claude target already installs.
+    dir: path.join(process.env.DEEPSEEK_CODE_DATA_DIR || path.join(HOME, '.deepseek-code'), 'skills'),
+    rewrite: (text) => ({ text, notes: [] }),
   },
   codex: {
     label: 'Codex',
@@ -138,7 +149,7 @@ function usage() {
 用法：
   node scripts/sync-skills.mjs                   交互式选择目标
   node scripts/sync-skills.mjs --all             装到全部工具
-  node scripts/sync-skills.mjs dsh claude        装到指定工具
+  node scripts/sync-skills.mjs dsh claude codex deepseek  装到指定工具
   node scripts/sync-skills.mjs --all --dry-run   预览，不改动文件
   node scripts/sync-skills.mjs --status          只看各目标是否已与仓库一致
   node scripts/sync-skills.mjs --all --force     覆盖非本脚本安装的同名技能
